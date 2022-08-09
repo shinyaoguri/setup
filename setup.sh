@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "-----\nOSの判定"
+echo "-----\nOS"
 if [ "$(uname)" == 'Darwin' ] && [ "$(uname -m)" == 'x86_64' ]; then
   echo '- x86_64 Mac'
 elif [ "$(uname)" == 'Darwin' ] && [ "$(uname -m)" == 'arm64' ]; then
