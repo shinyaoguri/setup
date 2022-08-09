@@ -31,4 +31,12 @@ else
   open "https://brew.sh/index_ja"
 fi
 
-
+##########
+# Ansible
+##########
+echo -e "-----\nAnsibleの存在確認"
+if type "ansible" >/dev/null 2>&1; then
+  echo -e "✅ Ansible already exist"
+else
+  brew install ansible
+fi
