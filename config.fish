@@ -11,3 +11,10 @@ alias reload="source ~/.config/fish/config.fish"
 alias t="tmuximum"
 alias '\;s'="ls"
 clear
+
+# anyenv
+if test -d $HOME/.anyenv
+  #anyenv
+  set -x PATH $HOME/.anyenv/bin $PATH
+  anyenv init - fish | source
+end

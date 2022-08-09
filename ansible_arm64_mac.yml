@@ -4,6 +4,7 @@
   vars:
     homebrew_taps:
       - buildpack/tap
+      - caskroom/cask
     homebrew_packages:
       - name: git
       - name: vim
