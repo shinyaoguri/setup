@@ -4,11 +4,64 @@
   vars:
     homebrew_taps:
       - buildpack/tap
-
     homebrew_packages:
       - name: git
+      - name: vim
+      - name: wget
+      - name: fish
+      - name: tree
+      - name: pipenv
+      - name: imagemagick
+      - name: anyenv
+      - name: trash
+      - name: neovim
+      - name: deno
+      - name: java
+      - name: clojure/tools/clojure
+      - name: rust
+      - name: jq
+    homebrew_cask_packages:
+      # ブラウザ
+      - name: google-chrome
+      - name: firefox
+      # エディタ
+      - name: visual-studio-code
+      # 開発環境
+      - name: android-studio
+      - name: chromedriver
+      - name: docker
+      - name: unity-hub
+      - name: blender
+      - name: processing
+      - name: mamp
+      - name: responsively
+      - name: ngrok/ngrok/ngrok
+      - name: flutter
+      # 配信
+      - name: obs
+      - name: obs-virtualcam
+      # コミュニケーション
+      - name: zoom
+      - name: messenger
+      - name: slack
+      - name: webex
+      - name: discord
+      # 常駐ツール
+      - name: gyazo
+      - name: notion
+      - name: google-drive
+      - name: todoist
+      - name: deepl
+      - name: toggl-track
+      # Office系ツール
+      - name: chrome-remote-desktop-host
+      # クリエイティブ系
+      # ツール
 
   tasks:
+    ##########
+    # Homebrew
+    ##########
     - name: homebrew update
       homebrew:
         update_homebrew: yes
@@ -24,3 +77,12 @@
         name: '{{ item.name }}'
         state: '{{ item.state | default("present") }}'
       with_items: '{{ homebrew_packages }}'
+
+    ###############
+    # Homebrew Cask
+    ###############
+    - name: homebrew cask packages install
+      homebrew_cask: name={{ item.name }} state=installed
+      environment:
+        HOMEBREW_CASK_OPTS: "--appdir=/Applications"
+      with_items: '{{ homebrew_cask_packages }}'
