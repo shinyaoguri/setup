@@ -86,6 +86,25 @@
       ansible.builtin.git:
         repo: git@github.com:shinyaoguri/setup.git
         dest: '{{ ansible_env.HOME }}/setup'
+    
+    - name: fish-shell config symlinks
+      file:
+        src: '{{ ansible_env.HOME}}/setup/config.fish'
+        dest: '{{ ansible_env.HOME}}/.config/fish/config.fish'
+        state: link
+        force: yes
+
+    - name: neovim .config/nvim mkdir
+      file:
+        path: '{{ ansible_env.HOME }}/.config/nvim'
+        state: directory
+        
+    - name: neovim init.vim symlinks
+      file:
+        src: '{{ ansible_env.HOME }}/setup/init.vim'
+        dest: '{{ ansible_env.HOME }}/.config/nvim/init.vim'
+        state: link
+        force: yes
 
     ###############
     # Homebrew Cask
