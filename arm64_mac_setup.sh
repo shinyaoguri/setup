@@ -55,11 +55,12 @@ curl -H "Cache-Control: no-cache" -O -sfSL https://raw.githubusercontent.com/shi
 
 
 ansible-playbook -i hosts ansible_arm64_mac.yml --check
-read -p "ok? (y/N): " yn
-case "$yn" in
-  [yY]*) ansible-playbook -i hosts ansible_arm64_mac.yml;;
-  *) exit;;
-esac
+echo "ok?(y/N): "
+if read -q; then
+  echo ansible-playbook -i hosts ansible_arm64_mac.yml
+else
+  exit
+fi
 
 if [ -f ~/ansible_arm64_mac.yml ]; then
   rm ansible_arm64_mac.yml
