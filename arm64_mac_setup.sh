@@ -16,11 +16,19 @@ fi
 # Homebrew
 ###########
 echo -e "-----\nHomebrewの存在確認"
+
+if [ -e /opt/homebrew/bin ]; then
+  echo 'hoge'
+else
+  echo 'piyo'
+fi
+
 if [ -f ~/.zshrc ]; then
   echo '✅ .zshrc already exist'
 else
   echo '🙅 .zshrc was not exist'
 fi
+
 if type "brew" >/dev/null 2>&1; then
   echo -e "✅ brew already exist"
 else
