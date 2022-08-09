@@ -28,6 +28,7 @@ if [ -f ~/.zshrc ]; then
 else
   echo '🙅 .zshrc was not exist'
   echo 'export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH' > ~/.zshrc
+  source ~/.zshrc
 fi
 
 if type "brew" >/dev/null 2>&1; then
