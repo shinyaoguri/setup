@@ -1,8 +1,8 @@
 #!/bin/zsh
 
-###########
-#Xcodeの確認
-###########
+######## 
+# Xcode
+########
 echo -e "-----\nCheck Xcode"
 if type "xcode-select" >/dev/null 2>&1; then
   echo -e "✅ Xcode already exist"
