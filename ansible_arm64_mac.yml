@@ -3,7 +3,7 @@
   connection: local
   vars:
     homebrew_taps:
-      - caskroom/cask
+      - homebrew/cask
     homebrew_packages:
       - name: git
       - name: vim
