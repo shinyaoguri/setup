@@ -79,6 +79,14 @@
         state: '{{ item.state | default("present") }}'
       with_items: '{{ homebrew_packages }}'
 
+    ####################
+    # Download dotfiles
+    ####################
+    - name: git clone dotfiles
+      ansible.builtin.git:
+        repo: git@github.com:shinyaoguri/setup.git
+        dest: '{{ ansible_env.HOME }}/setup'
+
     ###############
     # Homebrew Cask
     ###############
@@ -87,3 +95,19 @@
       environment:
         HOMEBREW_CASK_OPTS: "--appdir=/Applications"
       with_items: '{{ homebrew_cask_packages }}'
+
+    ###################
+    # Fish-Shell Setup
+    ###################
+    - name: fish-shell setup
+      become: true
+      lineinfile:
+        path: /etc/shells
+        regexp: '/opt/homebrew/bin/fish'
+        insertafter: '/bin/zsh'
+        line: '/opt/homebrew/bin/fish'
+    - name: set fish-shell as default
+      become: true
+      user:
+        name: "{{ ansible_user_id }}"
+        shell: /opt/homebrew/bin/fish
