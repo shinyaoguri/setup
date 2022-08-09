@@ -17,18 +17,24 @@ fi
 ###########
 echo -e "-----\nHomebrewの存在確認"
 if [ -f ~/.zshrc ]; then
-  echo '✅ .zshrc already exist'
+  if [ "`echo $PATH | grep '/opt/homebrew/bin'`" ]; then
+    echo '✅ Homebrew PATH already exist'
+  else
+    echo '🙅 Homebrew PATH was not exist\n...update .zshrc'
+    echo 'export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH' >> ~/.zshrc
+  fi
 else
-  echo '🙅 .zshrc was not exist'
-  echo 'export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH' > ~/.zshrc
+  echo '🙅 .zshrc was not exist\n...update .zshrc'
+  echo 'export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH' >> ~/.zshrc
   source ~/.zshrc
 fi
 
 if type "brew" >/dev/null 2>&1; then
   echo -e "✅ brew already exist"
 else
-  echo -e "🙅 Homebrew was not exist\n Please install Homebrew"
+  echo -e "🙅 Homebrew was not exist\nPlease install Homebrew"
   open "https://brew.sh/index_ja"
+  exit
 fi
 
 ##########
@@ -38,9 +44,11 @@ echo -e "-----\nAnsibleの存在確認"
 if type "ansible" >/dev/null 2>&1; then
   echo -e "✅ Ansible already exist"
 else
+  echo -e "🙅 ansible was not installed"
   brew install ansible
 fi
 
 cd ~
 zsh -c "$(curl -O https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml)"
 ansible-playbook -i hosts ansible_arm64_mac.yml --check
+rm ansible_arm64_mac.yml
