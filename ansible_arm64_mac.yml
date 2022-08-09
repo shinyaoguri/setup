@@ -53,6 +53,7 @@
       - name: todoist
       - name: deepl
       - name: toggl-track
+      - name: grammarly
       # Office系ツール
       - name: chrome-remote-desktop-host
       # クリエイティブ系
