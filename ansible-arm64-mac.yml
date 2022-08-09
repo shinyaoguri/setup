@@ -1,0 +1,26 @@
+
+- hosts: localhost
+  connection: local
+  vars:
+    homebrew_taps:
+      - buildpack/tap
+
+    homebrew_packages:
+      - name: git
+
+  tasks:
+    - name: homebrew update
+      homebrew:
+        update_homebrew: yes
+
+    - name: homebrew tap
+      homebrew_tap:
+        name: '{{ item }}'
+        state: present
+      with_items: '{{ homebrew_taps }}'
+
+    - name: homebrew packages install
+      homebrew:
+        name: '{{ item.name }}'
+        state: '{{ item.state | default("present") }}'
+      with_items: '{{ homebrew_packages }}'
