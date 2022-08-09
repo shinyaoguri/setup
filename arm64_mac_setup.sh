@@ -53,13 +53,10 @@ echo -e "-----\nAnsible Deploy"
 cd ~
 curl -H "Cache-Control: no-cache" -O -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml
 
-
 ansible-playbook -i hosts ansible_arm64_mac.yml --check
 echo "ok?(y/N): "
 if read -q; then
   ansible-playbook -i hosts ansible_arm64_mac.yml
-else
-  exit
 fi
 
 if [ -f ~/ansible_arm64_mac.yml ]; then
