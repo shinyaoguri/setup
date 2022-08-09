@@ -1,13 +1,18 @@
 #!/bin/bash
 
-############
-# Xcodeの確認
-############
-echo -e "\nXcodeの存在確認"
-if type "xcode-select" >/dev/null 2>&1; then
-  echo -e "-> ✅ Xcode already exist"
+
+echo "\nOSの判定"
+if [ "$(uname)" == 'Darwin' ] && [ "$(uname -m)" == 'x86_64' ]; then
+  echo 'x86_64 Mac'
+elif [ "$(uname)" == 'Darwin' ] && [ "$(uname -m)" == 'arm64' ]; then
+  echo 'arm64 Mac'
+elif [ "$(expr substr $(uname -s) 1 5)" == 'Linux' ]; then
+  OS='Linux'
+  echo 'Linux'
+elif [ "$(expr substr $(uname -s) 1 10)" == 'MINGW32_NT' ]; then                                                                                           
+  OS='Cygwin'
+  echo 'Windows'
 else
-  echo -e ">>> Xcode was not exists\n>>> Please install Xcode from AppStore."
-  return 2> /dev/null
-  exit
+  echo "Your platform ($(uname -a)) is not supported."
+  exit 1
 fi
