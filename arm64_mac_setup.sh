@@ -22,6 +22,7 @@ if [ -f ~/.zshrc ]; then
   else
     echo '🙅 Homebrew PATH was not exist\n...update .zshrc'
     echo 'export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH' >> ~/.zshrc
+    source ~/.zshrc
   fi
 else
   echo '🙅 .zshrc was not exist\n...update .zshrc'
