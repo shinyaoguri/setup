@@ -3,7 +3,7 @@
 ###########
 #Xcodeの確認
 ###########
-echo -e "-----\nXcodeの存在確認"
+echo -e "-----\nCheck Xcode"
 if type "xcode-select" >/dev/null 2>&1; then
   echo -e "✅ Xcode already exist"
 else
@@ -15,7 +15,7 @@ fi
 ###########
 # Homebrew
 ###########
-echo -e "-----\nHomebrewの存在確認"
+echo -e "-----\nCheck Homebrew"
 if [ -f ~/.zshrc ]; then
   if [ "`echo $PATH | grep '/opt/homebrew/bin'`" ]; then
     echo '✅ Homebrew PATH already exist'
@@ -40,7 +40,7 @@ fi
 ##########
 # Ansible
 ##########
-echo -e "-----\nAnsibleの存在確認"
+echo -e "-----\nCheck Ansible"
 if type "ansible" >/dev/null 2>&1; then
   echo -e "✅ Ansible already exist"
 else
