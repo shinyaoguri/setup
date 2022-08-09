@@ -50,7 +50,7 @@ else
 fi
 
 cd ~
-echo -c "$(curl -H "Cache-Control: no-cache"　-O -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml)"
+zsh -c "$(curl -H 'Cache-Control: no-cache'　-O -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml)"
 ansible-playbook -i hosts ansible_arm64_mac.yml --check
 
 if [ -f ~/ansible_arm64_mac.yml ]; then
