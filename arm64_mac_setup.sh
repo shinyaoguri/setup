@@ -52,4 +52,7 @@ fi
 cd ~
 curl -H "Cache-Control: no-cache"　-O -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml
 ansible-playbook -i hosts ansible_arm64_mac.yml --check
-rm ansible_arm64_mac.yml
+
+if [ -f ~/ansible_arm64_mac.yml ]; then
+  rm ansible_arm64_mac.yml
+fi
