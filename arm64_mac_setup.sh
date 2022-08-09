@@ -42,5 +42,5 @@ else
 fi
 
 cd ~
-echo -r "curl -O https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml"
+echo -e "curl -O https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml"
 ansible-playbook -i hosts ansible_arm64_mac.yml --check
