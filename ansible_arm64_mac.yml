@@ -20,6 +20,8 @@
       - name: clojure/tools/clojure
       - name: rust
       - name: jq
+      - name: z
+      - name: peco
     homebrew_cask_packages:
       # ブラウザ
       - name: google-chrome
@@ -132,6 +134,12 @@
         shell: /opt/homebrew/bin/fish
     - name: fisher install
       ansible.builtin.command: fish -c 'curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher'
+    - name: install fish-bd
+      ansible.builtin.command: fisher install 0rax/fish-bd
+    - name: install z
+      ansible.builtin.command: fisher install jethrokuan/z
+    - name: install peco
+      ansible.builtin.command: oh-my-fish/plugin-peco
 
     # anyenv
     - name: anyenv setting
