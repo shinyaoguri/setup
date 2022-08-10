@@ -131,8 +131,7 @@
         name: "{{ ansible_user_id }}"
         shell: /opt/homebrew/bin/fish
     - name: fisher install
-      ansible.builtin.shell:
-        cmd: curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher
+      ansible.builtin.command: fish -c 'curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher'
 
     # anyenv
     - name: anyenv setting
