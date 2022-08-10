@@ -141,7 +141,18 @@
       args:
         executable: /opt/homebrew/bin/fish
         creates: '{{ ansible_env.HOME }}/.config/fish/functions/fisher.fish'
-
+    - name: Install z plugin for fish
+      ansible.builtin.shell: "fisher install jethrokuan/z"
+      args:
+        executable: /opt/homebrew/bin/fish
+    - name: Install peco plugin for fish
+      ansible.builtin.shell: "fisher install oh-my-fish/plugin-peco"
+      args:
+        executable: /opt/homebrew/bin/fish
+    - name: Install bd plugin for fish
+      ansible.builtin.shell: "fisher install 0rax/fish-bd"
+      args:
+        executable: /opt/homebrew/bin/fish
 
     # anyenv
     - name: anyenv setting
