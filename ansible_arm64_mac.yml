@@ -132,14 +132,16 @@
       user:
         name: "{{ ansible_user_id }}"
         shell: /opt/homebrew/bin/fish
-    - name: fisher install
-      ansible.builtin.command: fish -c 'curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher'
-    - name: install fish-bd
-      ansible.builtin.command: fish -c 'fisher install 0rax/fish-bd'
-    - name: install z
-      ansible.builtin.command: fish -c 'fisher install jethrokuan/z'
-    - name: install peco
-      ansible.builtin.command: fish -c 'oh-my-fish/plugin-peco'
+    - name: Download fisher plugin manager
+      ansible.builtin.get_url:
+        url: https://git.io/fisher
+        dest: '{{ ansible_env.HOME }}/fisher'
+    - name: Install fisher plugin manager
+      ansible.builtin.shell: "source {{ ansible_env.HOME }}/fisher && fisher install jorgebucaran/fisher"
+      args:
+        executable: /opt/homebrew/bin/fish
+        creates: '{{ ansible_env.HOME }}/.config/fish/functions/fisher.fish'
+
 
     # anyenv
     - name: anyenv setting
