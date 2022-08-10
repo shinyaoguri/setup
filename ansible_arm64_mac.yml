@@ -130,14 +130,9 @@
       user:
         name: "{{ ansible_user_id }}"
         shell: /opt/homebrew/bin/fish
-    - name: fetch fisher
-      uri:
-        url: https://git.io/fisher
-      register: fisher_installer
-    - name: run fisher installer
+    - name: fisher install
       ansible.builtin.shell:
-        cmd: source && fisher install jorgebucaran/fisher
-        stdin: "{{ fisher_installer.content }}"
+        cmd: curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher
 
     # anyenv
     - name: anyenv setting
