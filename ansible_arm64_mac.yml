@@ -167,3 +167,11 @@
       ansible.builtin.git:
         repo: https://github.com/znz/anyenv-update.git
         dest: '{{ ansible_env.HOME }}/.anyenv/plugins/anyenv-update'
+
+    # java
+    - name: java setting
+      file:
+        src: '/opt/homebrew/opt/openjdk/libexec/openjdk.jdk'
+        dest: '/Library/Java/JavaVirtualMachines/openjdk.jdk'
+        state: link
+        force: yes
