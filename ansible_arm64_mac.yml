@@ -60,6 +60,7 @@
       - name: chrome-remote-desktop-host
       # クリエイティブ系
       # ツール
+      - name: vlc
 
   tasks:
     ##########
