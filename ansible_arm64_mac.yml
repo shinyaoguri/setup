@@ -83,7 +83,7 @@
       with_items: '{{ homebrew_packages }}'
 
     - name: Check for SSH connection to GitHub
-      ansible.builtin.shell: "git -T git@github.com"
+      ansible.builtin.shell: "ssh -T git@github.com"
       
     ####################
     # Download dotfiles
