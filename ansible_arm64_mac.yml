@@ -94,10 +94,10 @@
       ansible.builtin.git:
         repo: git@github.com:shinyaoguri/dotfiles.git
         dest: '{{ ansible_env.HOME }}/dotfiles'
-
-    - name: .config mkdir
+        
+    - name: .config/fish mkdir
       file:
-        path: '{{ ansible_env.HOME}}/.config'
+        path: '{{ ansible_env.HOME}}/.config/fish'
         state: directory
 
     - name: fish-shell config symlinks
