@@ -82,6 +82,9 @@
         state: '{{ item.state | default("present") }}'
       with_items: '{{ homebrew_packages }}'
 
+    - name: Check for SSH connection to GitHub
+      ansible.builtin.shell: "git -T git@github.com"
+      
     ####################
     # Download dotfiles
     ####################
@@ -89,7 +92,12 @@
       ansible.builtin.git:
         repo: git@github.com:shinyaoguri/dotfiles.git
         dest: '{{ ansible_env.HOME }}/dotfiles'
-    
+
+    - name: .config mkdir
+      file:
+        path: '{{ ansible_env.HOME}}/.config'
+        state: directory
+
     - name: fish-shell config symlinks
       file:
         src: '{{ ansible_env.HOME}}/dotfiles/config.fish'
