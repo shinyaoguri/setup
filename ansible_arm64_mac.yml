@@ -82,10 +82,10 @@
         state: '{{ item.state | default("present") }}'
       with_items: '{{ homebrew_packages }}'
 
-    - name: Check for SSH connection to GitHub
-      ansible.builtin.shell: "ssh -T git@github.com"
-      args:
-        executable: /
+    #- name: Check for SSH connection to GitHub
+    #  ansible.builtin.shell: "ssh -T git@github.com"
+    #  args:
+    #    executable: /
       
     ####################
     # Download dotfiles
