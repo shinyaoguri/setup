@@ -84,6 +84,8 @@
 
     - name: Check for SSH connection to GitHub
       ansible.builtin.shell: "ssh -T git@github.com"
+      args:
+        executable: /
       
     ####################
     # Download dotfiles
