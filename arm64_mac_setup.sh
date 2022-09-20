@@ -53,7 +53,7 @@ fi
 
 echo -e "-----\nAnsible Deploy"
 cd ~
-curl　-H \'Cache-Control: no-cache\' -O -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml
+curl -H \'Cache-Control: no-cache\' -O -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml
 
 if [ -f ~/ansible_arm64_mac.yml ]; then
   ansible-playbook ansible_arm64_mac.yml --ask-become-pass
