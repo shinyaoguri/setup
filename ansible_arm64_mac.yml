@@ -23,10 +23,13 @@
       - name: z
       - name: peco
     apps:
+      # Apple公式
+      - { name: "Keynote", id: "409183694" }
+      # 常駐系アプリ
       - { name: "RunCat", id: "1429033973" }
       - { name: "ScreenPointer", id: "1368204906" }
       - { name: "Paste", id: "967805235" }
-      - { name: "Keynote", id: "409183694" }
+      # 
     homebrew_cask_packages:
       # ブラウザ
       - name: google-chrome
@@ -38,7 +41,6 @@
       - name: chromedriver
       - name: docker
       - name: unity-hub
-      - name: blender
       - name: processing
       - name: mamp
       - name: responsively
@@ -55,15 +57,19 @@
       - name: discord
       # 常駐ツール
       - name: gyazo
-      - name: notion
       - name: google-drive
-      - name: todoist
       - name: deepl
       - name: toggl-track
       - name: grammarly
+      - name: moom
+      # タスク管理
+      - name: todoist
+      # メモ
+      - name: notion
       # Office系ツール
       - name: chrome-remote-desktop-host
       # クリエイティブ系
+      - name: blender
       # ツール
       - name: vlc
 
