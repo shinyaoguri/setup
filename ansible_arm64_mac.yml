@@ -22,7 +22,6 @@
       - name: jq
       - name: z
       - name: peco
-      - name: mas
     apps:
       - { name: "RunCat", id: "1429033973" }
       - { name: "ScreenPointer", id: "1368204906" }
@@ -87,6 +86,25 @@
         name: '{{ item.name }}'
         state: '{{ item.state | default("present") }}'
       with_items: '{{ homebrew_packages }}'
+    
+    ##########
+    # AppStore
+    ##########
+    - name: install from AppStore
+      block:
+        - name: brew install mas
+          homebrew:
+            name: mas
+            state: present
+        - name: fetch list
+          command: mas list
+          register: installed_list
+          check_mode: no
+          changed_when: no
+        - name: install from AppStore
+          command: "mas install {{ item.id }}"
+          when: "installed_list.stdout_lines | select('search', item.id) | list | length == 0"
+          loop: "{{ apps }}"
 
     #- name: Check for SSH connection to GitHub
     #  ansible.builtin.shell: "ssh -T git@github.com"
