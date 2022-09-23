@@ -25,11 +25,17 @@
     apps:
       # Apple公式
       - { name: "Keynote", id: "409183694" }
+      - { name: "Pages", id: "409201541" }
+      - { name: "Numbers", id: "409203825" }
+      - { name: "iMovie", id: "408981434" }
+      - { name: "Compressor", id: "424390742" }
+      - { name: "Motion", id: "434290957" }
+      - { name: "Final Cut Pro", id: "424389933" }
       # 常駐系アプリ
       - { name: "RunCat", id: "1429033973" }
       - { name: "ScreenPointer", id: "1368204906" }
       - { name: "Paste", id: "967805235" }
-      # 
+      - { name: "LINE", id: "443904275"}
     homebrew_cask_packages:
       # ブラウザ
       - name: google-chrome
@@ -62,6 +68,7 @@
       - name: toggl-track
       - name: grammarly
       - name: moom
+      - name: 1password
       # タスク管理
       - name: todoist
       # メモ
