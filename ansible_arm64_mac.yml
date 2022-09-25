@@ -171,58 +171,60 @@
     # Fish-Shell Setup
     ###################
     - name: fish-shell setup
-      become: true
-      lineinfile:
-        path: /etc/shells
-        regexp: '/opt/homebrew/bin/fish'
-        insertafter: '/bin/zsh'
-        line: '/opt/homebrew/bin/fish'
-      tags:
-        - fish
-    - name: set fish-shell as default
-      become: true
-      user:
-        name: "{{ ansible_user_id }}"
-        shell: /opt/homebrew/bin/fish
-      tags:
-        - fish
-    - name: Download fisher plugin manager
-      ansible.builtin.get_url:
-        url: https://git.io/fisher
-        dest: '{{ ansible_env.HOME }}/fisher'
-      tags:
-        - fish
-    - name: Install fisher plugin manager
-      ansible.builtin.shell: "source {{ ansible_env.HOME }}/fisher && fisher install jorgebucaran/fisher"
-      args:
-        executable: /opt/homebrew/bin/fish
-        creates: '{{ ansible_env.HOME }}/.config/fish/functions/fisher.fish'
-      tags:
-        - fish
-    - name: Delete fisher installer file
-      file:
-        dest: '{{ ansible_env.HOME }}/fisher'
-        state: absent
-      tags:
-        - fish
-    - name: Install z plugin for fish
-      ansible.builtin.shell: "fisher install jethrokuan/z"
-      args:
-        executable: /opt/homebrew/bin/fish
-      tags:
-        - fish
-    - name: Install peco plugin for fish
-      ansible.builtin.shell: "fisher install oh-my-fish/plugin-peco"
-      args:
-        executable: /opt/homebrew/bin/fish
-      tags:
-        - fish
-    - name: Install bd plugin for fish
-      ansible.builtin.shell: "fisher install 0rax/fish-bd"
-      args:
-        executable: /opt/homebrew/bin/fish
-      tags:
-        - fish
+      block:
+        - name: set fish-shell default
+          become: true
+          lineinfile:
+            path: /etc/shells
+            regexp: '/opt/homebrew/bin/fish'
+            insertafter: '/bin/zsh'
+            line: '/opt/homebrew/bin/fish'
+          tags:
+            - fish
+        - name: set fish-shell as default
+          become: true
+          user:
+            name: "{{ ansible_user_id }}"
+            shell: /opt/homebrew/bin/fish
+          tags:
+            - fish
+        - name: Download fisher plugin manager
+          ansible.builtin.get_url:
+            url: https://git.io/fisher
+            dest: '{{ ansible_env.HOME }}/fisher'
+          tags:
+            - fish
+        - name: Install fisher plugin manager
+          ansible.builtin.shell: "source {{ ansible_env.HOME }}/fisher && fisher install jorgebucaran/fisher"
+          args:
+            executable: /opt/homebrew/bin/fish
+            creates: '{{ ansible_env.HOME }}/.config/fish/functions/fisher.fish'
+          tags:
+            - fish
+        - name: Delete fisher installer file
+          file:
+            dest: '{{ ansible_env.HOME }}/fisher'
+            state: absent
+          tags:
+            - fish
+        - name: Install z plugin for fish
+          ansible.builtin.shell: "fisher install jethrokuan/z"
+          args:
+            executable: /opt/homebrew/bin/fish
+          tags:
+            - fish
+        - name: Install peco plugin for fish
+          ansible.builtin.shell: "fisher install oh-my-fish/plugin-peco"
+          args:
+            executable: /opt/homebrew/bin/fish
+          tags:
+            - fish
+        - name: Install bd plugin for fish
+          ansible.builtin.shell: "fisher install 0rax/fish-bd"
+          args:
+            executable: /opt/homebrew/bin/fish
+          tags:
+            - fish
 
     # anyenv
     - name: anyenv setting
