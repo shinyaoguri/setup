@@ -9,24 +9,29 @@
       - homebrew/cask
       - homebrew/cask-fonts
     homebrew_packages:
+      # バージョン管理関係
       - name: git
       - name: svn
+      # エディタ関係
       - name: vim
+      - name: neovim
       - name: wget
+      # シェル関係
       - name: fish
       - name: tree
-      - name: pipenv
-      - name: imagemagick
-      - name: anyenv
       - name: trash
-      - name: neovim
+      - name: jq
+      - name: z
+      - name: peco
+      # プログラミング言語関係
+      - name: pipenv
+      - name: anyenv
       - name: deno
       - name: java
       - name: clojure/tools/clojure
       - name: rust
-      - name: jq
-      - name: z
-      - name: peco
+      # 画像処理関係
+      - name: imagemagick
     apps:
       # Apple公式
       - { name: "Keynote", id: "409183694" }
