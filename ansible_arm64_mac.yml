@@ -170,7 +170,7 @@
     # Homebrew Cask
     ###############
     - name: homebrew cask packages install
-      homebrew_cask: name={{ item.name }} state=installed
+      community.general.homebrew_cask: name={{ item.name }} state=installed
       environment:
         HOMEBREW_CASK_OPTS: "--appdir=/Applications"
       with_items: '{{ homebrew_cask_packages }}'
@@ -183,23 +183,23 @@
     - name: install font
       block:
         - name: install font M-Plus-1
-          homebrew:
+          community.general.homebrew_cask:
             name: font-m-plus-1
             state: present
         - name: install font M-Plus-1p
-          homebrew:
+          community.general.homebrew_cask:
             name: font-m-plus-1p
             state: present
         - name: install font M-Plus-1-Code
-          homebrew:
+          community.general.homebrew_cask:
             name: font-m-plus-1-code
             state: present
         - name: install font font-noto-sans-cjk-jp
-          homebrew:
+          community.general.homebrew_cask:
             name: font-noto-sans-cjk-jp
             state: present
         - name: install font font-noto-serif-cjk-jp
-          homebrew:
+          community.general.homebrew_cask:
             name: font-noto-serif-cjk-jp
             state: present
 
