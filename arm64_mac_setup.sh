@@ -1,5 +1,9 @@
 #!/bin/zsh
 
+# MIT License
+# Copyright (c) 2022 Shinya Oguri
+# https://github.com/shinyaoguri/setup
+
 ######## 
 # Xcode
 ########
