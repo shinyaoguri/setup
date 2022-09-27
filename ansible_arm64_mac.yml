@@ -123,32 +123,6 @@
           command: "mas install {{ item.id }}"
           when: "installed_list.stdout_lines | select('search', item.id) | list | length == 0"
           loop: "{{ apps }}"
-    ##########
-    # Fonts
-    ##########
-    - name: install font
-      block:
-        - name: install font M-Plus-1
-          homebrew:
-            name: font-m-plus-1
-            state: present
-        - name: install font M-Plus-1p
-          homebrew:
-            name: font-m-plus-1p
-            state: present
-        - name: install font M-Plus-1-Code
-          homebrew:
-            name: font-m-plus-1-code
-            state: present
-        - name: install font font-noto-sans-cjk-jp
-          homebrew:
-            name: font-noto-sans-cjk-jp
-            state: present
-        - name: install font font-noto-serif-cjk-jp
-          homebrew:
-            name: font-noto-serif-cjk-jp
-            state: present
-
 
     #- name: Check for SSH connection to GitHub
     #  ansible.builtin.shell: "ssh -T git@github.com"
@@ -197,6 +171,32 @@
       with_items: '{{ homebrew_cask_packages }}'
       tags:
         - cask
+
+    ##########
+    # Fonts
+    ##########
+    - name: install font
+      block:
+        - name: install font M-Plus-1
+          homebrew:
+            name: font-m-plus-1
+            state: present
+        - name: install font M-Plus-1p
+          homebrew:
+            name: font-m-plus-1p
+            state: present
+        - name: install font M-Plus-1-Code
+          homebrew:
+            name: font-m-plus-1-code
+            state: present
+        - name: install font font-noto-sans-cjk-jp
+          homebrew:
+            name: font-noto-sans-cjk-jp
+            state: present
+        - name: install font font-noto-serif-cjk-jp
+          homebrew:
+            name: font-noto-serif-cjk-jp
+            state: present
 
     ###################
     # Fish-Shell Setup
