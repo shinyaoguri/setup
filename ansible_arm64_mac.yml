@@ -255,6 +255,12 @@
             executable: /opt/homebrew/bin/fish
           tags:
             - fish
+        - name: Install theme-bobthefish plugin for fish
+          ansible.builtin.shell: "fisher install oh-my-fish/theme-bobthefish"
+          args:
+            executable: /opt/homebrew/bin/fish
+          tags:
+            - fish
         - name: Install bd plugin for fish
           ansible.builtin.shell: "fisher install 0rax/fish-bd"
           args:
