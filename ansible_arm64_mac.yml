@@ -4,6 +4,7 @@
   vars:
     homebrew_taps:
       - homebrew/cask
+      - caskroom/fonts
     homebrew_packages:
       - name: git
       - name: vim
