@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# MIT License
+# Copyright (c) 2022 Shinya Oguri
+# https://github.com/shinyaoguri/setup
+
 echo "-----\nOS"
 if [ "$(uname)" == 'Darwin' ] && [ "$(uname -m)" == 'x86_64' ]; then
   echo '- x86_64 Mac'
