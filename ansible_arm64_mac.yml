@@ -224,6 +224,18 @@
             shell: /opt/homebrew/bin/fish
           tags:
             - fish
+        - name: git clone Powerline
+            ansible.builtin.git:
+              repo: git@github.com:powerline/fonts.git
+              dest: '{{ ansible_env.HOME }}/tmp-fonts'
+        - name: install Powerline
+            ansible.builtin.shell: "cd {{ ansible_env.HOME}}/tmp-fonts && ./install.sh"
+            args:
+              executable: /opt/homebrew/bin/fish
+        - name: delete tmp-fonts dir
+            file:
+              dest: '{{ ansible_env.HOME}}/tmp-fonts'
+              state: absent
         - name: Download fisher plugin manager
           ansible.builtin.get_url:
             url: https://git.io/fisher
