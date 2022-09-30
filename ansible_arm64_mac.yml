@@ -52,12 +52,14 @@
       - name: firefox
       # エディタ
       - name: visual-studio-code
-      # 開発環境
+      # IDE開発環境
       - name: android-studio
+      - name: processing
+      - name: unity-hub
+      
+    # 開発
       - name: chromedriver
       - name: docker
-      - name: unity-hub
-      - name: processing
       - name: mamp
       - name: responsively
       - name: ngrok/ngrok/ngrok
@@ -89,6 +91,8 @@
       - name: blender
       # ツール
       - name: vlc
+      - name: balenaetcher
+      - name: protonvpn
 
   tasks:
     ##########
