@@ -53,7 +53,7 @@
       - name: firefox
       # エディタ
       - name: visual-studio-code
-      # IDE開発環境
+      # 統合開発環境
       - name: android-studio
       - name: processing
       - name: unity-hub
