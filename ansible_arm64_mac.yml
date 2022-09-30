@@ -32,6 +32,7 @@
       - name: rust
       # 画像処理関係
       - name: imagemagick
+      - name: opencv
     apps:
       # Apple公式
       - { name: "Keynote", id: "409183694" }
