@@ -56,7 +56,6 @@
       - name: android-studio
       - name: processing
       - name: unity-hub
-      
     # 開発
       - name: chromedriver
       - name: docker
