@@ -82,8 +82,8 @@
       - name: deepl
       - name: toggl-track
       - name: grammarly
-      - name: moom
       - name: 1password
+      - name: spectacle
       # タスク管理
       - name: todoist
       # メモ
