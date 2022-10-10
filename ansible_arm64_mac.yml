@@ -60,7 +60,7 @@
       - name: processing
       - name: unity-hub
       - name: arduino
-    # 開発
+      # 開発
       - name: chromedriver
       - name: docker
       - name: mamp
