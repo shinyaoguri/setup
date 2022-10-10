@@ -60,6 +60,7 @@ cd ~
 curl -O -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/ansible_arm64_mac.yml
 
 if [ -f ~/ansible_arm64_mac.yml ]; then
+  ansible-galaxy collection install community.general
   ansible-playbook ansible_arm64_mac.yml --ask-become-pass
   rm ansible_arm64_mac.yml
 else
