@@ -34,7 +34,6 @@
       # メディア処理関係
       - name: imagemagick
       - name: opencv
-      - name: blackhole-2ch
     apps:
       # Apple公式
       - { name: "Keynote", id: "409183694" }
@@ -96,6 +95,7 @@
       - name: vlc
       - name: balenaetcher
       - name: protonvpn
+      - name: blackhole-2ch
 
   tasks:
     ##########
