@@ -1,13 +1,17 @@
+#######################################
 # MIT License
 # Copyright (c) 2022 Shinya Oguri
 # https://github.com/shinyaoguri/setup
-
+#######################################
 - hosts: localhost
   connection: local
   vars:
     homebrew_taps:
       - homebrew/cask
       - homebrew/cask-fonts
+    ###############
+    # CUI App List
+    ###############
     homebrew_packages:
       # バージョン管理関係
       - name: git
@@ -34,20 +38,9 @@
       # メディア処理関係
       - name: imagemagick
       - name: opencv
-    apps:
-      # Apple公式
-      - { name: "Keynote", id: "409183694" }
-      - { name: "Pages", id: "409201541" }
-      - { name: "Numbers", id: "409203825" }
-      - { name: "iMovie", id: "408981434" }
-      - { name: "Compressor", id: "424390742" }
-      - { name: "Motion", id: "434290957" }
-      - { name: "Final Cut Pro", id: "424389933" }
-      # 常駐系アプリ
-      - { name: "RunCat", id: "1429033973" }
-      - { name: "ScreenPointer", id: "1368204906" }
-      - { name: "Paste", id: "967805235" }
-      - { name: "LINE", id: "539883307"}
+    ###############
+    # GUI App List
+    ###############
     homebrew_cask_packages:
       # ブラウザ
       - name: google-chrome
@@ -96,27 +89,39 @@
       - name: balenaetcher
       - name: protonvpn
       - name: blackhole-2ch
-
+    apps:
+      # Apple公式
+      - { name: "Keynote", id: "409183694" }
+      - { name: "Pages", id: "409201541" }
+      - { name: "Numbers", id: "409203825" }
+      - { name: "iMovie", id: "408981434" }
+      - { name: "Compressor", id: "424390742" }
+      - { name: "Motion", id: "434290957" }
+      - { name: "Final Cut Pro", id: "424389933" }
+      # 常駐系アプリ
+      - { name: "RunCat", id: "1429033973" }
+      - { name: "ScreenPointer", id: "1368204906" }
+      - { name: "Paste", id: "967805235" }
+      - { name: "LINE", id: "539883307"}
   tasks:
     ##########
     # Homebrew
     ##########
-    - name: homebrew update
-      homebrew:
-        update_homebrew: yes
-
-    - name: homebrew tap
-      homebrew_tap:
-        name: '{{ item }}'
-        state: present
-      with_items: '{{ homebrew_taps }}'
-
-    - name: homebrew packages install
-      homebrew:
-        name: '{{ item.name }}'
-        state: '{{ item.state | default("present") }}'
-      with_items: '{{ homebrew_packages }}'
-    
+    - name: setup homebrew
+      block:
+        - name: homebrew update
+          homebrew:
+            update_homebrew: yes
+        - name: homebrew tap
+          homebrew_tap:
+            name: '{{ item }}'
+            state: present
+          with_items: '{{ homebrew_taps }}'
+        - name: homebrew packages install
+          homebrew:
+            name: '{{ item.name }}'
+            state: '{{ item.state | default("present") }}'
+          with_items: '{{ homebrew_packages }}'
     ##########
     # AppStore
     ##########
@@ -125,7 +130,7 @@
         - name: brew install mas
           homebrew:
             name: mas
-            state: present
+            state: present            
         - name: fetch list
           command: mas list
           register: installed_list
@@ -134,45 +139,36 @@
         - name: install from AppStore
           command: "mas install {{ item.id }}"
           when: "installed_list.stdout_lines | select('search', item.id) | list | length == 0"
-          loop: "{{ apps }}"
-
-    #- name: Check for SSH connection to GitHub
-    #  ansible.builtin.shell: "ssh -T git@github.com"
-    #  args:
-    #    executable: /
-      
+          loop: "{{ apps }}"      
     ####################
     # Download dotfiles
     ####################
-    - name: git clone dotfiles
-      ansible.builtin.git:
-        repo: git@github.com:shinyaoguri/dotfiles.git
-        dest: '{{ ansible_env.HOME }}/dotfiles'
-        
-    - name: .config/fish mkdir
-      file:
-        path: '{{ ansible_env.HOME}}/.config/fish'
-        state: directory
-
-    - name: fish-shell config symlinks
-      file:
-        src: '{{ ansible_env.HOME}}/dotfiles/config.fish'
-        dest: '{{ ansible_env.HOME}}/.config/fish/config.fish'
-        state: link
-        force: yes
-
-    - name: neovim .config/nvim mkdir
-      file:
-        path: '{{ ansible_env.HOME }}/.config/nvim'
-        state: directory
-
-    - name: neovim init.vim symlinks
-      file:
-        src: '{{ ansible_env.HOME }}/dotfiles/init.vim'
-        dest: '{{ ansible_env.HOME }}/.config/nvim/init.vim'
-        state: link
-        force: yes
-
+    - name: setup dotfiles
+      block:
+        - name: git clone dotfiles
+          ansible.builtin.git:
+            repo: git@github.com:shinyaoguri/dotfiles.git
+            dest: '{{ ansible_env.HOME }}/dotfiles'
+        - name: .config/fish mkdir
+          file:
+            path: '{{ ansible_env.HOME}}/.config/fish'
+            state: directory
+        - name: fish-shell config symlinks
+          file:
+            src: '{{ ansible_env.HOME}}/dotfiles/config.fish'
+            dest: '{{ ansible_env.HOME}}/.config/fish/config.fish'
+            state: link
+            force: yes
+        - name: neovim .config/nvim mkdir
+          file:
+            path: '{{ ansible_env.HOME }}/.config/nvim'
+            state: directory
+        - name: neovim init.vim symlinks
+          file:
+            src: '{{ ansible_env.HOME }}/dotfiles/init.vim'
+            dest: '{{ ansible_env.HOME }}/.config/nvim/init.vim'
+            state: link
+            force: yes
     ###############
     # Homebrew Cask
     ###############
@@ -181,9 +177,6 @@
       environment:
         HOMEBREW_CASK_OPTS: "--appdir=/Applications"
       with_items: '{{ homebrew_cask_packages }}'
-      tags:
-        - cask
-
     ##########
     # Fonts
     ##########
@@ -204,12 +197,12 @@
         - name: install font font-noto-sans-cjk-jp
           community.general.homebrew_cask:
             name: font-noto-sans-cjk-jp
-            state: present
+            state: present  
         - name: install font font-noto-serif-cjk-jp
           community.general.homebrew_cask:
             name: font-noto-serif-cjk-jp
             state: present
-
+          
     ###################
     # Fish-Shell Setup
     ###################
@@ -221,16 +214,12 @@
             path: /etc/shells
             regexp: '/opt/homebrew/bin/fish'
             insertafter: '/bin/zsh'
-            line: '/opt/homebrew/bin/fish'
-          tags:
-            - fish
+            line: '/opt/homebrew/bin/fish'    
         - name: set fish-shell as default
           become: true
           user:
             name: "{{ ansible_user_id }}"
             shell: /opt/homebrew/bin/fish
-          tags:
-            - fish
         - name: git clone Powerline
           ansible.builtin.git:
             repo: git@github.com:powerline/fonts.git
@@ -246,61 +235,63 @@
         - name: Download fisher plugin manager
           ansible.builtin.get_url:
             url: https://git.io/fisher
-            dest: '{{ ansible_env.HOME }}/fisher'
-          tags:
-            - fish
+            dest: '{{ ansible_env.HOME }}/fisher'            
         - name: Install fisher plugin manager
           ansible.builtin.shell: "source {{ ansible_env.HOME }}/fisher && fisher install jorgebucaran/fisher"
           args:
             executable: /opt/homebrew/bin/fish
             creates: '{{ ansible_env.HOME }}/.config/fish/functions/fisher.fish'
-          tags:
-            - fish
         - name: Delete fisher installer file
           file:
             dest: '{{ ansible_env.HOME }}/fisher'
             state: absent
-          tags:
-            - fish
         - name: Install z plugin for fish
           ansible.builtin.shell: "fisher install jethrokuan/z"
           args:
             executable: /opt/homebrew/bin/fish
-          tags:
-            - fish
         - name: Install peco plugin for fish
           ansible.builtin.shell: "fisher install oh-my-fish/plugin-peco"
           args:
             executable: /opt/homebrew/bin/fish
-          tags:
-            - fish
         - name: Install theme-bobthefish plugin for fish
           ansible.builtin.shell: "fisher install oh-my-fish/theme-bobthefish"
           args:
             executable: /opt/homebrew/bin/fish
-          tags:
-            - fish
         - name: Install bd plugin for fish
           ansible.builtin.shell: "fisher install 0rax/fish-bd"
           args:
             executable: /opt/homebrew/bin/fish
-          tags:
-            - fish
-
     # anyenv
-    - name: anyenv setting
-      file:
-        path: '{{ ansible_env.HOME }}/.anyenv/plugins'
-        state: directory
-      tags:
-        - anyenv
-    - name: anyenv-update clone
-      ansible.builtin.git:
-        repo: https://github.com/znz/anyenv-update.git
-        dest: '{{ ansible_env.HOME }}/.anyenv/plugins/anyenv-update'
-      tags:
-        - anyenv
-
+    - name: setup anyenv
+      block:
+        - name: anyenv setting
+          file:
+            path: '{{ ansible_env.HOME }}/.anyenv/plugins'
+            state: directory
+        - name: anyenv-update clone
+          ansible.builtin.git:
+            repo: https://github.com/znz/anyenv-update.git
+            dest: '{{ ansible_env.HOME }}/.anyenv/plugins/anyenv-update'
+        - name: anyenv init
+          ansible.builtin.shell: "anyenv install --init"
+          args:
+            executable: /opt/homebrew/bin/fish
+        - name: install nodenv
+          ansible.builtin.shell: "anyenv install nodenv"
+          args:
+            executable: /opt/homebrew/bin/fish
+        - name: install pyenv
+          ansible.builtin.shell: "anyenv install pyenv"
+          args:
+            executable: /opt/homebrew/bin/fish
+        - name: install rbenv
+          ansible.builtin.shell: "anyenv install rbenv"
+          args:
+            executable: /opt/homebrew/bin/fish
+        - name: install jenv
+          ansible.builtin.shell: "anyenv install jenv"
+          args:
+            executable: /opt/homebrew/bin/fish
     # java
     - name: java setting
       become: true
@@ -309,5 +300,3 @@
         dest: '/Library/Java/JavaVirtualMachines/openjdk.jdk'
         state: link
         force: yes
-      tags:
-        - java
