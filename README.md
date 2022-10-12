@@ -1,4 +1,6 @@
-# All in one Setup Command
+# one command setting my pc
+
+[コマンド一発でAnsible含めて自動でMacの環境構築する](https://zenn.dev/ogrium/articles/1fc04a2c0d9345)
 
 ## Getting Started
 
