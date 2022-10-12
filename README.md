@@ -1,10 +1,14 @@
-# 環境構築用スクリプト
+# All in one Setup Command
 
-まとめて一括インストールするとき．
-ターミナルに以下を貼り付けて実行
+## Getting Started
+
 ```
-curl -sfSL setup.shinyaoguri.com | sh -s
+$ curl -sfSL setup.shinyaoguri.com | sh -s
+
+or
+
+$ curl -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh | sh -s
+
 ```
 
-内部的には
-`setup.shinyaoguri.com`は`https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh`を返すようになっています
+`setup.shinyaoguri.com` is redirect `https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh` using CloudFlare Workers
