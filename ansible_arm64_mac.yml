@@ -272,10 +272,6 @@
           ansible.builtin.git:
             repo: https://github.com/znz/anyenv-update.git
             dest: '{{ ansible_env.HOME }}/.anyenv/plugins/anyenv-update'
-        - name: anyenv init
-          ansible.builtin.shell: "anyenv install --init"
-          args:
-            executable: /opt/homebrew/bin/fish
         - name: install nodenv
           ansible.builtin.shell: "anyenv install nodenv"
           args:
