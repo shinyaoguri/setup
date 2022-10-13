@@ -5,7 +5,7 @@
 ## Getting Started
 
 ```
-$ curl -sfSL setup.shinyaoguri.com | sh -s
+$ curl -L setup.shinyaoguri.com | sh -s
 ```
 or
 ```
