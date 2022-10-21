@@ -103,6 +103,8 @@
       - { name: "ScreenPointer", id: "1368204906" }
       - { name: "Paste", id: "967805235" }
       - { name: "LINE", id: "539883307"}
+      # ツール
+      - { name: "The Unarchiver", id: "425424353"}
   tasks:
     ##########
     # Homebrew
