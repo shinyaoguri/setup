@@ -91,7 +91,6 @@
       - name: blackhole-2ch
     apps:
       # Apple公式
-      - { name: "XCode", id "497799835"}
       - { name: "Keynote", id: "409183694" }
       - { name: "Pages", id: "409201541" }
       - { name: "Numbers", id: "409203825" }
@@ -132,7 +131,6 @@
     # AppStore
     ##########
     - name: install from AppStore
-      ignore_errors: yes
       block:
         - name: brew install mas
           homebrew:
