@@ -279,22 +279,6 @@
           ansible.builtin.git:
             repo: https://github.com/znz/anyenv-update.git
             dest: '{{ ansible_env.HOME }}/.anyenv/plugins/anyenv-update'
-        - name: install nodenv
-          ansible.builtin.shell: "anyenv install nodenv"
-          args:
-            executable: /opt/homebrew/bin/fish
-        - name: install pyenv
-          ansible.builtin.shell: "anyenv install pyenv"
-          args:
-            executable: /opt/homebrew/bin/fish
-        - name: install rbenv
-          ansible.builtin.shell: "anyenv install rbenv"
-          args:
-            executable: /opt/homebrew/bin/fish
-        - name: install jenv
-          ansible.builtin.shell: "anyenv install jenv"
-          args:
-            executable: /opt/homebrew/bin/fish
     # java
     - name: java setting
       become: true
