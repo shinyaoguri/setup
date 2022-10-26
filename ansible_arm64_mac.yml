@@ -125,6 +125,8 @@
             name: '{{ item.name }}'
             state: '{{ item.state | default("present") }}'
           with_items: '{{ homebrew_packages }}'
+      ignore_errors: yes
+      
     ##########
     # AppStore
     ##########
@@ -142,7 +144,8 @@
         - name: install from AppStore
           command: "mas install {{ item.id }}"
           when: "installed_list.stdout_lines | select('search', item.id) | list | length == 0"
-          loop: "{{ apps }}"      
+          loop: "{{ apps }}"
+      ignore_errors: yes
     ####################
     # Download dotfiles
     ####################
@@ -172,6 +175,7 @@
             dest: '{{ ansible_env.HOME }}/.config/nvim/init.vim'
             state: link
             force: yes
+      ignore_errors: yes
     ###############
     # Homebrew Cask
     ###############
