@@ -55,6 +55,7 @@
       # 開発
       - name: chromedriver
       - name: docker
+      - name: parallels
       - name: mamp
       - name: responsively
       - name: ngrok/ngrok/ngrok
