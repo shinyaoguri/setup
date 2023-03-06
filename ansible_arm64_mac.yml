@@ -131,6 +131,7 @@
     # AppStore
     ##########
     - name: install from AppStore
+      ignore_errors: yes
       block:
         - name: brew install mas
           homebrew:
@@ -180,6 +181,7 @@
     # Homebrew Cask
     ###############
     - name: homebrew cask packages install
+      ignore_errors: yes
       community.general.homebrew_cask: name={{ item.name }} state=installed
       environment:
         HOMEBREW_CASK_OPTS: "--appdir=/Applications"
