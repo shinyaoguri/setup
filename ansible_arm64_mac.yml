@@ -52,6 +52,8 @@
       - name: processing
       - name: unity-hub
       - name: arduino
+      # ターミナル
+      - name: warp
       # 開発
       - name: chromedriver
       - name: docker
