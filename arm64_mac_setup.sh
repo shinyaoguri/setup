@@ -40,7 +40,7 @@ if type "brew" >/dev/null 2>&1; then
   echo -e "✅ brew already exist"
 else
   echo -e "🙅 Homebrew was not exist\nPlease install Homebrew"
-  open "https://brew.sh/index_ja"
+  open "https://brew.sh"
   exit
 fi
 
