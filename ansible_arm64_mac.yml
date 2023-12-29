@@ -61,6 +61,7 @@
       - name: responsively
       - name: ngrok/ngrok/ngrok
       - name: flutter
+      - name: google-cloud-sdk
       # 配信
       - name: obs
       - name: obs-virtualcam
