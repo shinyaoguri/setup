@@ -74,7 +74,6 @@
       # 常駐ツール
       - name: gyazo
       - name: google-drive
-      - name: grammarly
       - name: 1password
       - name: spectacle
       # タスク管理
