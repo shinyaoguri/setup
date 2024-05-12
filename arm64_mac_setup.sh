@@ -45,6 +45,27 @@ else
 fi
 
 ##########
+# SSH
+##########
+echo -e "-----\nCheck SSH"
+if [ -f ~/.ssh ]; then
+  echo '✅ ssh-key already exist'
+else
+  read "email?mail address: "
+  if [[ $email =~ '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$' ]]; then
+    read "confirm?($email) is OK?(y/n): "
+    if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
+      echo "$email"
+    else
+      echo "Canceled"
+      exit
+    fi
+  else
+    echo "Invalid E-Mail Address Format"
+  fi
+fi
+
+##########
 # Ansible
 ##########
 echo -e "-----\nCheck Ansible"
