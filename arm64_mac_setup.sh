@@ -49,13 +49,22 @@ fi
 ##########
 echo -e "-----\nCheck SSH"
 if [ -d ~/.ssh ]; then
-  echo '✅ ssh-key already exist'
+  echo '✅ GitHub ssh-key already exist'
 else
   read "email?Input Your GitHub Email Address: "
   if [[ $email =~ '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$' ]]; then
     read "confirm?($email) is OK?(y/n): "
     if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
-      ssh-keygen -t ed25519 -C \""$email"\"
+      ssh-keygen -t ed25519 -N "" -C \""$email"\" -f ~/.ssh/github
+      echo ""
+      echo "----------"
+      echo "Please Add This Public-Key to GitHub"
+      echo ""
+      cat ~/.ssh/github.pub
+      echo ""
+      echo "----------"
+      open "https://github.com/settings/keys"
+      exit
     else
       echo "Canceled"
       exit
