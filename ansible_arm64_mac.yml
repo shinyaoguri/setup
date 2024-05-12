@@ -149,11 +149,6 @@
           loop: "{{ apps }}"
 
     ####################
-    # SSH setup
-    ####################
-
-    
-    ####################
     # Download dotfiles
     ####################
     - name: setup dotfiles
@@ -161,7 +156,7 @@
       block:
         - name: git clone dotfiles
           ansible.builtin.git:
-            repo: git@github.com:shinyaoguri/dotfiles.git
+            repo: https://github.com/shinyaoguri/dotfiles.git
             dest: '{{ ansible_env.HOME }}/dotfiles'
         - name: .config/fish mkdir
           file:
