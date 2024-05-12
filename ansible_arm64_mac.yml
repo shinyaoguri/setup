@@ -147,7 +147,12 @@
           command: "mas install {{ item.id }}"
           when: "installed_list.stdout_lines | select('search', item.id) | list | length == 0"
           loop: "{{ apps }}"
-      
+
+    ####################
+    # SSH setup
+    ####################
+
+    
     ####################
     # Download dotfiles
     ####################
