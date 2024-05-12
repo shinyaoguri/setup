@@ -33,7 +33,7 @@
       - name: anyenv
       - name: deno
       - name: java
-      - name: clojure/tools/clojure
+      - name: clojure
       - name: rust
       # メディア処理関係
       - name: imagemagick
