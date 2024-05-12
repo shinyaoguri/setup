@@ -48,20 +48,20 @@ fi
 # SSH
 ##########
 echo -e "-----\nCheck SSH"
-if [ -f ~/.ssh ]; then
+if [ -d ~/.ssh ]; then
   echo '✅ ssh-key already exist'
 else
-  read "email?mail address: "
+  read "email?Input Your GitHub Email Address: "
   if [[ $email =~ '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$' ]]; then
     read "confirm?($email) is OK?(y/n): "
     if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
-      echo "$email"
+      ssh-keygen -t ed25519 -C \""$email"\"
     else
       echo "Canceled"
       exit
     fi
   else
-    echo "Invalid E-Mail Address Format"
+      echo "($email) is invalid format"
   fi
 fi
 
