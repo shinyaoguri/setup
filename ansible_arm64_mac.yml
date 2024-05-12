@@ -7,7 +7,6 @@
   connection: local
   vars:
     homebrew_taps:
-      - homebrew/cask
       - homebrew/cask-fonts
     ###############
     # CUI App List
