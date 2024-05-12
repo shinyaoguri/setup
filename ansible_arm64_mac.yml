@@ -231,7 +231,7 @@
             shell: /opt/homebrew/bin/fish
         - name: git clone Powerline
           ansible.builtin.git:
-            repo: git@github.com:powerline/fonts.git
+            repo: https://github.com/powerline/fonts.git
             dest: '{{ ansible_env.HOME }}/tmp-fonts'
         - name: install Powerline
           ansible.builtin.shell: "cd {{ ansible_env.HOME}}/tmp-fonts && ./install.sh"
