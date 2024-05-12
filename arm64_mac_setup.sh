@@ -62,6 +62,7 @@ else
     fi
   else
       echo "($email) is invalid format"
+      exit
   fi
 fi
 
