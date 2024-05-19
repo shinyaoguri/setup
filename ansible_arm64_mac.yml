@@ -3,6 +3,23 @@
 # Copyright (c) 2022 Shinya Oguri
 # https://github.com/shinyaoguri/setup
 #######################################
+
+# This Script is called from `arm64_mac_setup.sh`
+
+# Full Setup
+#$ ansible-playbook ansible_arm64_mac.yml
+
+# Partial Setup
+#$ ansible-playbook ansible_arm64_mac.yml --tags "homebrew"
+#$ ansible-playbook ansible_arm64_mac.yml --tags "appstore"
+#$ ansible-playbook ansible_arm64_mac.yml --tags "dotfiles"
+#$ ansible-playbook ansible_arm64_mac.yml --tags "homebrew_cask"
+#$ ansible-playbook ansible_arm64_mac.yml --tags "font"
+#$ ansible-playbook ansible_arm64_mac.yml --tags "fish"
+#$ ansible-playbook ansible_arm64_mac.yml --tags "anyenv"
+#$ ansible-playbook ansible_arm64_mac.yml --tags "java"
+
+
 - hosts: localhost
   connection: local
   vars:
@@ -37,6 +54,7 @@
       # メディア処理関係
       - name: imagemagick
       - name: opencv
+      # 開発環境
     ###############
     # GUI App List
     ###############
@@ -54,6 +72,7 @@
       # ターミナル
       - name: warp
       # 開発
+      - name: cmake
       - name: chromedriver
       - name: docker
       - name: mamp
@@ -81,6 +100,8 @@
       - name: notion
       # Office系ツール
       - name: chrome-remote-desktop-host
+      - name: microsoft-office
+      - name: microsoft-teams
       # クリエイティブ系
       - name: blender
       # ツール
@@ -105,12 +126,18 @@
       - { name: "Toggl Track", id: "1291898086"}
       # ツール
       - { name: "The Unarchiver", id: "425424353"}
+      - { name: "Keka", id: "470158793"}
   tasks:
+    ##########
+    # MacOS
+    ##########
+
     ##########
     # Homebrew
     ##########
     - name: setup homebrew
       ignore_errors: yes
+      tags: homebrew
       block:
         - name: homebrew update
           homebrew:
@@ -132,6 +159,7 @@
     ##########
     - name: install from AppStore
       ignore_errors: yes
+      tags: appstore
       block:
         - name: brew install mas
           homebrew:
@@ -152,6 +180,7 @@
     ####################
     - name: setup dotfiles
       ignore_errors: yes
+      tags: dotfiles
       block:
         - name: git clone dotfiles
           ansible.builtin.git:
@@ -177,19 +206,23 @@
             dest: '{{ ansible_env.HOME }}/.config/nvim/init.vim'
             state: link
             force: yes
+
     ###############
     # Homebrew Cask
     ###############
     - name: homebrew cask packages install
       ignore_errors: yes
+      tags: homebrew_cask
       community.general.homebrew_cask: name={{ item.name }} state=installed
       environment:
         HOMEBREW_CASK_OPTS: "--appdir=/Applications"
       with_items: '{{ homebrew_cask_packages }}'
+
     ##########
     # Fonts
     ##########
     - name: install font
+      tags: font
       block:
         - name: install font M-Plus-1
           community.general.homebrew_cask:
@@ -206,16 +239,31 @@
         - name: install font font-noto-sans-cjk-jp
           community.general.homebrew_cask:
             name: font-noto-sans-cjk-jp
-            state: present  
+            state: present
         - name: install font font-noto-serif-cjk-jp
           community.general.homebrew_cask:
             name: font-noto-serif-cjk-jp
             state: present
+    - name: change default terminal font size
+      block:
+        - name: set default terminal profile
+          ansible.builtin.shell: "defaults write com.apple.Terminal 'Default Window Settings' 'Pro'"
+          args:
+            executable: /bin/zsh
+        - name: set startup terminal profile
+          ansible.builtin.shell: "defaults write com.apple.Terminal 'Startup Window Settings' 'Pro'"
+          args:
+            executable: /bin/zsh
+        - name: set terminal font
+          ansible.builtin.shell: "defaults write com.apple.Terminal 'Window Settings'.'Pro' font '$(echo -n NotoMonoForPowerline-Regular-11 | base64)'"
+          args:
+            executable: /bin/zsh
           
     ###################
     # Fish-Shell Setup
     ###################
     - name: fish-shell setup
+      tags: fish
       block:
         - name: set fish-shell default
           become: true
@@ -272,6 +320,7 @@
             executable: /opt/homebrew/bin/fish
     # anyenv
     - name: setup anyenv
+      tags: anyenv
       block:
         - name: anyenv setting
           file:
@@ -284,6 +333,7 @@
     # java
     - name: java setting
       become: true
+      tags: java
       file:
         src: '/opt/homebrew/opt/openjdk/libexec/openjdk.jdk'
         dest: '/Library/Java/JavaVirtualMachines/openjdk.jdk'
