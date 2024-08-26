@@ -82,7 +82,6 @@
       - name: google-cloud-sdk
       # 配信
       - name: obs
-      - name: obs-virtualcam
       # コミュニケーション
       - name: zoom
       - name: messenger
