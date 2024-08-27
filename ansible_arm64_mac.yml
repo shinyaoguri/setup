@@ -23,11 +23,11 @@
 - hosts: localhost
   connection: local
   vars:
-    homebrew_taps:
-      - homebrew/cask-fonts
+    #homebrew_taps:
+
     ###############
     # CUI App List
-    ###############
+    ###############    
     homebrew_packages:
       # バージョン管理関係
       - name: git
@@ -59,6 +59,11 @@
     # GUI App List
     ###############
     homebrew_cask_packages:
+      # 常駐ツール
+      - name: gyazo
+      - name: google-drive
+      - name: 1password
+      - name: spectacle
       # ブラウザ
       - name: google-chrome
       - name: firefox
@@ -72,33 +77,24 @@
       # ターミナル
       - name: warp
       # 開発
-      - name: cmake
       - name: chromedriver
       - name: docker
       - name: mamp
       - name: responsively
-      - name: ngrok/ngrok/ngrok
       - name: flutter
       - name: google-cloud-sdk
       # 配信
       - name: obs
       # コミュニケーション
+      - name: discord
       - name: zoom
       - name: messenger
       - name: slack
-      - name: webex
-      - name: discord
-      # 常駐ツール
-      - name: gyazo
-      - name: google-drive
-      - name: 1password
-      - name: spectacle
       # タスク管理
       - name: todoist
       # メモ
       - name: notion
       # Office系ツール
-      - name: chrome-remote-desktop-host
       - name: microsoft-office
       - name: microsoft-teams
       # クリエイティブ系
@@ -109,6 +105,12 @@
       - name: protonvpn
       - name: blackhole-2ch
     apps:
+      # 常駐系アプリ
+      - { name: "RunCat", id: "1429033973" }
+      - { name: "ScreenPointer", id: "1368204906" }
+      - { name: "Paste", id: "967805235" }
+      - { name: "LINE", id: "539883307"}
+      - { name: "Toggl Track", id: "1291898086"}
       # Apple公式
       - { name: "Keynote", id: "409183694" }
       - { name: "Pages", id: "409201541" }
@@ -117,12 +119,6 @@
       - { name: "Compressor", id: "424390742" }
       - { name: "Motion", id: "434290957" }
       - { name: "Final Cut Pro", id: "424389933" }
-      # 常駐系アプリ
-      - { name: "RunCat", id: "1429033973" }
-      - { name: "ScreenPointer", id: "1368204906" }
-      - { name: "Paste", id: "967805235" }
-      - { name: "LINE", id: "539883307"}
-      - { name: "Toggl Track", id: "1291898086"}
       # ツール
       - { name: "The Unarchiver", id: "425424353"}
       - { name: "Keka", id: "470158793"}
@@ -141,11 +137,11 @@
         - name: homebrew update
           homebrew:
             update_homebrew: yes
-        - name: homebrew tap
-          homebrew_tap:
-            name: '{{ item }}'
-            state: present
-          with_items: '{{ homebrew_taps }}'
+        # - name: homebrew tap
+        #   homebrew_tap:
+        #     name: '{{ item }}'
+        #     state: present
+        #   with_items: '{{ homebrew_taps }}'
         - name: homebrew packages install
           homebrew:
             name: '{{ item.name }}'
@@ -185,6 +181,12 @@
           ansible.builtin.git:
             repo: https://github.com/shinyaoguri/dotfiles.git
             dest: '{{ ansible_env.HOME }}/dotfiles'
+        - name: .zshrc symlinks
+          file:
+            src: '{{ ansible_env.HOME }}/dotfiles/.zshrc'
+            dest: '{{ ansible_env.HOME }}/.zshrc'
+            state: link
+            force: yes
         - name: .config/fish mkdir
           file:
             path: '{{ ansible_env.HOME}}/.config/fish'
@@ -243,6 +245,10 @@
           community.general.homebrew_cask:
             name: font-noto-serif-cjk-jp
             state: present
+        - name: install font font-noto-mono-for-powerline
+          community.general.homebrew_cask:
+            name: font-noto-mono-for-powerline
+            state: present
     - name: change default terminal font size
       block:
         - name: set default terminal profile
@@ -252,12 +258,7 @@
         - name: set startup terminal profile
           ansible.builtin.shell: "defaults write com.apple.Terminal 'Startup Window Settings' 'Pro'"
           args:
-            executable: /bin/zsh
-        - name: set terminal font
-          ansible.builtin.shell: "defaults write com.apple.Terminal 'Window Settings'.'Pro' font '$(echo -n NotoMonoForPowerline-Regular-11 | base64)'"
-          args:
-            executable: /bin/zsh
-          
+            executable: /bin/zsh          
     ###################
     # Fish-Shell Setup
     ###################
@@ -265,14 +266,18 @@
       tags: fish
       block:
         - name: set fish-shell default
-          become: true
+          become: yes
+          become_method: sudo
+          become_user: root
           lineinfile:
             path: /etc/shells
             regexp: '/opt/homebrew/bin/fish'
             insertafter: '/bin/zsh'
             line: '/opt/homebrew/bin/fish'    
         - name: set fish-shell as default
-          become: true
+          become: yes
+          become_method: sudo
+          become_user: root
           user:
             name: "{{ ansible_user_id }}"
             shell: /opt/homebrew/bin/fish

@@ -13,3 +13,9 @@ curl https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh | sh -s
 ```
 
 `setup.shinyaoguri.com` is redirect `https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh` using CloudFlare Workers
+
+## Manual Setup
+
+```
+$ ansible-playbook ansible_arm64_mac.yml
+```
