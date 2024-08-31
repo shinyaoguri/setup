@@ -19,3 +19,6 @@ curl https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh | sh -s
 ```
 $ ansible-playbook ansible_arm64_mac.yml
 ```
+
+## どうしても手動で設定する内容
+- ターミナルでシェルのフォントを

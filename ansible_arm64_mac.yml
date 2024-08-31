@@ -127,6 +127,46 @@
     # MacOS
     ##########
 
+    - name: setup default mac Settings
+      ignore_errors: yes
+      tags: macos
+      block:
+        # キーのリピート速度を速くする
+        - name: key repeat
+          shell:
+            executable: "/bin/zsh"
+            cmd: "defaults write -g KeyRepeat -int 1"    
+        # リピート入力認識までの時間を短くする
+        - name: key delay
+          shell:
+            cmd: "defaults write -g InitialKeyRepeat -int 10"
+            executable: "/bin/zsh"
+        # トラックパッドのクリックの強さを弱くする
+        - name: trackpad FirstClickThreshold
+          shell:
+            cmd: "defaults write com.apple.AppleMultitouchTrackpad 'FirstClickThreshold' -float 0"
+            executable: "/bin/zsh"
+        - name: trackpad SecondClickThreshold
+          shell:
+            cmd: "defaults write com.apple.AppleMultitouchTrackpad 'SecondClickThreshold' -float 0"
+            executable: "/bin/zsh"
+        # 3本指でページ間スワイプ
+        - name: trackpad Gesture
+          shell:
+            cmd: "defaults write com.apple.AppleMultitouchTrackpad 'TrackpadThreeFingerHorizSwipeGesture' -float 1"
+            executable: "/bin/zsh"
+        # ドックを自動で隠す
+        - name: dock autohide
+          shell:
+            cmd: "defaults write com.apple.dock autohide -bool true"
+            executable: '/bin/zsh'
+        # 
+        - name: inputmethod kotoeri comma period
+          shell:
+            cmd: "defaults write com.apple.inputmethod.Kotoeri 'JIMPrefPunctuationTypeKey' -float 3"
+            executable: "/bin/zsh"
+
+
     ##########
     # Homebrew
     ##########
