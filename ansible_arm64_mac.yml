@@ -135,11 +135,11 @@
         - name: key repeat
           shell:
             executable: "/bin/zsh"
-            cmd: "defaults write -g KeyRepeat -int 1"    
+            cmd: "defaults write -g KeyRepeat -int 2"    
         # リピート入力認識までの時間を短くする
         - name: key delay
           shell:
-            cmd: "defaults write -g InitialKeyRepeat -int 10"
+            cmd: "defaults write -g InitialKeyRepeat -int 15"
             executable: "/bin/zsh"
         # トラックパッドのクリックの強さを弱くする
         - name: trackpad FirstClickThreshold
