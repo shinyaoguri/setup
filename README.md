@@ -5,10 +5,6 @@
 ## Getting Started
 
 ```
-curl -L setup.shinyaoguri.com | sh -s
-```
-or
-```
 curl https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh | sh -s
 ```
 
