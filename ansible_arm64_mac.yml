@@ -63,6 +63,7 @@
       - name: gyazo
       - name: google-drive
       - name: 1password
+      - name: rectangle
       # ブラウザ
       - name: google-chrome
       - name: firefox
