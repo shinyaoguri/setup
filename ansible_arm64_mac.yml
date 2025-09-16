@@ -183,6 +183,7 @@
         #     state: present
         #   with_items: '{{ homebrew_taps }}'
         - name: homebrew packages install
+          become: true
           homebrew:
             name: '{{ item.name }}'
             state: '{{ item.state | default("present") }}'
@@ -197,6 +198,7 @@
       tags: appstore
       block:
         - name: brew install mas
+          become: true
           homebrew:
             name: mas
             state: present            
@@ -206,6 +208,7 @@
           check_mode: no
           changed_when: no
         - name: install from AppStore
+          become: true
           command: "mas install {{ item.id }}"
           when: "installed_list.stdout_lines | select('search', item.id) | list | length == 0"
           loop: "{{ apps }}"
