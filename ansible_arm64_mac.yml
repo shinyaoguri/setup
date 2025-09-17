@@ -309,7 +309,7 @@
       tags: fish
       block:
         - name: set fish-shell default
-          become: yes
+          become: true
           become_method: sudo
           become_user: root
           lineinfile:
@@ -318,7 +318,7 @@
             insertafter: '/bin/zsh'
             line: '/opt/homebrew/bin/fish'    
         - name: set fish-shell as default
-          become: yes
+          become: true
           become_method: sudo
           become_user: root
           user:
