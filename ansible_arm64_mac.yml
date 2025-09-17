@@ -264,6 +264,22 @@
       with_items: '{{ homebrew_cask_packages }}'
 
     ##########
+    # Git Setup
+    ##########
+    - name: Configure Git global username and email
+      block:
+        - name: Set Git global username
+          community.general.git_config:
+            name: user.name
+            value: "Shinya Oguri"
+            scope: global
+        - name: Set Git global email
+          community.general.git_config:
+            name: user.email
+            value: "ogrium@gmail.com"
+            scope: global
+
+    ##########
     # Fonts
     ##########
     - name: install font
