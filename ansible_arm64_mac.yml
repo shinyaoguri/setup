@@ -255,7 +255,10 @@
       ignore_errors: yes
       tags: homebrew_cask
       become: false
-      community.general.homebrew_cask: name={{ item.name }} state=installed
+      community.general.homebrew_cask:
+        name={{ item.name }}
+        state=installed
+        sudo_password: "{{ ansible_become_password }}"
       environment:
         HOMEBREW_CASK_OPTS: "--appdir=/Applications"
       with_items: '{{ homebrew_cask_packages }}'
