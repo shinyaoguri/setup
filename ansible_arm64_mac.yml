@@ -73,7 +73,7 @@
       - name: android-studio
       - name: processing
       - name: unity-hub
-      - name: arduino
+      - name: arduino-ide
       # ターミナル
       - name: warp
       # 開発
