@@ -32,7 +32,6 @@
       # バージョン管理関係
       - name: git
       - name: git-lfs
-      - name: svn
       # エディタ関係
       - name: vim
       - name: neovim
@@ -55,6 +54,7 @@
       - name: imagemagick
       - name: opencv
       # 開発環境
+      - name: gnupg
     ###############
     # GUI App List
     ###############
@@ -254,11 +254,11 @@
     - name: homebrew cask packages install
       ignore_errors: yes
       tags: homebrew_cask
-      become: false
       community.general.homebrew_cask:
-        name={{ item.name }}
-        state=installed
-        sudo_password: "{{ ansible_become_password }}"
+        name: '{{ item.name }}'
+        state: present
+        accept_external_apps: true
+      become: false
       environment:
         HOMEBREW_CASK_OPTS: "--appdir=/Applications"
       with_items: '{{ homebrew_cask_packages }}'
