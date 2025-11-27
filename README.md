@@ -1,20 +1,40 @@
-# one command setting my pc
+# macOS Setup
 
-[コマンド一発でAnsible含めて自動でMacの環境構築する](https://zenn.dev/shinyaoguri/articles/5caeeeea21b0c2)
+ワンライナーでmacOSの環境構築を自動化
 
-## Getting Started
+## 使い方
 
-```
-curl https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh | sh -s
-```
-
-`setup.shinyaoguri.com` is redirect `https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh` using CloudFlare Workers
-
-## Manual Setup
-
-```
-$ ansible-playbook ansible_arm64_mac.yml
+```bash
+zsh -c "$(curl -fsSL https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh)"
 ```
 
-## どうしても手動で設定する内容
-- ターミナルでシェルのフォントを
+以上。
+
+## 何ができるか
+
+対話的に選択してインストール：
+- Homebrew パッケージ
+- デスクトップアプリ
+- App Store アプリ
+- 開発環境（nodenv, rbenv等）
+- macOS設定
+
+## ローカル実行
+
+```bash
+git clone https://github.com/shinyaoguri/setup.git
+cd setup
+./arm64_mac_setup_dynamic.sh
+```
+
+## 操作方法
+
+- `↑/↓` - 移動
+- `Space` - 選択
+- `Enter` - カテゴリ展開
+- `c` - 決定
+- `q` - 終了
+
+## ライセンス
+
+MIT
