@@ -102,6 +102,11 @@
             name: '{{ item.name }}'
             state: '{{ item.state | default("present") }}'
           with_items: '{{ homebrew_packages }}'
+
+    - name: install Rosetta2
+      shell:
+        cmd: "/usr/sbin/softwareupdate --install-rosetta --agree-to-license"
+        executable: "/bin/zsh"
     ###############
     # Homebrew Cask
     ###############

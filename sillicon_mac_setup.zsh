@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 
-set -e  # エラーで即座に終了
+set -e # errorで即座に終了させる
 
 # ----- 変数初期化 -----
 localmode=false
