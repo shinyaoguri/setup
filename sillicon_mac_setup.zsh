@@ -57,7 +57,7 @@ else
 	xcode-select --install
 	echo ""
 	echo "   ⏸️  インストールが完了したら、このスクリプトを再実行してください:"
-	echo "      zsh $0"
+	echo "      zsh -c "$(curl -fsSL https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.zsh)""
 	echo ""
 	exit 0
 fi
