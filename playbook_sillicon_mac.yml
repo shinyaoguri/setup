@@ -1,0 +1,431 @@
+#######################################
+# MIT License
+# Copyright (c) 2025 Shinya Oguri
+# https://github.com/shinyaoguri/setup
+#######################################
+
+- hosts: localhost
+  connection: local
+  vars:
+    #homebrew_taps:
+
+    ###############
+    # CUI App List
+    ###############    
+    homebrew_packages:
+      - name: git
+      - name: vim
+      - name: neovim
+      - name: gnupg
+    ###############
+    # GUI App List
+    ###############
+    homebrew_cask_packages:
+      - name: gyazo
+      - name: google-drive
+      - name: 1password
+      - name: rectangle
+      - name: google-chrome
+      - name: docker-desktop
+      - name: visual-studio-code
+      - name: discord
+      - name: zoom
+      - name: todoist-app
+      - name: notion
+      - name: microsoft-office
+      - name: vlc
+      - name: fujitsu-scansnap-home
+    apps:
+      - { name: "RunCat", id: "1429033973" }
+      - { name: "ScreenPointer", id: "1368204906" }
+      - { name: "Paste", id: "967805235" }
+      - { name: "Keynote", id: "409183694" }
+      - { name: "Pages", id: "409201541" }
+      - { name: "Numbers", id: "409203825" }
+      - { name: "Jump Desktop", id: "524141863" }
+
+  tasks:
+    ##########
+    # MacOS
+    ##########
+
+    - name: setup default mac Settings
+      ignore_errors: yes
+      tags: macos
+      block:
+        # キーのリピート速度を速くする
+        - name: key repeat
+          shell:
+            executable: "/bin/zsh"
+            cmd: "defaults write -g KeyRepeat -int 2"    
+        # リピート入力認識までの時間を短くする
+        - name: key delay
+          shell:
+            cmd: "defaults write -g InitialKeyRepeat -int 15"
+            executable: "/bin/zsh"
+        # トラックパッドのクリックの強さを弱くする
+        - name: trackpad FirstClickThreshold
+          shell:
+            cmd: "defaults write com.apple.AppleMultitouchTrackpad 'FirstClickThreshold' -float 0"
+            executable: "/bin/zsh"
+        - name: trackpad SecondClickThreshold
+          shell:
+            cmd: "defaults write com.apple.AppleMultitouchTrackpad 'SecondClickThreshold' -float 0"
+            executable: "/bin/zsh"
+        # 3本指でページ間スワイプ
+        - name: trackpad Gesture
+          shell:
+            cmd: "defaults write com.apple.AppleMultitouchTrackpad 'TrackpadThreeFingerHorizSwipeGesture' -float 1"
+            executable: "/bin/zsh"
+        # ドックを自動で隠す
+        - name: dock autohide
+          shell:
+            cmd: "defaults write com.apple.dock autohide -bool true"
+            executable: '/bin/zsh'
+        # 日本語入力の句読点を「，」「．」に設定
+        - name: inputmethod kotoeri comma period
+          shell:
+            cmd: "defaults write com.apple.inputmethod.Kotoeri 'JIMPrefPunctuationTypeKey' -int 1"
+            executable: "/bin/zsh"
+    ##########
+    # Homebrew
+    ##########
+    - name: setup homebrew
+      ignore_errors: yes
+      tags: homebrew
+      block:
+        - name: homebrew update
+          homebrew:
+            update_homebrew: yes
+        - name: homebrew packages install
+          homebrew:
+            name: '{{ item.name }}'
+            state: '{{ item.state | default("present") }}'
+          with_items: '{{ homebrew_packages }}'
+    ###############
+    # Homebrew Cask
+    ###############
+    - name: Install Homebrew Cask apps
+      tags: homebrew_cask
+      block:
+        - name: Check which cask apps are already installed
+          shell: brew list --cask | grep -q "^{{ item.name }}$"
+          with_items: '{{ homebrew_cask_packages }}'
+          register: cask_check
+          failed_when: false
+          changed_when: false
+
+        - name: Remove previous completion flag
+          file:
+            path: /tmp/ansible_cask_complete
+            state: absent
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Create temporary cask installation script
+          copy:
+            content: |
+              #!/usr/bin/env zsh
+              set -e
+              echo "============================================================"
+              echo "Homebrew Cask アプリのインストール"
+              echo "============================================================"
+              echo ""
+              echo "一部のアプリは sudo パスワードが必要です。"
+              echo ""
+
+              {% for result in cask_check.results %}
+              {% if result.rc != 0 %}
+              echo "→ {{ result.item.name }} をインストール中..."
+              if brew install --cask {{ result.item.name }}; then
+                echo "✓ {{ result.item.name }} のインストールが完了しました"
+              else
+                echo "✗ {{ result.item.name }} のインストールに失敗しました"
+              fi
+              echo ""
+              {% endif %}
+              {% endfor %}
+
+              echo "============================================================"
+              echo "Cask アプリのインストール処理が完了しました"
+              echo "============================================================"
+
+              # インストール完了フラグを作成
+              touch /tmp/ansible_cask_complete
+            dest: /tmp/ansible_cask_install.sh
+            mode: '0755'
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Open new terminal window for cask installation
+          shell: |
+            osascript <<EOF
+            tell application "Terminal"
+              activate
+              do script "cd {{ ansible_env.PWD }} && echo '============================================================' && echo 'Homebrew Cask アプリのインストール' && echo '============================================================' && echo '' && zsh /tmp/ansible_cask_install.sh && echo '' && echo '✅ インストールが完了しました。元のターミナルで Enter を押してください。' && echo '' && read -p '何かキーを押すとこのウィンドウを閉じます... ' && exit"
+            end tell
+            EOF
+          args:
+            executable: /bin/zsh
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+          failed_when: false
+
+        - name: Display instructions for cask installation
+          debug:
+            msg:
+              - ""
+              - "============================================================"
+              - "⚠️  Homebrew Cask アプリのインストール"
+              - "============================================================"
+              - ""
+              - "新しいターミナルウィンドウが開きました。"
+              - "そちらでインストールを実行してください。"
+              - ""
+              - "インストールが完了したら、このターミナルに戻って Enter を押してください。"
+              - ""
+              - "============================================================"
+              - ""
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Wait for cask installation to complete
+          wait_for:
+            path: /tmp/ansible_cask_complete
+            timeout: 600
+            msg: "インストールが10分以内に完了しませんでした"
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Verify cask apps were installed
+          shell: brew list --cask | grep -q "^{{ item.name }}$"
+          with_items: '{{ homebrew_cask_packages }}'
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+          register: cask_verify
+          failed_when: false
+
+        - name: Report installation status
+          debug:
+            msg: |
+              {% set missing = [] %}
+              {% for result in cask_verify.results %}
+              {% if result.rc is defined and result.rc != 0 %}
+              {% set _ = missing.append(result.item.name) %}
+              {% endif %}
+              {% endfor %}
+              {% if missing | length > 0 %}
+              ⚠️  以下のアプリがまだインストールされていません:
+              {% for app in missing %}
+                - {{ app }}
+              {% endfor %}
+
+              新しいターミナルでインストールが完了していることを確認してください。
+              {% else %}
+              ✅ 全ての Cask アプリが正常にインストールされました。
+              {% endif %}
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Cleanup temporary cask files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/ansible_cask_install.sh
+            - /tmp/ansible_cask_complete
+          when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+          failed_when: false
+
+
+    ###############
+    # AppStore Apps
+    ###############
+    - name: Ensure mas is installed and up to date
+      community.general.homebrew:
+        name: mas
+        state: latest
+
+    - name: Install AppStore apps interactively
+      tags: appstore
+      block:
+        - name: Check if apps are already installed
+          shell: mas list | grep -q "{{ item.id }}"
+          with_items: '{{ apps }}'
+          register: app_check
+          failed_when: false
+          changed_when: false
+
+        - name: Remove previous App Store completion flag
+          file:
+            path: /tmp/ansible_mas_complete
+            state: absent
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Create temporary installation script
+          copy:
+            content: |
+              #!/usr/bin/env zsh
+              set -e
+
+              echo "============================================================"
+              echo "App Store アプリのインストール"
+              echo "============================================================"
+              echo ""
+              echo "{{ app_check.results | selectattr('rc', 'equalto', 1) | list | length }} 個のアプリをインストールします。"
+              echo ""
+
+              # 最初に sudo 認証を済ませる
+              echo "sudo パスワードを入力してください:"
+              sudo -v
+
+              # sudo タイムアウトを延長し続ける
+              while true; do sudo -n true; sleep 50; kill -0 "$$" || exit; done 2>/dev/null &
+
+              {% for result in app_check.results %}
+              {% if result.rc != 0 %}
+              echo "→ {{ result.item.name }} (ID: {{ result.item.id }}) をインストール中..."
+              if sudo mas install {{ result.item.id }}; then
+                echo "✓ {{ result.item.name }} のインストールが完了しました"
+              else
+                echo "✗ {{ result.item.name }} のインストールに失敗しました"
+              fi
+              echo ""
+              {% endif %}
+              {% endfor %}
+
+              echo "============================================================"
+              echo "インストール処理が完了しました"
+              echo "============================================================"
+
+              # インストール完了フラグを作成
+              touch /tmp/ansible_mas_complete
+            dest: /tmp/ansible_mas_install.sh
+            mode: '0755'
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Open new terminal window to run installation script
+          shell: |
+            osascript <<EOF
+            tell application "Terminal"
+              activate
+              do script "cd {{ ansible_env.PWD }} && echo '============================================================' && echo 'App Store アプリのインストール' && echo '============================================================' && echo '' && zsh /tmp/ansible_mas_install.sh && echo '' && echo '✅ インストールが完了しました。元のターミナルで Enter を押してください。' && echo '' && read -p '何かキーを押すとこのウィンドウを閉じます... ' && exit"
+            end tell
+            EOF
+          args:
+            executable: /bin/zsh
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+          failed_when: false
+
+        - name: Display instructions
+          debug:
+            msg:
+              - ""
+              - "============================================================"
+              - "⚠️  App Store アプリのインストール"
+              - "============================================================"
+              - ""
+              - "新しいターミナルウィンドウが開きました。"
+              - "そちらでインストールを実行してください。"
+              - ""
+              - "インストールが完了したら、このターミナルに戻って Enter を押してください。"
+              - ""
+              - "============================================================"
+              - ""
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Wait for App Store installation to complete
+          wait_for:
+            path: /tmp/ansible_mas_complete
+            timeout: 600
+            msg: "App Store インストールが10分以内に完了しませんでした"
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Verify App Store apps were installed
+          shell: mas list | grep -q "{{ item.id }}"
+          with_items: '{{ apps }}'
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+          register: app_verify
+          failed_when: false
+
+        - name: Report App Store installation status
+          debug:
+            msg: |
+              {% set missing = [] %}
+              {% for result in app_verify.results %}
+              {% if result.rc is defined and result.rc != 0 %}
+              {% set _ = missing.append(result.item.name) %}
+              {% endif %}
+              {% endfor %}
+              {% if missing | length > 0 %}
+              ⚠️  以下の App Store アプリがまだインストールされていません:
+              {% for app in missing %}
+                - {{ app }}
+              {% endfor %}
+
+              新しいターミナルでインストールが完了していることを確認してください。
+              {% else %}
+              ✅ 全ての App Store アプリが正常にインストールされました。
+              {% endif %}
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+        - name: Cleanup temporary App Store files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /tmp/ansible_mas_install.sh
+            - /tmp/ansible_mas_complete
+          when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
+          failed_when: false
+
+    ##########
+    # Git Setup
+    ##########
+    - name: Configure Git global username and email
+      block:
+        - name: Set Git global username
+          community.general.git_config:
+            name: user.name
+            value: "Shinya Oguri"
+            scope: global
+        - name: Set Git global email
+          community.general.git_config:
+            name: user.email
+            value: "ogrium@gmail.com"
+            scope: global
+
+    ##########
+    # Fonts
+    ##########
+    - name: install font
+      tags: font
+      block:
+        - name: install font M-Plus-1
+          community.general.homebrew_cask:
+            name: font-m-plus-1
+            state: present
+        - name: install font M-Plus-1p
+          community.general.homebrew_cask:
+            name: font-m-plus-1p
+            state: present
+        - name: install font M-Plus-1-Code
+          community.general.homebrew_cask:
+            name: font-m-plus-1-code
+            state: present
+        - name: install font font-noto-sans-cjk-jp
+          community.general.homebrew_cask:
+            name: font-noto-sans-cjk-jp
+            state: present
+        - name: install font font-noto-serif-cjk-jp
+          community.general.homebrew_cask:
+            name: font-noto-serif-cjk-jp
+            state: present
+        - name: install font font-noto-mono-for-powerline
+          community.general.homebrew_cask:
+            name: font-noto-mono-for-powerline
+            state: present
+    - name: change default terminal font size
+      block:
+        - name: set default terminal profile
+          ansible.builtin.shell: "defaults write com.apple.Terminal 'Default Window Settings' 'Pro'"
+          args:
+            executable: /bin/zsh
+        - name: set startup terminal profile
+          ansible.builtin.shell: "defaults write com.apple.Terminal 'Startup Window Settings' 'Pro'"
+          args:
+            executable: /bin/zsh
+    
