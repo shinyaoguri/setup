@@ -64,18 +64,15 @@ case "$MODE-$PLATFORM" in
 		if [[ -f "$setup_script" ]]; then
 			echo "🚀 Starting setup..."
 			echo ""
-			zsh "$setup_script"
+			zsh "$setup_script" -l
 		else
 			echo "❌ Error: sillicon_mac_setup.zsh not found in $SCRIPT_DIR"
 			exit 1
 		fi
 		;;
 	cloud-sillicon-mac)
-		echo "🌐 Cloud Mode: Downloading setup script..."
-		# TODO: 実装が必要な場合はここに追加
-		echo "❌ Cloud mode is not yet implemented"
-		echo "   Please clone the repository and use -l option"
-		exit 1
+		echo "🌐 Cloud Mode: Downloading setup files..."
+		zsh -c "$(curl -H 'Cache-Control: no-cache' -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/sillicon_mac_setup.zsh)"
 		;;
 	*-intel-mac)
 		echo "⚠️  Intel Mac はサポートされていません"

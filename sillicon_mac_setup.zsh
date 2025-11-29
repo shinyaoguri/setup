@@ -2,8 +2,42 @@
 
 set -e  # エラーで即座に終了
 
-SCRIPT_DIR="${0:A:h}"  # スクリプトのディレクトリを取得
-PLAYBOOK="$SCRIPT_DIR/playbook_sillicon_mac.yml"
+# ----- 変数初期化 -----
+localmode=false
+GITHUB_RAW_URL="https://raw.githubusercontent.com/shinyaoguri/setup/main"
+
+# ----- オプション解析 -----
+while getopts "lh" opt; do
+	case "$opt" in
+		l) localmode=true;;
+		h)
+			echo "Usage: $0 [-l] [-h]"
+			echo "  -l : ローカルモード (リポジトリをクローン済みの場合)"
+			echo "  -h : ヘルプを表示"
+			exit 0
+			;;
+		*)
+			echo "Usage: $0 [-l] [-h]"
+			exit 1
+			;;
+	esac
+done
+
+# ----- Playbook パス設定 -----
+if [[ "$localmode" == true ]]; then
+	SCRIPT_DIR="${0:A:h}"
+	PLAYBOOK="$SCRIPT_DIR/playbook_sillicon_mac.yml"
+else
+	# クラウドモード: 一時ファイルにダウンロード
+	PLAYBOOK=$(mktemp)
+	curl -fsSL "$GITHUB_RAW_URL/playbook_sillicon_mac.yml" -o "$PLAYBOOK"
+	
+	# 終了時にクリーンアップ
+	cleanup() {
+		rm -f "$PLAYBOOK"
+	}
+	trap cleanup EXIT
+fi
 
 echo "============================================================"
 echo "  Apple Silicon Mac セットアップ"

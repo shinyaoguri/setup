@@ -5,7 +5,7 @@
 ## 使い方
 
 ```bash
-zsh -c "$(curl -fsSL https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.sh)"
+zsh -c "$(curl -fsSL https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.zsh)"
 ```
 
 以上。
