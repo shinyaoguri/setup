@@ -3,7 +3,7 @@ export ZSH="$HOME/.oh-my-zsh"
 
 # Set name of the theme to load
 # See https://github.com/ohmyzsh/ohmyzsh/wiki/Themes
-ZSH_THEME="robbyrussell"
+ZSH_THEME="cloud"
 
 # Uncomment the following line to use case-sensitive completion.
 # CASE_SENSITIVE="true"
@@ -80,3 +80,5 @@ export PATH="/opt/homebrew/bin:$PATH"
 
 # Add local bin to PATH
 export PATH="$HOME/.local/bin:$PATH"
+
+export GPG_TTY=$(tty)
