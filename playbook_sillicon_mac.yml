@@ -99,16 +99,30 @@
         - name: homebrew update
           homebrew:
             update_homebrew: yes
+        - name: Check which packages are already installed
+          shell: brew list --formula | grep -q "^{{ item.name }}$"
+          with_items: '{{ homebrew_packages }}'
+          register: package_check
+          failed_when: false
+          changed_when: false
         - name: homebrew packages install
           homebrew:
-            name: '{{ item.name }}'
-            state: '{{ item.state | default("present") }}'
-          with_items: '{{ homebrew_packages }}'
-
+            name: '{{ item.item.name }}'
+            state: '{{ item.item.state | default("present") }}'
+          with_items: '{{ package_check.results }}'
+          when: item.rc != 0
     - name: install Rosetta2
-      shell:
-        cmd: "/usr/sbin/softwareupdate --install-rosetta --agree-to-license"
-        executable: "/bin/zsh"
+      block:
+        - name: Check if Rosetta2 is already installed
+          shell: pkgutil --pkgs | grep -q "com.apple.pkg.RosettaUpdateAuto"
+          register: rosetta_check
+          failed_when: false
+          changed_when: false
+        - name: Install Rosetta2
+          shell:
+            cmd: "/usr/sbin/softwareupdate --install-rosetta --agree-to-license"
+            executable: "/bin/zsh"
+          when: rosetta_check.rc != 0
     ###############
     # Homebrew Cask
     ###############
@@ -167,7 +181,7 @@
             osascript <<EOF
             tell application "Terminal"
               activate
-              do script "cd {{ ansible_env.PWD }} && echo '============================================================' && echo 'Homebrew Cask アプリのインストール' && echo '============================================================' && echo '' && zsh /tmp/ansible_cask_install.sh && echo '' && echo '✅ インストールが完了しました。元のターミナルで Enter を押してください。' && echo '' && read -p '何かキーを押すとこのウィンドウを閉じます... ' && exit"
+              do script "cd {{ ansible_facts['env']['PWD'] }} && echo '============================================================' && echo 'Homebrew Cask アプリのインストール' && echo '============================================================' && echo '' && zsh /tmp/ansible_cask_install.sh && echo '' && echo '✅ インストールが完了しました。元のターミナルで Enter を押してください。' && echo '' && read -p '何かキーを押すとこのウィンドウを閉じます... ' && exit"
             end tell
             EOF
           args:
@@ -309,7 +323,7 @@
             osascript <<EOF
             tell application "Terminal"
               activate
-              do script "cd {{ ansible_env.PWD }} && echo '============================================================' && echo 'App Store アプリのインストール' && echo '============================================================' && echo '' && zsh /tmp/ansible_mas_install.sh && echo '' && echo '✅ インストールが完了しました。元のターミナルで Enter を押してください。' && echo '' && read -p '何かキーを押すとこのウィンドウを閉じます... ' && exit"
+              do script "cd {{ ansible_facts['env']['PWD'] }} && echo '============================================================' && echo 'App Store アプリのインストール' && echo '============================================================' && echo '' && zsh /tmp/ansible_mas_install.sh && echo '' && echo '✅ インストールが完了しました。元のターミナルで Enter を押してください。' && echo '' && read -p '何かキーを押すとこのウィンドウを閉じます... ' && exit"
             end tell
             EOF
           args:
@@ -400,31 +414,31 @@
     ##########
     - name: install font
       tags: font
+      vars:
+        font_casks:
+          - font-m-plus-1
+          - font-m-plus-1p
+          - font-m-plus-1-code
+          - font-noto-sans-cjk-jp
+          - font-noto-serif-cjk-jp
+          - font-noto-mono-for-powerline
       block:
-        - name: install font M-Plus-1
+        - name: Check which fonts are already installed
+          shell: brew list --cask | grep -q "^{{ item }}$"
+          with_items: '{{ font_casks }}'
+          register: font_check
+          failed_when: false
+          changed_when: false
+
+        - name: Install fonts
           community.general.homebrew_cask:
-            name: font-m-plus-1
+            name: '{{ item.item }}'
             state: present
-        - name: install font M-Plus-1p
-          community.general.homebrew_cask:
-            name: font-m-plus-1p
-            state: present
-        - name: install font M-Plus-1-Code
-          community.general.homebrew_cask:
-            name: font-m-plus-1-code
-            state: present
-        - name: install font font-noto-sans-cjk-jp
-          community.general.homebrew_cask:
-            name: font-noto-sans-cjk-jp
-            state: present
-        - name: install font font-noto-serif-cjk-jp
-          community.general.homebrew_cask:
-            name: font-noto-serif-cjk-jp
-            state: present
-        - name: install font font-noto-mono-for-powerline
-          community.general.homebrew_cask:
-            name: font-noto-mono-for-powerline
-            state: present
+          with_items: '{{ font_check.results }}'
+          when: item.rc != 0
+    ##########
+    # Terminal
+    ##########
     - name: change default terminal font size
       block:
         - name: set default terminal profile
@@ -435,4 +449,36 @@
           ansible.builtin.shell: "defaults write com.apple.Terminal 'Startup Window Settings' 'Pro'"
           args:
             executable: /bin/zsh
-    
+    ##########
+    # Oh My Zsh & zshrc
+    ##########
+    - name: Setup Oh My Zsh and zshrc
+      tags: zshrc
+      block:
+        - name: Check if Oh My Zsh is already installed
+          ansible.builtin.stat:
+            path: "{{ ansible_facts['env']['HOME'] }}/.oh-my-zsh"
+          register: ohmyzsh_installed
+
+        - name: Install Oh My Zsh
+          ansible.builtin.shell: |
+            sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+          args:
+            executable: /bin/zsh
+          environment:
+            RUNZSH: "no"
+            KEEP_ZSHRC: "yes"
+          when: not ohmyzsh_installed.stat.exists
+
+        - name: Remove default .zshrc created by Oh My Zsh
+          ansible.builtin.file:
+            path: "{{ ansible_facts['env']['HOME'] }}/.zshrc"
+            state: absent
+          when: not ohmyzsh_installed.stat.exists
+
+        - name: Create symbolic link for zshrc
+          ansible.builtin.file:
+            src: "{{ playbook_dir }}/zshrc"
+            dest: "{{ ansible_facts['env']['HOME'] }}/.zshrc"
+            state: link
+            force: yes
