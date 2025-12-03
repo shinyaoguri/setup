@@ -195,8 +195,8 @@
         - name: Wait for cask installation to complete
           wait_for:
             path: /tmp/ansible_cask_complete
-            timeout: 600
-            msg: "インストールが10分以内に完了しませんでした"
+            timeout: 1800
+            msg: "インストールが30分以内に完了しませんでした"
           when: cask_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
 
         - name: Verify cask apps were installed
@@ -337,8 +337,8 @@
         - name: Wait for App Store installation to complete
           wait_for:
             path: /tmp/ansible_mas_complete
-            timeout: 600
-            msg: "App Store インストールが10分以内に完了しませんでした"
+            timeout: 1800
+            msg: "App Store インストールが30分以内に完了しませんでした"
           when: app_check.results | selectattr('rc', 'equalto', 1) | list | length > 0
 
         - name: Verify App Store apps were installed
