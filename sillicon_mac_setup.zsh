@@ -56,9 +56,7 @@ else
 	echo "   インストールを開始します..."
 	xcode-select --install
 	echo ""
-	echo "   ⏸️  インストールが完了したら、このスクリプトを再実行してください:"
-	echo "      zsh -c "$(curl -fsSL https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.zsh)""
-	echo ""
+	echo "   ⏸️  インストールが完了したら、このスクリプトを再実行してください"
 	exit 0
 fi
 echo ""
@@ -76,20 +74,6 @@ else
 	echo ""
 	echo "   インストールを開始します..."
 	/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-	# Homebrew のパスを通す (Apple Silicon の場合)
-	if [[ -f "/opt/homebrew/bin/brew" ]]; then
-		eval "$(/opt/homebrew/bin/brew shellenv)"
-		echo ""
-		echo "   ✓ Homebrew のインストールが完了しました"
-		echo ""
-		echo "   ⚠️  シェルの設定を更新してください:"
-		echo '      echo '\''eval "$(/opt/homebrew/bin/brew shellenv)"'\'' >> ~/.zshrc'
-		echo ""
-		echo "   このスクリプトを再実行してください:"
-		echo "      zsh $0"
-		exit 0
-	fi
 fi
 echo ""
 
