@@ -33,8 +33,10 @@
       - name: todoist-app
       - name: notion
       - name: microsoft-office
+      - name: microsoft-teams
       - name: vlc
       - name: fujitsu-scansnap-home
+      - name: jump-desktop-connect
     apps:
       - { name: "RunCat", id: "1429033973" }
       - { name: "ScreenPointer", id: "1368204906" }
@@ -85,7 +87,7 @@
         # 日本語入力の句読点を「，」「．」に設定
         - name: inputmethod kotoeri comma period
           shell:
-            cmd: "defaults write com.apple.inputmethod.Kotoeri 'JIMPrefPunctuationTypeKey' -int 1"
+            cmd: "defaults write com.apple.inputmethod.Kotoeri 'JIMPrefPunctuationTypeKey' -int 3"
             executable: "/bin/zsh"
     ##########
     # Homebrew
