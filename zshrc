@@ -74,6 +74,7 @@ alias la='ls -A'
 alias l='ls -CF'
 alias ..='cd ..'
 alias ...='cd ../..'
+alias bd="cd .."
 
 # Homebrew
 export PATH="/opt/homebrew/bin:$PATH"
