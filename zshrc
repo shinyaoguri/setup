@@ -75,6 +75,7 @@ alias l='ls -CF'
 alias ..='cd ..'
 alias ...='cd ../..'
 alias bd="cd .."
+alias rm='trash'
 
 # Homebrew
 export PATH="/opt/homebrew/bin:$PATH"
@@ -83,3 +84,8 @@ export PATH="/opt/homebrew/bin:$PATH"
 export PATH="$HOME/.local/bin:$PATH"
 
 export GPG_TTY=$(tty)
+
+# nvm (v0.40.3 時点の設定)
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion

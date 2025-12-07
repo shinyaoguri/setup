@@ -482,3 +482,42 @@
             dest: "{{ ansible_facts['env']['HOME'] }}/.zshrc"
             state: link
             force: yes
+    ##########
+    # nvm
+    ##########
+    - name: Install nvm
+      tags: nvm
+      block:
+        - name: Check if nvm is already installed
+          ansible.builtin.stat:
+            path: "{{ ansible_facts['env']['HOME'] }}/.nvm"
+          register: nvm_installed
+        - name: Install nvm
+          ansible.builtin.shell: |
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+          args:
+            executable: /bin/zsh
+          environment:
+            PROFILE: /dev/null
+          when: not nvm_installed.stat.exists
+
+        - name: Check if Node.js is installed via nvm
+          ansible.builtin.shell: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            nvm ls node
+          args:
+            executable: /bin/zsh
+          register: node_check
+          failed_when: false
+          changed_when: false
+
+        - name: Install latest Node.js via nvm
+          ansible.builtin.shell: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            nvm install node
+            nvm alias default node
+          args:
+            executable: /bin/zsh
+          when: node_check.rc != 0
