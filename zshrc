@@ -75,7 +75,7 @@ alias l='ls -CF'
 alias ..='cd ..'
 alias ...='cd ../..'
 alias bd="cd .."
-alias rm='trash'
+alias rmt='trash'
 
 # Homebrew
 export PATH="/opt/homebrew/bin:$PATH"
