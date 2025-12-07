@@ -89,3 +89,27 @@ export GPG_TTY=$(tty)
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+# Firebase環境をプロンプトに表示
+firebase_prompt_info() {
+  if [[ -f .firebaserc ]]; then
+    local config_file="$HOME/.config/configstore/firebase-tools.json"
+    local current_dir=$(pwd)
+    local env="dev"
+    if [[ -f "$config_file" ]]; then
+      env=$(grep -A1 "\"$current_dir\"" "$config_file" 2>/dev/null | grep -o '"[^"]*"$' | tr -d '"' || echo "dev")
+      [[ -z "$env" ]] && env="dev"
+    fi
+    if [[ "$env" == "prod" ]]; then
+      echo "%{$fg[red]%}[🔥$env]%{$reset_color%} "
+    else
+      echo "[🔥$env] "
+    fi
+  fi
+}
+
+# プロンプトにFirebase環境を追加（oh-my-zsh読み込み後に上書き）
+_update_prompt_with_firebase() {
+  PROMPT='%{$fg_bold[cyan]%}$ZSH_THEME_CLOUD_PREFIX %{$fg_bold[green]%} %{$fg[green]%}%c $(firebase_prompt_info)%{$fg_bold[cyan]%}$(git_prompt_info)%{$fg_bold[blue]%} % %{$reset_color%}'
+}
+_update_prompt_with_firebase
