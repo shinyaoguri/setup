@@ -436,6 +436,7 @@
             state: present
           with_items: '{{ font_check.results }}'
           when: item.rc != 0
+          failed_when: false
     ##########
     # Terminal
     ##########
@@ -449,6 +450,60 @@
           ansible.builtin.shell: "defaults write com.apple.Terminal 'Startup Window Settings' 'Pro'"
           args:
             executable: /bin/zsh
+        - name: Check current default shell
+          ansible.builtin.shell: dscl . -read /Users/{{ ansible_facts['env']['USER'] }} UserShell | awk '{print $2}'
+          args:
+            executable: /bin/zsh
+          register: current_shell
+          changed_when: false
+
+        - name: Remove previous shell change completion flag
+          file:
+            path: /tmp/ansible_shell_complete
+            state: absent
+          when: current_shell.stdout != "/bin/zsh"
+
+        - name: Open new terminal window to change default shell
+          shell: |
+            osascript <<EOF
+            tell application "Terminal"
+              activate
+              do script "echo '============================================================' && echo 'デフォルトシェルを zsh に変更' && echo '============================================================' && echo '' && echo 'sudo パスワードを入力してください:' && sudo dscl . -change /Users/{{ ansible_facts['env']['USER'] }} UserShell {{ current_shell.stdout }} /bin/zsh && echo '' && echo '✅ デフォルトシェルを zsh に変更しました' && touch /tmp/ansible_shell_complete && echo '' && read -p '何かキーを押すとこのウィンドウを閉じます... ' && exit"
+            end tell
+            EOF
+          args:
+            executable: /bin/zsh
+          when: current_shell.stdout != "/bin/zsh"
+          failed_when: false
+
+        - name: Display instructions for shell change
+          debug:
+            msg:
+              - ""
+              - "============================================================"
+              - "⚠️  デフォルトシェルの変更"
+              - "============================================================"
+              - ""
+              - "新しいターミナルウィンドウが開きました。"
+              - "そちらで sudo パスワードを入力してください。"
+              - ""
+              - "============================================================"
+              - ""
+          when: current_shell.stdout != "/bin/zsh"
+
+        - name: Wait for shell change to complete
+          wait_for:
+            path: /tmp/ansible_shell_complete
+            timeout: 300
+            msg: "シェル変更が5分以内に完了しませんでした"
+          when: current_shell.stdout != "/bin/zsh"
+
+        - name: Cleanup temporary shell change files
+          file:
+            path: /tmp/ansible_shell_complete
+            state: absent
+          when: current_shell.stdout != "/bin/zsh"
+          failed_when: false
     ##########
     # Oh My Zsh & zshrc
     ##########
