@@ -4,7 +4,8 @@ set -e # errorで即座に終了させる
 
 # ----- 変数初期化 -----
 localmode=false
-GITHUB_RAW_URL="https://raw.githubusercontent.com/shinyaoguri/setup/main"
+GITHUB_REPO_URL="https://github.com/shinyaoguri/setup.git"
+SETUP_DIR="$HOME/setup"
 
 # ----- オプション解析 -----
 while getopts "lh" opt; do
@@ -22,22 +23,6 @@ while getopts "lh" opt; do
 			;;
 	esac
 done
-
-# ----- Playbook パス設定 -----
-if [[ "$localmode" == true ]]; then
-	SCRIPT_DIR="${0:A:h}"
-	PLAYBOOK="$SCRIPT_DIR/playbook_sillicon_mac.yml"
-else
-	# クラウドモード: 一時ファイルにダウンロード
-	PLAYBOOK=$(mktemp)
-	curl -fsSL "$GITHUB_RAW_URL/playbook_sillicon_mac.yml" -o "$PLAYBOOK"
-	
-	# 終了時にクリーンアップ
-	cleanup() {
-		rm -f "$PLAYBOOK"
-	}
-	trap cleanup EXIT
-fi
 
 echo "============================================================"
 echo "  Apple Silicon Mac セットアップ"
@@ -60,6 +45,34 @@ else
 	exit 0
 fi
 echo ""
+
+##########
+# Step 1.5: Playbook パス設定 (cloud モードはリポジトリをクローン)
+##########
+if [[ "$localmode" == true ]]; then
+	SCRIPT_DIR="${0:A:h}"
+	PLAYBOOK="$SCRIPT_DIR/playbook_sillicon_mac.yml"
+else
+	echo "📥 Step 1.5: setup リポジトリの準備 ($SETUP_DIR)"
+	if [[ -d "$SETUP_DIR/.git" ]]; then
+		REMOTE_URL=$(git -C "$SETUP_DIR" remote get-url origin 2>/dev/null || echo "")
+		if [[ "$REMOTE_URL" == *"shinyaoguri/setup"* ]]; then
+			echo "   ✓ 既存リポジトリを更新します..."
+			git -C "$SETUP_DIR" pull --ff-only || echo "   ⚠️  pull に失敗しました (ローカル変更がある可能性)"
+		else
+			echo "   ❌ $SETUP_DIR は別のリポジトリです: $REMOTE_URL"
+			exit 1
+		fi
+	elif [[ -e "$SETUP_DIR" ]]; then
+		echo "   ❌ $SETUP_DIR が既に存在します (Git リポジトリではない)"
+		exit 1
+	else
+		echo "   📦 リポジトリをクローンします..."
+		git clone "$GITHUB_REPO_URL" "$SETUP_DIR"
+	fi
+	PLAYBOOK="$SETUP_DIR/playbook_sillicon_mac.yml"
+	echo ""
+fi
 
 ###########
 # Step 2: Homebrew
