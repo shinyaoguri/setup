@@ -21,14 +21,13 @@
     # GUI App List
     ###############
     homebrew_cask_packages:
-      - name: gyazo
-      - name: google-drive
       - name: 1password
-      - name: rectangle
       - name: google-chrome
-      - name: docker-desktop
-      - name: visual-studio-code
+      - name: google-drive
       - name: discord
+      - name: visual-studio-code
+      - name: gyazo
+      - name: rectangle
       - name: zoom
       - name: todoist-app
       - name: notion
@@ -37,6 +36,7 @@
       - name: vlc
       - name: fujitsu-scansnap-home
       - name: jump-desktop-connect
+      - name: docker-desktop
     apps:
       - { name: "Xcode", id: "497799835" }
       - { name: "RunCat", id: "1429033973" }
