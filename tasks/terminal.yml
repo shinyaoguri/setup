@@ -1,0 +1,17 @@
+---
+# Terminal.app のデフォルトプロファイル設定
+# (macOS Catalina 以降はデフォルトシェルが /bin/zsh のため、シェル変更処理は不要)
+
+- name: Set default Terminal.app profile to Pro
+  community.general.osx_defaults:
+    domain: com.apple.Terminal
+    key: Default Window Settings
+    type: string
+    value: Pro
+
+- name: Set startup Terminal.app profile to Pro
+  community.general.osx_defaults:
+    domain: com.apple.Terminal
+    key: Startup Window Settings
+    type: string
+    value: Pro

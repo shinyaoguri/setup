@@ -1,0 +1,25 @@
+---
+# App Store アプリのインストール (mas 経由)
+# mas install は通常 sudo を要しない。
+
+- name: Ensure mas is installed and up to date
+  community.general.homebrew:
+    name: mas
+    state: latest
+
+- name: Get list of installed App Store apps
+  ansible.builtin.command: mas list
+  register: mas_list
+  changed_when: false
+  failed_when: false
+
+- name: Install missing App Store apps
+  ansible.builtin.command: "mas install {{ item.id }}"
+  loop: "{{ appstore_apps }}"
+  vars:
+    installed_ids: >-
+      {{ mas_list.stdout_lines
+         | map('regex_replace', '^([0-9]+)\s.*$', '\1')
+         | list }}
+  when: item.id not in installed_ids
+  changed_when: true

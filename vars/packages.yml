@@ -1,0 +1,51 @@
+---
+###############
+# CUI App List
+###############
+homebrew_packages:
+  - git
+  - vim
+  - neovim
+
+###############
+# GUI App List
+###############
+homebrew_cask_packages:
+  - 1password
+  - 1password-cli
+  - google-chrome
+  - google-drive
+  - discord
+  - visual-studio-code
+  - gyazo
+  - rectangle
+  - zoom
+  - todoist-app
+  - notion
+  - microsoft-office
+  - microsoft-teams
+  - vlc
+  - fujitsu-scansnap-home
+  - jump-desktop-connect
+  - docker-desktop
+
+###############
+# AppStore Apps
+###############
+appstore_apps:
+  - { name: "Xcode", id: "497799835" }
+  - { name: "RunCat", id: "1429033973" }
+  - { name: "ScreenPointer", id: "1368204906" }
+  - { name: "Paste", id: "967805235" }
+  - { name: "Jump Desktop", id: "524141863" }
+
+###############
+# Fonts
+###############
+font_casks:
+  - font-m-plus-1
+  - font-m-plus-1p
+  - font-m-plus-1-code
+  - font-noto-sans-cjk-jp
+  - font-noto-serif-cjk-jp
+  - font-noto-mono-for-powerline

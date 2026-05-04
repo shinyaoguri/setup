@@ -1,0 +1,13 @@
+---
+profile: production
+
+exclude_paths:
+  - .git/
+  - .github/
+
+skip_list:
+  - role-name
+  - fqcn-builtins
+
+warn_list:
+  - experimental

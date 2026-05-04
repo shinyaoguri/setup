@@ -1,0 +1,10 @@
+---
+# Homebrew Cask アプリのインストール
+# 一部の Cask は sudo を要求するため、bootstrap 側で sudo セッションを
+# 維持しておく前提 (sillicon_mac_setup.zsh の sudo keepalive を参照)。
+
+- name: Install Homebrew Cask apps
+  community.general.homebrew_cask:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ homebrew_cask_packages }}"
