@@ -83,8 +83,6 @@ export PATH="/opt/homebrew/bin:$PATH"
 # Add local bin to PATH
 export PATH="$HOME/.local/bin:$PATH"
 
-export GPG_TTY=$(tty)
-
 # nvm (v0.40.3 時点の設定)
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm

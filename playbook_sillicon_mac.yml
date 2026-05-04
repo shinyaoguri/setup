@@ -16,7 +16,6 @@
       - name: git
       - name: vim
       - name: neovim
-      - name: gnupg
     ###############
     # GUI App List
     ###############
@@ -394,7 +393,8 @@
     ##########
     # Git Setup
     ##########
-    - name: Configure Git global username and email
+    - name: Configure Git global identity and SSH commit signing
+      tags: git
       block:
         - name: Set Git global username
           community.general.git_config:
@@ -404,8 +404,85 @@
         - name: Set Git global email
           community.general.git_config:
             name: user.email
-            value: "ogrium@gmail.com"
+            value: "ogrsny@gmail.com"
             scope: global
+
+        # SSH commit signing via 1Password agent.
+        # Requires 1Password to be installed, signed in, and SSH agent enabled
+        # (Settings → Developer → Use the SSH agent) with at least one key saved.
+        - name: Read SSH public key from 1Password agent
+          ansible.builtin.shell: ssh-add -L | head -1
+          environment:
+            SSH_AUTH_SOCK: "{{ ansible_facts['env']['HOME'] }}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+          register: ssh_pubkey
+          failed_when: false
+          changed_when: false
+
+        - name: Warn if 1Password SSH agent has no key yet
+          ansible.builtin.debug:
+            msg:
+              - "⚠️  1Password SSH agent から鍵を取得できませんでした。"
+              - "1Password にサインインし、Settings → Developer → Use the SSH agent を有効化、"
+              - "署名用 SSH 鍵を 1Password に保存してから次を実行してください:"
+              - "  ansible-playbook playbook_sillicon_mac.yml --tags git"
+          when: ssh_pubkey.rc != 0 or ssh_pubkey.stdout == ""
+
+        - name: Configure SSH commit signing
+          when: ssh_pubkey.rc == 0 and ssh_pubkey.stdout != ""
+          block:
+            - name: Ensure ~/.ssh exists
+              ansible.builtin.file:
+                path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
+                state: directory
+                mode: '0700'
+
+            - name: Write SSH signing public key
+              ansible.builtin.copy:
+                content: "{{ ssh_pubkey.stdout }}\n"
+                dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
+                mode: '0600'
+
+            - name: Ensure ~/.config/git exists
+              ansible.builtin.file:
+                path: "{{ ansible_facts['env']['HOME'] }}/.config/git"
+                state: directory
+                mode: '0755'
+
+            - name: Write allowed_signers for local verification
+              ansible.builtin.copy:
+                content: "ogrsny@gmail.com {{ ssh_pubkey.stdout }}\n"
+                dest: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
+                mode: '0600'
+
+            - name: Set gpg.format to ssh
+              community.general.git_config:
+                name: gpg.format
+                value: ssh
+                scope: global
+
+            - name: Set user.signingkey to SSH public key file
+              community.general.git_config:
+                name: user.signingkey
+                value: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
+                scope: global
+
+            - name: Set gpg.ssh.allowedSignersFile
+              community.general.git_config:
+                name: gpg.ssh.allowedSignersFile
+                value: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
+                scope: global
+
+            - name: Enable commit signing
+              community.general.git_config:
+                name: commit.gpgsign
+                value: "true"
+                scope: global
+
+            - name: Enable tag signing
+              community.general.git_config:
+                name: tag.gpgsign
+                value: "true"
+                scope: global
 
     ##########
     # Fonts
