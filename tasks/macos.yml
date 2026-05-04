@@ -1,6 +1,31 @@
 ---
 # macOS のシステム設定 (osx_defaults モジュールで冪等に管理)
 
+# osx_defaults は strict な型チェックをするので、過去にシェルから別の型で
+# 書き込まれた残骸があると Type mismatch でコケる。型が合わないキーだけ
+# 事前に消しておけば、後続タスクは current_value=None となり strict のまま通る。
+- name: Drop existing keys that have a mismatched type
+  ansible.builtin.shell: |
+    set -eu
+    current=$(/usr/bin/defaults read-type "{{ item.domain }}" "{{ item.key }}" 2>/dev/null | sed 's/^Type is //') || exit 0
+    if [ -n "$current" ] && [ "$current" != "{{ item.type }}" ]; then
+      /usr/bin/defaults delete "{{ item.domain }}" "{{ item.key }}"
+      echo deleted
+    fi
+  register: macos_defaults_normalize
+  changed_when: "'deleted' in macos_defaults_normalize.stdout"
+  # type は `defaults read-type` の出力 (integer/boolean/float/string/...) と一致させる
+  loop:
+    - { domain: NSGlobalDomain, key: KeyRepeat, type: integer }
+    - { domain: NSGlobalDomain, key: InitialKeyRepeat, type: integer }
+    - { domain: com.apple.AppleMultitouchTrackpad, key: FirstClickThreshold, type: float }
+    - { domain: com.apple.AppleMultitouchTrackpad, key: SecondClickThreshold, type: float }
+    - { domain: com.apple.AppleMultitouchTrackpad, key: TrackpadThreeFingerHorizSwipeGesture, type: float }
+    - { domain: com.apple.dock, key: autohide, type: boolean }
+    - { domain: com.apple.inputmethod.Kotoeri, key: JIMPrefPunctuationTypeKey, type: integer }
+  loop_control:
+    label: "{{ item.domain }} {{ item.key }} ({{ item.type }})"
+
 - name: Set fast key repeat rate
   community.general.osx_defaults:
     domain: NSGlobalDomain

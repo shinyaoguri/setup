@@ -5,7 +5,7 @@ set -e # errorで即座に終了させる
 # ----- 変数初期化 -----
 localmode=false
 GITHUB_REPO_URL="https://github.com/shinyaoguri/setup.git"
-SETUP_DIR="$HOME/setup"
+SETUP_DIR="$HOME/.setup"
 
 # ----- オプション解析 -----
 while getopts "lh" opt; do
