@@ -21,6 +21,7 @@
     ###############
     homebrew_cask_packages:
       - name: 1password
+      - name: 1password-cli
       - name: google-chrome
       - name: google-drive
       - name: discord
@@ -408,8 +409,13 @@
             scope: global
 
         # SSH commit signing via 1Password agent.
-        # Requires 1Password to be installed, signed in, and SSH agent enabled
-        # (Settings → Developer → Use the SSH agent) with at least one key saved.
+        # The following 1Password setup must be completed manually first
+        # (these toggles cannot be flipped programmatically):
+        #   1. Sign in to the 1Password app (account email, Secret Key, master password)
+        #   2. Settings → Developer → "Use the SSH agent"
+        #   3. Settings → Developer → "Integrate with 1Password CLI" (for `op` commands)
+        #   4. Save at least one SSH key item in a vault (used as the signing key)
+        # After these are done, re-run with `--tags git` to finish signing setup.
         - name: Read SSH public key from 1Password agent
           ansible.builtin.shell: ssh-add -L | head -1
           environment:
@@ -422,9 +428,12 @@
           ansible.builtin.debug:
             msg:
               - "⚠️  1Password SSH agent から鍵を取得できませんでした。"
-              - "1Password にサインインし、Settings → Developer → Use the SSH agent を有効化、"
-              - "署名用 SSH 鍵を 1Password に保存してから次を実行してください:"
-              - "  ansible-playbook playbook_sillicon_mac.yml --tags git"
+              - "1Password の手動セットアップを完了してから再実行してください:"
+              - "  1. 1Password アプリにサインイン"
+              - "  2. Settings → Developer → Use the SSH agent を有効化"
+              - "  3. Settings → Developer → Integrate with 1Password CLI を有効化"
+              - "  4. 署名用 SSH 鍵アイテムを vault に保存"
+              - "完了後:  ansible-playbook playbook_sillicon_mac.yml --tags git"
           when: ssh_pubkey.rc != 0 or ssh_pubkey.stdout == ""
 
         - name: Configure SSH commit signing
