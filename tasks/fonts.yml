@@ -1,0 +1,8 @@
+---
+# 日本語/英語フォント (Cask)
+
+- name: Install fonts via Homebrew Cask
+  community.general.homebrew_cask:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ font_casks }}"

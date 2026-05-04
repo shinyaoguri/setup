@@ -1,0 +1,51 @@
+---
+# macOS のシステム設定 (osx_defaults モジュールで冪等に管理)
+
+- name: Set fast key repeat rate
+  community.general.osx_defaults:
+    domain: NSGlobalDomain
+    key: KeyRepeat
+    type: int
+    value: 2
+
+- name: Shorten initial key repeat delay
+  community.general.osx_defaults:
+    domain: NSGlobalDomain
+    key: InitialKeyRepeat
+    type: int
+    value: 15
+
+- name: Soften trackpad first click threshold
+  community.general.osx_defaults:
+    domain: com.apple.AppleMultitouchTrackpad
+    key: FirstClickThreshold
+    type: float
+    value: 0
+
+- name: Soften trackpad second click threshold
+  community.general.osx_defaults:
+    domain: com.apple.AppleMultitouchTrackpad
+    key: SecondClickThreshold
+    type: float
+    value: 0
+
+- name: Enable three-finger horizontal swipe gesture
+  community.general.osx_defaults:
+    domain: com.apple.AppleMultitouchTrackpad
+    key: TrackpadThreeFingerHorizSwipeGesture
+    type: float
+    value: 1
+
+- name: Enable Dock auto-hide
+  community.general.osx_defaults:
+    domain: com.apple.dock
+    key: autohide
+    type: bool
+    value: true
+
+- name: Set Kotoeri punctuation to comma/period
+  community.general.osx_defaults:
+    domain: com.apple.inputmethod.Kotoeri
+    key: JIMPrefPunctuationTypeKey
+    type: int
+    value: 3

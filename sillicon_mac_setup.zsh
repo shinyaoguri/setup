@@ -125,9 +125,22 @@ fi
 echo ""
 
 ##########
-# Step 5: Playbook 実行
+# Step 5: sudo セッションを事前確保 (Cask によっては sudo を要求するため)
 ##########
-echo "🎯 Step 5: Ansible Playbook の実行"
+echo "🔐 Step 5: sudo パスワードを事前認証 (Cask インストール用)"
+echo "   一部の Cask は管理者権限を必要とします。"
+sudo -v
+# Ansible 実行中も sudo タイムアウトが切れないようバックグラウンドで延長
+( while true; do sudo -n true 2>/dev/null || exit; sleep 50; done ) &
+SUDO_KEEPALIVE_PID=$!
+trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true' EXIT INT TERM
+echo "   ✓ sudo セッションを維持中 (PID: $SUDO_KEEPALIVE_PID)"
+echo ""
+
+##########
+# Step 6: Playbook 実行
+##########
+echo "🎯 Step 6: Ansible Playbook の実行"
 echo ""
 echo "============================================================"
 echo "  Playbook を実行します"
