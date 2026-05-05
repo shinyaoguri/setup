@@ -25,12 +25,9 @@
       tags: rosetta
       ansible.builtin.import_tasks: tasks/rosetta.yml
 
-    # Homebrew Cask apps は sillicon_mac_setup.zsh の Step 5.5 で
-    # 先行インストール済み (interactive TTY が必要なため Ansible からは扱わない)。
-
-    - name: App Store apps
-      tags: appstore
-      ansible.builtin.import_tasks: tasks/appstore.yml
+    # Homebrew Cask apps と App Store apps は sillicon_mac_setup.zsh の
+    # Step 5.5 / Step 5.6 で先行インストール済み (interactive TTY が必要なため
+    # Ansible 配下の subprocess sudo では TTY 不足でコケる)。
 
     - name: Git identity and SSH commit signing
       tags: git
