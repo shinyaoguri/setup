@@ -6,6 +6,7 @@ homebrew_packages:
   - git
   - vim
   - neovim
+  - fnm
 
 ###############
 # GUI App List

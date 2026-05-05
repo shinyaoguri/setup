@@ -45,6 +45,6 @@
       tags: zshrc
       ansible.builtin.import_tasks: tasks/zshrc.yml
 
-    - name: nvm and Node.js
-      tags: nvm
-      ansible.builtin.import_tasks: tasks/nvm.yml
+    - name: fnm and Node.js
+      tags: fnm
+      ansible.builtin.import_tasks: tasks/fnm.yml

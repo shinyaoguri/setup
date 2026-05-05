@@ -1,0 +1,25 @@
+---
+# fnm + Node.js のインストール
+# fnm 自体は homebrew_packages 経由で導入済みである前提。
+
+- name: Check if any Node.js version is installed via fnm
+  ansible.builtin.shell:
+    cmd: |
+      eval "$(fnm env --shell zsh)"
+      fnm list | grep -qE 'v[0-9]+'
+    executable: /bin/zsh
+  register: fnm_node_check
+  changed_when: false
+  failed_when: false
+
+- name: Install latest Node.js via fnm
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      eval "$(fnm env --shell zsh)"
+      latest=$(fnm ls-remote | tail -n 1 | awk '{print $1}')
+      fnm install "$latest"
+      fnm default "$latest"
+    executable: /bin/zsh
+  when: fnm_node_check.rc != 0
+  changed_when: true
