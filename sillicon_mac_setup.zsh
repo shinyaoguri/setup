@@ -182,46 +182,44 @@ echo ""
 #   Cask と同じく Ansible 配下では TTY 不足でコケる。bootstrap の interactive TTY で先に走らせる。
 ##########
 echo "🛍  Step 5.6: App Store アプリのインストール (mas)"
+echo "   ℹ️  事前に App Store.app でサインインしておいてください (mas は CLI から sign-in できません)"
 if ! command -v mas >/dev/null 2>&1; then
 	echo "   📦 mas をインストールします..."
 	brew install mas
 fi
-if ! mas account >/dev/null 2>&1; then
-	echo "   ⚠️  App Store にサインインしていません。"
-	echo "      App Store.app を開いてサインインしてから、このスクリプトを再実行してください。"
-	echo "      (App Store のインストールはスキップして続行します)"
-else
-	# vars/packages.yml の appstore_apps を id<TAB>name 形式で抜き出し
-	APPSTORE_LINES=$(awk '
-		/^appstore_apps:/  { flag=1; next }
-		/^[^ #]/           { flag=0 }
-		flag && /[[:space:]]-[[:space:]]/ {
-			name=""; id=""
-			if (match($0, /name:[[:space:]]*"[^"]*"/)) {
-				name = substr($0, RSTART, RLENGTH)
-				sub(/^name:[[:space:]]*"/, "", name); sub(/"$/, "", name)
-			}
-			if (match($0, /id:[[:space:]]*"[^"]*"/)) {
-				id = substr($0, RSTART, RLENGTH)
-				sub(/^id:[[:space:]]*"/, "", id); sub(/"$/, "", id)
-			}
-			print id "\t" name
+# vars/packages.yml の appstore_apps を id<TAB>name 形式で抜き出し
+APPSTORE_LINES=$(awk '
+	/^appstore_apps:/  { flag=1; next }
+	/^[^ #]/           { flag=0 }
+	flag && /[[:space:]]-[[:space:]]/ {
+		name=""; id=""
+		if (match($0, /name:[[:space:]]*"[^"]*"/)) {
+			name = substr($0, RSTART, RLENGTH)
+			sub(/^name:[[:space:]]*"/, "", name); sub(/"$/, "", name)
 		}
-	' "$PACKAGES_YAML")
-	INSTALLED_IDS=$(mas list 2>/dev/null | awk '{print $1}')
-	if [[ -z "$APPSTORE_LINES" ]]; then
-		echo "   ⚠️  appstore_apps が空です。スキップします。"
-	else
-		while IFS=$'\t' read -r app_id app_name; do
-			[[ -z "$app_id" ]] && continue
-			if echo "$INSTALLED_IDS" | grep -qx "$app_id"; then
-				echo "   ✓ $app_name ($app_id) は既にインストール済みです"
-			else
-				echo "   → $app_name ($app_id) をインストール中..."
-				mas install "$app_id"
+		if (match($0, /id:[[:space:]]*"[^"]*"/)) {
+			id = substr($0, RSTART, RLENGTH)
+			sub(/^id:[[:space:]]*"/, "", id); sub(/"$/, "", id)
+		}
+		print id "\t" name
+	}
+' "$PACKAGES_YAML")
+INSTALLED_IDS=$(mas list 2>/dev/null | awk '{print $1}')
+if [[ -z "$APPSTORE_LINES" ]]; then
+	echo "   ⚠️  appstore_apps が空です。スキップします。"
+else
+	while IFS=$'\t' read -r app_id app_name; do
+		[[ -z "$app_id" ]] && continue
+		if echo "$INSTALLED_IDS" | grep -qx "$app_id"; then
+			echo "   ✓ $app_name ($app_id) は既にインストール済みです"
+		else
+			echo "   → $app_name ($app_id) をインストール中..."
+			if ! mas install "$app_id"; then
+				echo "   ⚠️  $app_name のインストールに失敗しました。"
+				echo "      App Store.app でサインインしているか確認してください。"
 			fi
-		done <<< "$APPSTORE_LINES"
-	fi
+		fi
+	done <<< "$APPSTORE_LINES"
 fi
 echo ""
 
