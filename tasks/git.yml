@@ -25,7 +25,7 @@
     cmd: "set -o pipefail && ssh-add -L | head -1"
     executable: /bin/zsh
   environment:
-    SSH_AUTH_SOCK: "{{ ansible_env.HOME }}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+    SSH_AUTH_SOCK: "{{ ansible_facts['env']['HOME'] }}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
   register: ssh_pubkey
   failed_when: false
   changed_when: false
@@ -47,26 +47,26 @@
   block:
     - name: Ensure ~/.ssh exists
       ansible.builtin.file:
-        path: "{{ ansible_env.HOME }}/.ssh"
+        path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
         state: directory
         mode: '0700'
 
     - name: Write SSH signing public key
       ansible.builtin.copy:
         content: "{{ ssh_pubkey.stdout }}\n"
-        dest: "{{ ansible_env.HOME }}/.ssh/git_signing_key.pub"
+        dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
         mode: '0644'
 
     - name: Ensure ~/.config/git exists
       ansible.builtin.file:
-        path: "{{ ansible_env.HOME }}/.config/git"
+        path: "{{ ansible_facts['env']['HOME'] }}/.config/git"
         state: directory
         mode: '0755'
 
     - name: Write allowed_signers for local verification
       ansible.builtin.copy:
         content: "ogrsny@gmail.com {{ ssh_pubkey.stdout }}\n"
-        dest: "{{ ansible_env.HOME }}/.config/git/allowed_signers"
+        dest: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
         mode: '0644'
 
     - name: Set gpg.format to ssh
@@ -78,13 +78,13 @@
     - name: Set user.signingkey to SSH public key file
       community.general.git_config:
         name: user.signingkey
-        value: "{{ ansible_env.HOME }}/.ssh/git_signing_key.pub"
+        value: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
         scope: global
 
     - name: Set gpg.ssh.allowedSignersFile
       community.general.git_config:
         name: gpg.ssh.allowedSignersFile
-        value: "{{ ansible_env.HOME }}/.config/git/allowed_signers"
+        value: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
         scope: global
 
     - name: Enable commit signing

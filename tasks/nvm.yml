@@ -3,7 +3,7 @@
 
 - name: Check if nvm is already installed
   ansible.builtin.stat:
-    path: "{{ ansible_env.HOME }}/.nvm"
+    path: "{{ ansible_facts['env']['HOME'] }}/.nvm"
   register: nvm_installed
 
 - name: Install nvm

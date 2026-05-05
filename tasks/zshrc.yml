@@ -3,7 +3,7 @@
 
 - name: Check if Oh My Zsh is already installed
   ansible.builtin.stat:
-    path: "{{ ansible_env.HOME }}/.oh-my-zsh"
+    path: "{{ ansible_facts['env']['HOME'] }}/.oh-my-zsh"
   register: ohmyzsh_installed
 
 - name: Install Oh My Zsh
@@ -19,13 +19,13 @@
 
 - name: Remove default .zshrc created by Oh My Zsh
   ansible.builtin.file:
-    path: "{{ ansible_env.HOME }}/.zshrc"
+    path: "{{ ansible_facts['env']['HOME'] }}/.zshrc"
     state: absent
   when: not ohmyzsh_installed.stat.exists
 
 - name: Create symlink for zshrc
   ansible.builtin.file:
     src: "{{ playbook_dir }}/zshrc"
-    dest: "{{ ansible_env.HOME }}/.zshrc"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.zshrc"
     state: link
     force: true
