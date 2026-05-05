@@ -138,6 +138,45 @@ echo "   ✓ sudo セッションを維持中 (PID: $SUDO_KEEPALIVE_PID)"
 echo ""
 
 ##########
+# Step 5.5: Homebrew Cask アプリのインストール
+#   Ansible 配下の subprocess は controlling TTY を持たないため、cask 内部の
+#   `sudo /usr/sbin/installer ...` が credential cache を引けず失敗する
+#   (tty_tickets による隔離)。bootstrap シェルの interactive TTY で先に
+#   走らせることで sudo が通る前提を満たす。
+##########
+echo "🍺 Step 5.5: Homebrew Cask アプリのインストール"
+PACKAGES_YAML="${SETUP_DIR}/vars/packages.yml"
+if [[ "$localmode" == true ]]; then
+	PACKAGES_YAML="${SCRIPT_DIR}/vars/packages.yml"
+fi
+if [[ ! -f "$PACKAGES_YAML" ]]; then
+	echo "   ❌ $PACKAGES_YAML が見つかりません"
+	exit 1
+fi
+# vars/packages.yml の homebrew_cask_packages を抜き出し (依存追加なしで awk 解析)
+CASKS=( $(awk '
+	/^homebrew_cask_packages:/ { flag=1; next }
+	/^[^ #]/                   { flag=0 }
+	flag && /^[[:space:]]*-[[:space:]]/ {
+		sub(/^[[:space:]]*-[[:space:]]*/,"")
+		print
+	}
+' "$PACKAGES_YAML") )
+if (( ${#CASKS[@]} == 0 )); then
+	echo "   ⚠️  homebrew_cask_packages が空です。スキップします。"
+else
+	for cask in "${CASKS[@]}"; do
+		if brew list --cask "$cask" >/dev/null 2>&1; then
+			echo "   ✓ $cask は既にインストール済みです"
+		else
+			echo "   → $cask をインストール中..."
+			brew install --cask "$cask"
+		fi
+	done
+fi
+echo ""
+
+##########
 # Step 6: Playbook 実行
 ##########
 echo "🎯 Step 6: Ansible Playbook の実行"
