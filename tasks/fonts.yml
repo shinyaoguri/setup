@@ -1,8 +1,11 @@
 ---
 # 日本語/英語フォント (Cask)
 
+# install_options: force は、過去に手動配置されたフォントファイルを Cask 管理下に取り込むため。
+# これがないと ~/Library/Fonts/ に同名ファイルがある環境で install が拒否される。
 - name: Install fonts via Homebrew Cask
   community.general.homebrew_cask:
     name: "{{ item }}"
     state: present
+    install_options: force
   loop: "{{ font_casks }}"

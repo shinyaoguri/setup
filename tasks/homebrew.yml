@@ -1,6 +1,13 @@
 ---
 # Homebrew formulae のインストール (モジュールが冪等性を保証)
 
+# homebrew/cask-fonts は 2024-08 に upstream 削除済み。残っていると brew update が 404 で失敗する。
+- name: Remove deprecated homebrew/cask-fonts tap
+  community.general.homebrew_tap:
+    name: homebrew/cask-fonts
+    state: absent
+  failed_when: false
+
 - name: Update Homebrew
   community.general.homebrew:
     update_homebrew: true
