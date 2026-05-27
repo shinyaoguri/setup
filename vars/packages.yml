@@ -47,6 +47,8 @@ font_casks:
   - font-m-plus-1
   - font-m-plus-1p
   - font-m-plus-1-code
+  - font-m-plus-u
+  - font-m-plus-2
   - font-noto-sans-cjk-jp
   - font-noto-serif-cjk-jp
   - font-noto-mono-for-powerline
