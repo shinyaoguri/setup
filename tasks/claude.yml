@@ -1,0 +1,28 @@
+---
+# Claude Code グローバル設定 (CLAUDE.md) のリンク
+
+- name: Create ~/.claude directory
+  ansible.builtin.file:
+    path: "{{ ansible_facts['env']['HOME'] }}/.claude"
+    state: directory
+    mode: "0700"
+
+- name: Check existing global CLAUDE.md
+  ansible.builtin.stat:
+    path: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md"
+  register: global_claude_md
+
+- name: Back up existing CLAUDE.md if it is a regular file
+  ansible.builtin.copy:
+    src: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md.bak-{{ ansible_facts['date_time']['date'] }}"
+    remote_src: true
+    mode: preserve
+  when: global_claude_md.stat.exists and not global_claude_md.stat.islnk
+
+- name: Create symlink for global CLAUDE.md
+  ansible.builtin.file:
+    src: "{{ playbook_dir }}/claude/CLAUDE.md"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md"
+    state: link
+    force: true
