@@ -45,6 +45,10 @@
       tags: zshrc
       ansible.builtin.import_tasks: tasks/zshrc.yml
 
+    - name: Claude Code global configuration
+      tags: claude
+      ansible.builtin.import_tasks: tasks/claude.yml
+
     - name: fnm and Node.js
       tags: fnm
       ansible.builtin.import_tasks: tasks/fnm.yml
