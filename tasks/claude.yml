@@ -1,5 +1,6 @@
 ---
-# Claude Code グローバル設定 (CLAUDE.md / settings.json) のリンク
+# Claude Code グローバル設定 (CLAUDE.md / settings.json) と
+# 全プロジェクト共通スキル (claude/skills/*) のリンク
 
 - name: Define Claude global config files
   ansible.builtin.set_fact:
@@ -37,3 +38,30 @@
     state: link
     force: true
   loop: "{{ claude_config_files }}"
+
+# 全プロジェクト共通の汎用スキル。実体は claude/skills/<name>/ に置き、
+# 各スキルを ~/.claude/skills/<name> へ個別 symlink する。個別リンクなので
+# ~/.claude/skills 内の他資産 (plugin init のスクラッチ等) とは混ざらない。
+# claude/skills/ を走査するため、スキル追加時に本 playbook の変更は不要。
+- name: Ensure ~/.claude/skills directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_facts['env']['HOME'] }}/.claude/skills"
+    state: directory
+    mode: "0700"
+
+- name: Find repo-managed global skills
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/claude/skills"
+    file_type: directory
+    recurse: false
+  register: claude_global_skills
+
+- name: Symlink each repo-managed skill into ~/.claude/skills
+  ansible.builtin.file:
+    src: "{{ item.path }}"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.claude/skills/{{ item.path | basename }}"
+    state: link
+    force: true
+  loop: "{{ claude_global_skills.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
