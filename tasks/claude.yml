@@ -1,5 +1,11 @@
 ---
-# Claude Code グローバル設定 (CLAUDE.md) のリンク
+# Claude Code グローバル設定 (CLAUDE.md / settings.json) のリンク
+
+- name: Define Claude global config files
+  ansible.builtin.set_fact:
+    claude_config_files:
+      - CLAUDE.md
+      - settings.json
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
@@ -7,22 +13,27 @@
     state: directory
     mode: "0700"
 
-- name: Check existing global CLAUDE.md
+- name: Check existing global config files
   ansible.builtin.stat:
-    path: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md"
-  register: global_claude_md
+    path: "{{ ansible_facts['env']['HOME'] }}/.claude/{{ item }}"
+  register: claude_config_stats
+  loop: "{{ claude_config_files }}"
 
-- name: Back up existing CLAUDE.md if it is a regular file
+- name: Back up existing config if it is a regular file
   ansible.builtin.copy:
-    src: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md"
-    dest: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md.bak-{{ ansible_facts['date_time']['date'] }}"
+    src: "{{ ansible_facts['env']['HOME'] }}/.claude/{{ item.item }}"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.claude/{{ item.item }}.bak-{{ ansible_facts['date_time']['date'] }}"
     remote_src: true
     mode: preserve
-  when: global_claude_md.stat.exists and not global_claude_md.stat.islnk
+  when: item.stat.exists and not item.stat.islnk
+  loop: "{{ claude_config_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
-- name: Create symlink for global CLAUDE.md
+- name: Create symlinks for global config files
   ansible.builtin.file:
-    src: "{{ playbook_dir }}/claude/CLAUDE.md"
-    dest: "{{ ansible_facts['env']['HOME'] }}/.claude/CLAUDE.md"
+    src: "{{ playbook_dir }}/claude/{{ item }}"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.claude/{{ item }}"
     state: link
     force: true
+  loop: "{{ claude_config_files }}"

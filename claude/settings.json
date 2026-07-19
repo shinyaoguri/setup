@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [],
+    "additionalDirectories": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command // \"\"' | grep -qiE -- '--no-gpg-sign|gpgsign[[:space:]=]+(false|0)' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"署名なしコミットは禁止(全コミット Verified 運用)。--no-gpg-sign / commit.gpgsign=false を使わず、既定のまま署名付きでコミットする(1Password の op-ssh-sign は非対話でも動作する)。\"}}' || true",
+            "timeout": 10,
+            "statusMessage": "コミット署名ポリシーを確認中"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "swift-lsp@claude-plugins-official": true,
+    "cloudflare@cloudflare": true
+  },
+  "extraKnownMarketplaces": {
+    "cosense-cli": {
+      "source": {
+        "source": "github",
+        "repo": "helpfeel/cosense-cli"
+      }
+    },
+    "cloudflare": {
+      "source": {
+        "source": "github",
+        "repo": "cloudflare/skills"
+      },
+      "autoUpdate": true
+    }
+  },
+  "language": "japanese",
+  "tui": "fullscreen",
+  "theme": "auto",
+  "agentPushNotifEnabled": true
+}

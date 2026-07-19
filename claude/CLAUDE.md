@@ -1,7 +1,7 @@
 # グローバル CLAUDE.md
 
 全プロジェクト共通の個人規約。実体は setup リポジトリの `claude/CLAUDE.md`
-(tasks/claude.yml が `~/.claude/CLAUDE.md` へシンボリックリンク)。
+(settings.json とあわせて tasks/claude.yml が `~/.claude/` 配下へシンボリックリンク)。
 プロジェクト・リポジトリ固有の規約は各所の CLAUDE.md / CONTRIBUTING.md が正本で、
 ここでは繰り返さない。
 
