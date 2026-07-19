@@ -114,3 +114,8 @@ _update_prompt_with_firebase
 
 
 export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
+
+# direnv (.envrc を見てディレクトリ単位で環境を切替。metaphor-cli のローカル開発ビルド優先など)
+if command -v direnv >/dev/null 2>&1; then
+  eval "$(direnv hook zsh)"
+fi
