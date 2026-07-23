@@ -1,12 +1,16 @@
 ---
-# Claude Code グローバル設定 (CLAUDE.md / settings.json) と
+# Claude Code グローバル設定 (CLAUDE.md / settings.json / statusLine スクリプト) と
 # 全プロジェクト共通スキル (claude/skills/*) のリンク
 
+# runcat-statusline.py は RunCat Neo の Custom Metrics 連携 (statusLine から
+# ~/.claude/runcat-usage.json を書き出す)。実体は上流サンプルのまま置き、
+# 差分追従しやすくする: https://github.com/runcat-dev/RunCatNeo/tree/main/docs/samples/claude-code
 - name: Define Claude global config files
   ansible.builtin.set_fact:
     claude_config_files:
       - CLAUDE.md
       - settings.json
+      - runcat-statusline.py
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
