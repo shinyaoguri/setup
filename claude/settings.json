@@ -37,6 +37,10 @@
       "autoUpdate": true
     }
   },
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/runcat-statusline.py"
+  },
   "language": "japanese",
   "tui": "fullscreen",
   "theme": "auto",
