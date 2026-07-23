@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""claude/runcat-statusline.py のテスト。
+"""claude/runcat-metrics.py のテスト。
 
-スクリプトは import 時に stdin を読んで走り切る作りなので、実際の契約
+スクリプトは stdin を読んで走り切る作りなので、実際の契約
 (stdin の JSON → 出力ファイルの JSON + stdout) をサブプロセス経由で検証する。
 
-    python3 claude/tests/runcat_statusline_test.py
+    python3 claude/tests/runcat_metrics_test.py
 """
 
 import json
@@ -15,10 +15,10 @@ import time
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "runcat-statusline.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "runcat-metrics.py"
 
 
-class RunCatStatusLineTestCase(unittest.TestCase):
+class ScriptTestCase(unittest.TestCase):
     def run_script(self, stdin_text):
         """stdin を流してスクリプトを実行し、(スナップショット, stdout) を返す。"""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -35,6 +35,10 @@ class RunCatStatusLineTestCase(unittest.TestCase):
 
     def rows(self, snapshot):
         return {m["title"]: m for m in snapshot["metrics"]}
+
+
+class StatusLineModeTest(ScriptTestCase):
+    """ターミナルの statusLine から呼ばれる経路。"""
 
     def test_full_payload_renders_every_row(self):
         now = int(time.time())
@@ -176,6 +180,124 @@ class RunCatStatusLineTestCase(unittest.TestCase):
             )
             self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["title"], "Claude Code")
             self.assertEqual([p.name for p in Path(tmpdir).iterdir()], ["usage.json"])
+
+
+class HookModeTest(ScriptTestCase):
+    """hook から呼ばれる経路 (デスクトップアプリではこちらだけが動く)。"""
+
+    def run_hook(self, entries, event="Stop"):
+        """transcript JSONL を作り、hook 入力を流してスナップショットを返す。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            transcript = Path(tmpdir) / "transcript.jsonl"
+            transcript.write_text(
+                "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries), encoding="utf-8"
+            )
+            snapshot, stdout = self.run_script(json.dumps({
+                "hook_event_name": event,
+                "session_id": "abc123",
+                "transcript_path": str(transcript),
+                "cwd": "/Users/so/.setup",
+            }))
+            # hook の stdout は会話へ混ざり得るので何も出さない
+            self.assertEqual(stdout, "")
+            return snapshot
+
+    def assistant_entry(self, **overrides):
+        entry = {
+            "type": "assistant",
+            "timestamp": "2026-07-23T09:19:24.246Z",
+            "cwd": "/Users/so/.setup",
+            "gitBranch": "feat/runcat-metrics-hook",
+            "effort": "high",
+            "message": {"model": "claude-opus-4-8", "usage": {
+                "input_tokens": 2, "cache_creation_input_tokens": 1970,
+                "cache_read_input_tokens": 138413, "output_tokens": 2163,
+            }},
+        }
+        entry.update(overrides)
+        return entry
+
+    def test_transcript_renders_available_rows(self):
+        snapshot = self.run_hook([
+            {"type": "user", "timestamp": "2026-07-23T08:48:54.157Z", "cwd": "/Users/so/.setup"},
+            {"type": "custom-title", "customTitle": "RunCat 連携"},
+            {"type": "pr-link", "prNumber": 23, "prRepository": "shinyaoguri/setup"},
+            self.assistant_entry(),
+        ])
+        rows = self.rows(snapshot)
+        self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
+        # 142,548 / 200,000 = 71.274% → 小数第 1 位へ丸める
+        self.assertEqual(rows["Context"]["formattedValue"], "71.3% · 142.5k/200k")
+        self.assertEqual(snapshot["metricsBarValue"], "71%")
+        self.assertEqual(rows["Elapsed"]["formattedValue"], "30m")
+        self.assertEqual(rows["Project"]["formattedValue"], "setup · feat/runcat-metrics-hook")
+        self.assertEqual(rows["Session"]["formattedValue"], "RunCat 連携")
+        self.assertEqual(rows["PR"]["formattedValue"], "#23")
+        # hook 入力からは取れない行は出さない
+        for absent in ("5h", "7d", "Cost", "Edits", "Agent"):
+            self.assertNotIn(absent, rows)
+
+    def test_model_id_is_prettified(self):
+        for model_id, expected in [
+            ("claude-opus-4-8", "Opus 4.8"),
+            ("claude-sonnet-5", "Sonnet 5"),
+            ("claude-haiku-4-5-20251001", "Haiku 4.5"),  # 末尾の日付スナップショットは落とす
+            ("claude-fable-5", "Fable 5"),
+        ]:
+            with self.subTest(model_id=model_id):
+                snapshot = self.run_hook([self.assistant_entry(
+                    message={"model": model_id, "usage": {}}, effort=None)])
+                self.assertEqual(self.rows(snapshot)["Model"]["formattedValue"], expected)
+
+    def test_sidechain_entries_are_ignored(self):
+        """サブエージェント (isSidechain) の usage は本セッションの文脈量ではない。"""
+        snapshot = self.run_hook([
+            self.assistant_entry(),
+            self.assistant_entry(isSidechain=True, message={
+                "model": "claude-haiku-4-5", "usage": {"input_tokens": 10, "output_tokens": 5}}),
+        ])
+        rows = self.rows(snapshot)
+        self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
+        self.assertEqual(rows["Context"]["formattedValue"], "71.3% · 142.5k/200k")
+
+    def test_broken_transcript_lines_are_skipped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            transcript = Path(tmpdir) / "transcript.jsonl"
+            transcript.write_text(
+                "not json\n\n" + json.dumps(self.assistant_entry()) + "\n{ truncated",
+                encoding="utf-8",
+            )
+            snapshot, stdout = self.run_script(json.dumps({
+                "hook_event_name": "Stop", "transcript_path": str(transcript)}))
+            self.assertEqual(stdout, "")
+            self.assertEqual(self.rows(snapshot)["Model"]["formattedValue"], "Opus 4.8 · high")
+
+    def test_huge_transcript_reads_only_the_tail(self):
+        """毎ツール呼び出しで走るため、巨大な transcript でも末尾しか読まない。"""
+        # 末尾チャンクに載る行はセッション開始より後の時刻にして、
+        # 先頭行を読まないと経過時間がずれるようにする
+        filler = [{"type": "user", "timestamp": "2026-07-23T09:10:00.000Z", "text": "x" * 2000}
+                  for _ in range(400)]  # 800KB 超 > TRANSCRIPT_TAIL_BYTES (256KB)
+        start = {"type": "user", "timestamp": "2026-07-23T08:48:54.157Z", "cwd": "/Users/so/.setup"}
+        snapshot = self.run_hook([start] + filler + [self.assistant_entry()])
+        rows = self.rows(snapshot)
+        self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
+        # 先頭行だけは別途読むので、セッション開始からの経過時間になる (末尾からなら 9m)
+        self.assertEqual(rows["Elapsed"]["formattedValue"], "30m")
+
+    def test_missing_transcript_does_not_fail_the_hook(self):
+        """hook を止めないため、transcript が読めなくても異常終了しない。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "usage.json"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT)],
+                input=json.dumps({"hook_event_name": "Stop", "transcript_path": "/nonexistent.jsonl"}),
+                capture_output=True, text=True,
+                env={"RUNCAT_OUT_FILE": str(out), "PATH": "/usr/bin:/bin", "HOME": tmpdir},
+            )
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual(proc.stdout, "")
+            self.assertFalse(out.exists())  # 既存のカードを壊さない
 
 
 if __name__ == "__main__":

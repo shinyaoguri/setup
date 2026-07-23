@@ -4,6 +4,29 @@
     "additionalDirectories": []
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/runcat-metrics.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/runcat-metrics.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -39,7 +62,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "~/.claude/runcat-statusline.py"
+    "command": "~/.claude/runcat-metrics.py"
   },
   "language": "japanese",
   "tui": "fullscreen",
