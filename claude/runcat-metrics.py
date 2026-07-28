@@ -20,19 +20,19 @@ RunCat Neo の Custom Metrics 形式
    (https://code.claude.com/docs/en/hooks) ので、渡される transcript_path の
    JSONL 末尾を読んで組み立てる。stdout には何も出さない。
 
-カードは 1 枚しか無いのに Claude Code は同時に何セッションも動く。そこで各実行は
-まず自分の状態を SESSIONS_DIR/<session_id>.json へ書き、次に生きている全セッション
-(最終更新が SESSION_TTL_SECONDS 以内) を読み直してカードを組む。これで最後に走った
-セッションが他を上書きしてしまうことがなくなる。
+性質の違う 2 つを 1 枚に詰めると区切りが要って読みにくいので、カードを 2 枚に分ける。
+RunCat 側で別々のソースとして登録する (設定 → Metrics → Custom Metrics → Add
+Custom Metrics Source)。どちらも毎回まとめて書き出す:
 
-カードはセッション数によらず同じ形をとる。行が増減して見た目が変わらない方が
-一覧として読みやすいため:
+    OUT (Claude Code)              SESSIONS_OUT (Claude Sessions)
+    5h        0% · 2h41m left      setup     21% · Opus 5 · 12m
+    7d        18% · 4d12h left     divive    8% · Opus 5 · 3m
+    7d Fable  10% · 4d12h left
 
-    5h        0% · 2h41m left        レート制限 (取れたときだけ)
-    7d        18% · 4d12h left
-    7d Fable  10% · 4d12h left       モデル別の枠があればそれも
-    setup     21% · Opus 5 · 12m     ここから下はセッションごとに 1 行
-    divive    8% · Opus 5 · 3m
+Claude Code は同時に何セッションも動くので、各実行はまず自分の状態を
+SESSIONS_DIR/<session_id>.json へ書き、次に生きている全セッション (最終更新が
+SESSION_TTL_SECONDS 以内) を読み直してカードを組む。これで最後に走ったセッションが
+他を上書きしてしまうことがなくなる。
 
 セッション行のラベルはプロジェクト名。同じプロジェクトが複数あるときだけ
 ブランチ名を添えて区別する。値に入れられるもの (◯=そのモードで取れる):
@@ -42,7 +42,8 @@ RunCat Neo の Custom Metrics 形式
     モデル    Opus 5 · xhigh · think       ◯    ◯ (think/fast は無し)
     経過      12m                          ◯    ◯
 
-メニューバーへ出す値 (metricsBarValue) は週間制限の使用率。
+メニューバーへ出す値 (metricsBarValue) は、レート制限のカードが週間制限の使用率、
+セッションのカードが一番文脈を使っているセッションの使用率 (圧縮が近いものが分かる)。
 
 レート制限は Claude Code の /usage と同じ使用量エンドポイント (USAGE_URL) から取る。
 statusLine が渡す rate_limits は five_hour と seven_day だけで、モデル別の週間制限
@@ -59,14 +60,15 @@ statusLine が渡す rate_limits は five_hour と seven_day だけで、モデ�
 カードの幅は一番長い行に引きずられるので、可変長の値 (プロジェクト名・ブランチ名)
 は MAX_VALUE_WIDTH 幅で切り詰める。
 
-一覧に絞ったため、statusLine では取れるが出していないものがある: cost・
+1 セッション 1 行に絞ったため、statusLine では取れるが出していないものがある: cost・
 total_lines_added/removed・pr・agent.name・session_name (1 行に畳むと長くなる)。
 ほかに session_id・prompt_id・transcript_path・cwd (カード向きでない ID / パス)、
 version・output_style.name・vim.mode (常時見る価値が薄い)、exceeds_200k_tokens
 (使用率と重複)。必要になったらセッション行の値へ足す。
 
-環境変数 RUNCAT_OUT_FILE で出力先を上書きできる (既定: ~/.claude/runcat-usage.json)。
-レート制限の控えとセッションごとの状態は同じディレクトリに置く。
+出力先は環境変数で上書きできる: RUNCAT_OUT_FILE (既定 ~/.claude/runcat-usage.json)
+と RUNCAT_SESSIONS_OUT_FILE (既定は同じディレクトリの runcat-sessions.json)。
+レート制限の控えとセッションごとの状態も同じディレクトリに置く。
 """
 
 import json
@@ -80,7 +82,12 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+# レート制限のカード。RunCat には 2 つのソースを別々に登録する
 OUT = Path(os.environ.get("RUNCAT_OUT_FILE", str(Path.home() / ".claude" / "runcat-usage.json")))
+
+# 動いているセッションのカード (同じ名前のディレクトリはセッション状態の置き場。別物)
+SESSIONS_OUT = Path(os.environ.get(
+    "RUNCAT_SESSIONS_OUT_FILE", str(OUT.parent / "runcat-sessions.json")))
 
 # statusLine で取れたレート制限の控え (usage API が使えないときのフォールバック)
 RATE_LIMITS_CACHE = OUT.parent / "runcat-rate-limits.json"
@@ -126,6 +133,12 @@ MAX_VALUE_WIDTH = 32
 
 # セッション行のラベル (プロジェクト名) をこの表示幅で切る
 MAX_LABEL_WIDTH = 20
+
+# 2 枚のカードの見出しとアイコン (SF Symbol)
+LIMIT_CARD_TITLE = "Claude Code"
+LIMIT_CARD_SYMBOL = "staroflife"
+SESSION_CARD_TITLE = "Claude Sessions"
+SESSION_CARD_SYMBOL = "rectangle.stack"
 
 
 # --- 整形ヘルパー -------------------------------------------------------------
@@ -243,10 +256,10 @@ def context_row(used_tokens, size_tokens, used_pct=None):
     return row("Context", text, used_pct / 100)
 
 
-def snapshot(metrics, bar_value=None):
+def snapshot(title, symbol, metrics, bar_value=None):
     result = {
-        "title": "Claude Code",
-        "symbol": "staroflife",
+        "title": title,
+        "symbol": symbol,
         "metrics": [m for m in metrics if m is not None],
         "lastUpdatedDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -525,16 +538,21 @@ def session_summary(state):
 
 # --- カードの組み立て -----------------------------------------------------------
 
-def build_card(states, limit_rows, now_epoch):
-    """生きているセッションからカードを組む。
-
-    レート制限を頭に置き、以降はセッションごとに 1 行。セッション数によらず
-    同じ形にすることで、行が増減して見た目が変わらないようにしている。
-    """
+def build_limit_card(limit_rows, now_epoch):
+    """レート制限のカード。5 時間・週間・モデル別が 1 行ずつ並ぶ。"""
     metrics = [
         rate_limit_row(limit["label"], limit, now_epoch, stale=limit.get("stale", False))
         for limit in limit_rows
     ]
+    # メニューバーは週間 (全モデル) の使用率
+    weekly = next((limit for limit in limit_rows if limit["label"] == "7d"), {})
+    return snapshot(LIMIT_CARD_TITLE, LIMIT_CARD_SYMBOL, metrics,
+                    fmt_bar_value(weekly, stale=weekly.get("stale", False)))
+
+
+def build_session_card(states):
+    """動いているセッションのカード。セッションごとに 1 行。"""
+    metrics = []
     for state in states:
         ctx_pct = num(state.get("ctx_pct"))
         metrics.append(row(
@@ -542,9 +560,10 @@ def build_card(states, limit_rows, now_epoch):
             session_summary(state),
             ctx_pct / 100 if ctx_pct is not None else None,
         ))
-    # メニューバーは週間 (全モデル) の使用率
-    weekly = next((limit for limit in limit_rows if limit["label"] == "7d"), {})
-    return snapshot(metrics, fmt_bar_value(weekly, stale=weekly.get("stale", False)))
+    # メニューバーは一番文脈を使っているセッションの使用率 (圧縮が近いものが分かる)
+    used = [p for p in (num(s.get("ctx_pct")) for s in states) if p is not None]
+    bar_value = f"{max(used):.0f}%" if used else None
+    return snapshot(SESSION_CARD_TITLE, SESSION_CARD_SYMBOL, metrics, bar_value)
 
 
 # --- statusLine モード ---------------------------------------------------------
@@ -723,10 +742,11 @@ def from_transcript(path, session_id=None):
 # --- エントリポイント -----------------------------------------------------------
 
 def render(state, limit_rows, now_epoch):
-    """自分の状態を保存し、生きている全セッションからカードを組んで書き出す。"""
+    """自分の状態を保存し、2 枚のカードを書き出す。"""
     save_session(state)
     states = load_sessions(now_epoch, current_id=state.get("session_id"))
-    write_json(OUT, build_card(states, limit_rows, now_epoch))
+    write_json(OUT, build_limit_card(limit_rows, now_epoch))
+    write_json(SESSIONS_OUT, build_session_card(states))
 
 
 def resolve_limits(payload, now_epoch):
