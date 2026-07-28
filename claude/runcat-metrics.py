@@ -31,6 +31,7 @@ RunCat Neo の Custom Metrics 形式
     5h        0% · 2h41m left        レート制限 (取れたときだけ)
     7d        18% · 4d12h left
     7d Fable  10% · 4d12h left       モデル別の枠があればそれも
+    ──────    ──────                 区切り (両側が揃ったときだけ挟む)
     setup     21% · Opus 5 · 12m     ここから下はセッションごとに 1 行
     divive    8% · Opus 5 · 3m
 
@@ -126,6 +127,9 @@ MAX_VALUE_WIDTH = 32
 
 # セッション行のラベル (プロジェクト名) をこの表示幅で切る
 MAX_LABEL_WIDTH = 20
+
+# レート制限とセッションの間に挟む区切り行の中身 (ラベル側と値側の両方に使う)
+SEPARATOR_MARK = "──────"
 
 
 # --- 整形ヘルパー -------------------------------------------------------------
@@ -525,23 +529,43 @@ def session_summary(state):
 
 # --- カードの組み立て -----------------------------------------------------------
 
+def separator_row():
+    """レート制限とセッションの間の区切り。
+
+    RunCat は行を `title: formattedValue` として描くので、両方に罫線を入れて
+    ラベルでも値でもない行に見せる。
+    """
+    return {"title": SEPARATOR_MARK, "formattedValue": SEPARATOR_MARK}
+
+
 def build_card(states, limit_rows, now_epoch):
     """生きているセッションからカードを組む。
 
-    レート制限を頭に置き、以降はセッションごとに 1 行。セッション数によらず
-    同じ形にすることで、行が増減して見た目が変わらないようにしている。
+    レート制限を頭に置き、区切りを挟んで、以降はセッションごとに 1 行。
+    セッション数によらず同じ形にすることで、行が増減して見た目が変わらない。
     """
-    metrics = [
+    limits = [
         rate_limit_row(limit["label"], limit, now_epoch, stale=limit.get("stale", False))
         for limit in limit_rows
     ]
+    limits = [metric for metric in limits if metric is not None]
+
+    sessions = []
     for state in states:
         ctx_pct = num(state.get("ctx_pct"))
-        metrics.append(row(
+        metric = row(
             session_label(state, states),
             session_summary(state),
             ctx_pct / 100 if ctx_pct is not None else None,
-        ))
+        )
+        if metric is not None:
+            sessions.append(metric)
+
+    metrics = list(limits)
+    if limits and sessions:  # 片側しか無いなら区切る相手がいない
+        metrics.append(separator_row())
+    metrics += sessions
+
     # メニューバーは週間 (全モデル) の使用率
     weekly = next((limit for limit in limit_rows if limit["label"] == "7d"), {})
     return snapshot(metrics, fmt_bar_value(weekly, stale=weekly.get("stale", False)))
