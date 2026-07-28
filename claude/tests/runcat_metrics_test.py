@@ -18,8 +18,10 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "runcat-metrics.py"
 
-# レート制限とセッションの間に挟まる区切り行 (runcat-metrics.py と揃える)
-SEPARATOR_MARK = "──────"
+# カード上部に固定で並ぶレート制限の行。残りがセッション行
+def is_limit_title(title):
+    """レート制限の行かどうか。モデル別は `7d Fable` のように 7d 始まりになる。"""
+    return title in ("5h", "7d") or title.startswith("7d ")
 
 
 # 既定ではここを向けて使用量エンドポイントを叩かせない。実際の API を叩くと
@@ -60,25 +62,22 @@ class ScriptTestCase(unittest.TestCase):
     def rows(self, snapshot):
         return {m["title"]: m for m in snapshot["metrics"]}
 
-    def sessions(self, snapshot):
-        """区切りより下の行 = セッション行 (カードに並ぶ順)。
-
-        区切りが無いのはレート制限が 1 つも取れなかったときで、その場合は
-        全部がセッション行。
-        """
-        metrics = snapshot["metrics"]
-        for i, metric in enumerate(metrics):
-            if metric["title"] == SEPARATOR_MARK:
-                return metrics[i + 1:]
-        return metrics
-
     def limits(self, snapshot):
-        """区切りより上の行 = レート制限。"""
-        metrics = snapshot["metrics"]
-        for i, metric in enumerate(metrics):
-            if metric["title"] == SEPARATOR_MARK:
-                return metrics[:i]
-        return []
+        """先頭に固まっているレート制限の行。
+
+        タイトルで判定するとプロジェクト名がたまたま `7d ...` のときに拾って
+        しまうので、先頭から連続している分だけを取る。
+        """
+        out = []
+        for metric in snapshot["metrics"]:
+            if not is_limit_title(metric["title"]):
+                break
+            out.append(metric)
+        return out
+
+    def sessions(self, snapshot):
+        """レート制限より下の行 = セッション行 (カードに並ぶ順)。"""
+        return snapshot["metrics"][len(self.limits(snapshot)):]
 
     def only_session(self, snapshot):
         """セッションが 1 つである前提で、その行を返す。"""
@@ -283,9 +282,8 @@ class HookModeTest(ScriptTestCase):
         self.assertEqual(session["title"], "setup")
         # Opus は 1M 文脈。142,548 / 1M = 14.2548% → 小数第 1 位へ丸める
         self.assertEqual(session["formattedValue"], "14.3% · Opus 4.8 · high · 30m")
-        # 使用量エンドポイントも控えも無いので、レート制限の行と区切りは出ない
+        # hook 入力からは取れないレート制限は出さない (控えが無ければ同様)
         self.assertEqual(self.limits(snapshot), [])
-        self.assertNotIn(SEPARATOR_MARK, self.rows(snapshot))
         self.assertNotIn("metricsBarValue", snapshot)
 
     def test_model_id_is_prettified(self):
@@ -750,24 +748,6 @@ class UsageApiTest(ScriptTestCase):
         self.assertEqual(rows["7d"]["formattedValue"], "41.2% · 3d4h left")
         self.assertNotIn("7d Fable", rows)
         self.assertEqual(len(self.sessions(snapshot)), 1)
-
-    def test_a_separator_sits_between_the_limits_and_the_sessions(self):
-        """レート制限とセッションが並ぶので、境目に区切りを挟む。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            url = self.stub(tmpdir, self.RESPONSE)
-            snapshot, _ = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
-
-            titles = [m["title"] for m in snapshot["metrics"]]
-            self.assertEqual(titles, ["5h", "7d", "7d Fable", SEPARATOR_MARK, "setup"])
-            # ラベルでも値でもない行に見せるため、両側に同じ罫線を入れる
-            separator = self.rows(snapshot)[SEPARATOR_MARK]
-            self.assertEqual(separator["formattedValue"], SEPARATOR_MARK)
-            self.assertNotIn("normalizedValue", separator)
-
-    def test_no_separator_without_rate_limits(self):
-        """レート制限が取れないときは区切る相手がいないので挟まない。"""
-        snapshot, _ = self.run_script(self.payload())  # 既定の届かない URL
-        self.assertEqual([m["title"] for m in snapshot["metrics"]], ["setup"])
 
     def test_broken_response_does_not_break_the_card(self):
         with tempfile.TemporaryDirectory() as tmpdir:
