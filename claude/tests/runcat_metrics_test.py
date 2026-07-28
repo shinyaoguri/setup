@@ -186,6 +186,50 @@ class TwoCardsTest(ScriptTestCase):
         self.assertEqual(self.titles(cards.sessions), ["setup"])
 
 
+class SeedTest(ScriptTestCase):
+    """`--seed` は空のカードだけ置く (RunCat へ登録するにはファイルが要るため)。"""
+
+    def seed(self, workdir):
+        limits_out = Path(workdir) / "usage.json"
+        sessions_out = Path(workdir) / "sessions.json"
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--seed"],
+            # --seed は stdin を読まない。空を渡しておけば、読んでしまう作りに
+            # 変わったとき (通常経路へ落ちたとき) にハングせず stdout の差で分かる
+            input="", capture_output=True, text=True, check=True, timeout=30,
+            env={
+                "RUNCAT_OUT_FILE": str(limits_out),
+                "RUNCAT_SESSIONS_OUT_FILE": str(sessions_out),
+                "PATH": "/usr/bin:/bin", "HOME": str(workdir),
+                "RUNCAT_USAGE_URL": NO_USAGE_URL,
+            },
+        )
+        self.assertEqual(proc.stdout, "")  # stdout は statusLine の表示に使われる
+        return limits_out, sessions_out
+
+    def test_seed_writes_both_cards_without_stdin(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            limits_out, sessions_out = self.seed(tmpdir)
+            for path, title in ((limits_out, "Claude Code"), (sessions_out, "Claude Sessions")):
+                card = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(card["title"], title)
+                self.assertEqual(card["metrics"], [])
+                self.assertIn("lastUpdatedDate", card)
+
+    def test_seed_does_not_clobber_existing_cards(self):
+        """セットアップを流し直しても、動いているカードを消さない。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.run_script(json.dumps({
+                "session_id": "s1",
+                "model": {"display_name": "Opus 5"},
+                "workspace": {"repo": {"name": "setup"}},
+            }), workdir=tmpdir)
+            before = (Path(tmpdir) / "sessions.json").read_text(encoding="utf-8")
+
+            self.seed(tmpdir)
+            self.assertEqual((Path(tmpdir) / "sessions.json").read_text(encoding="utf-8"), before)
+
+
 class StatusLineModeTest(ScriptTestCase):
     """ターミナルの statusLine から呼ばれる経路。"""
 

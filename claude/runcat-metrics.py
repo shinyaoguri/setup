@@ -69,6 +69,9 @@ version・output_style.name・vim.mode (常時見る価値が薄い)、exceeds_2
 出力先は環境変数で上書きできる: RUNCAT_OUT_FILE (既定 ~/.claude/runcat-usage.json)
 と RUNCAT_SESSIONS_OUT_FILE (既定は同じディレクトリの runcat-sessions.json)。
 レート制限の控えとセッションごとの状態も同じディレクトリに置く。
+
+`--seed` を付けて実行すると、空のカードだけ作って終わる。RunCat へソースを登録
+する時点でファイルが必要なので、セットアップ時に tasks/claude.yml から呼ぶ。
 """
 
 import json
@@ -768,7 +771,26 @@ def resolve_limits(payload, now_epoch):
     return rows_from_windows(load_rate_limits(now_epoch), stale=True)
 
 
+def seed_cards():
+    """空のカードだけ先に置く (`--seed`)。
+
+    RunCat の Custom Metrics はソースを登録する時点でファイルが存在している
+    必要がある。Claude Code を一度も動かしていない新しい環境でも登録できるよう、
+    セットアップ時にここで作っておく。中身は次の実行で埋まる。
+    既にあるカードは触らない (走らせ直しても消さない)。
+    """
+    now_epoch = datetime.now(timezone.utc).timestamp()
+    for path, card in ((OUT, build_limit_card([], now_epoch)),
+                       (SESSIONS_OUT, build_session_card([]))):
+        if not path.exists():
+            write_json(path, card)
+
+
 def main():
+    if "--seed" in sys.argv[1:]:
+        seed_cards()
+        return
+
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
