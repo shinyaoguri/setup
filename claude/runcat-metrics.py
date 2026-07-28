@@ -25,25 +25,21 @@ RunCat Neo の Custom Metrics 形式
 (最終更新が SESSION_TTL_SECONDS 以内) を読み直してカードを組む。これで最後に走った
 セッションが他を上書きしてしまうことがなくなる。
 
-カードの形は生きているセッション数で変わる:
+カードはセッション数によらず同じ形をとる。行が増減して見た目が変わらない方が
+一覧として読みやすいため:
 
-  1 つ  → そのセッションの詳細を 1 行 1 項目で出す (下表)
-  2 つ+ → レート制限を頭に置き、以降はセッションごとに 1 行へ畳む
-          (例: `setup   21% · Opus 5 · 12m`)。行数とカード幅を抑えるため。
+    5h        23.5% · 2h41m left     レート制限 (取れたときだけ)
+    7d        41.2% · 3d4h left
+    setup     21% · Opus 5 · 12m     ここから下はセッションごとに 1 行
+    divive    8% · Opus 5 · 3m
 
-詳細レイアウトで出る行 (値が取れない行は出さない。◯=そのモードで取れる):
+セッション行のラベルはプロジェクト名。同じプロジェクトが複数あるときだけ
+ブランチ名を添えて区別する。値に入れられるもの (◯=そのモードで取れる):
 
-    行       例                                 statusLine  hook
-    Model    Opus 5 · xhigh · think · fast          ◯    ◯ (think/fast は無し)
-    Context  31% · 62.5k/200k                       ◯    ◯ (上限は推定値)
-    5h / 7d  23.5% · 2h41m left                     ◯    △ (statusLine の控えを使う)
-    Cost     $0.42                                  ◯    ✗ (hook 入力に無い。トークン単価も持たない)
-    Elapsed  45m · API 2m18s                        ◯    ◯ (API 時間は無し)
-    Edits    +156 / -23                             ◯    ✗
-    Project  setup · feature-xyz                    ◯    ◯ (worktree 名でなくブランチ名)
-    Session  my-session                             ◯    ◯
-    Agent    security-reviewer                      ◯    ✗
-    PR       #1234 · pending                        ◯    ◯ (レビュー状態は無し)
+    項目      例                       statusLine  hook
+    使用率    21%                          ◯    ◯ (上限はモデル名から引く)
+    モデル    Opus 5 · xhigh · think       ◯    ◯ (think/fast は無し)
+    経過      12m                          ◯    ◯
 
 メニューバーへ出す値 (metricsBarValue) は週間制限の使用率。
 
@@ -56,12 +52,14 @@ five_hour と seven_day だけのため出せない (2.1.212 時点)。
 文脈の上限は statusLine 入力にしか無い。hook モードではモデル名から引く
 (200k なのは Haiku 4.5 だけで、Claude 5 系はいずれも 1M が既定)。
 
-カードの幅は一番長い行に引きずられるので、可変長の値 (プロジェクト名・ブランチ名・
-セッション名) は MAX_VALUE_WIDTH 幅で切り詰める。
+カードの幅は一番長い行に引きずられるので、可変長の値 (プロジェクト名・ブランチ名)
+は MAX_VALUE_WIDTH 幅で切り詰める。
 
-意図的に出していないもの: session_id・prompt_id・transcript_path・cwd (カード向きでない
-ID / パス)、version・output_style.name・vim.mode (常時見る価値が薄い)、
-exceeds_200k_tokens (Context 行と重複。1M コンテキストのモデルでのみ差が出る)。
+一覧に絞ったため、statusLine では取れるが出していないものがある: cost・
+total_lines_added/removed・pr・agent.name・session_name (1 行に畳むと長くなる)。
+ほかに session_id・prompt_id・transcript_path・cwd (カード向きでない ID / パス)、
+version・output_style.name・vim.mode (常時見る価値が薄い)、exceeds_200k_tokens
+(使用率と重複)。必要になったらセッション行の値へ足す。
 
 環境変数 RUNCAT_OUT_FILE で出力先を上書きできる (既定: ~/.claude/runcat-usage.json)。
 レート制限の控えとセッションごとの状態は同じディレクトリに置く。
@@ -100,8 +98,12 @@ DEFAULT_CONTEXT_WINDOW = 1_000_000
 # transcript は伸び続けるので末尾のこのサイズだけ読む (毎ツール呼び出しで走るため)
 TRANSCRIPT_TAIL_BYTES = 256 * 1024
 
-# 可変長の値をこの表示幅で切る (全角は 2 幅)。カードが横に伸びるのを防ぐ
-MAX_VALUE_WIDTH = 28
+# 可変長の値をこの表示幅で切る (全角は 2 幅)。カードが横に伸びるのを防ぐ。
+# `45.5% · Opus 5 · xhigh · 11h13m` のような一番長い形がちょうど収まる幅
+MAX_VALUE_WIDTH = 32
+
+# セッション行のラベル (プロジェクト名) をこの表示幅で切る
+MAX_LABEL_WIDTH = 20
 
 
 # --- 整形ヘルパー -------------------------------------------------------------
@@ -142,7 +144,7 @@ def clip(text, limit=MAX_VALUE_WIDTH):
             break
         kept.append(char)
         width += char_width
-    return "".join(kept).rstrip() + "…"
+    return "".join(kept).rstrip(" ·") + "…"  # 途中で切れた区切りは残さない
 
 
 def row(title, formatted, normalized=None):
@@ -340,54 +342,58 @@ def load_sessions(now_epoch, current_id=None):
 
 
 def session_label(state, states):
-    """セッション行のラベル。同じプロジェクトが複数あるときだけブランチを添える。"""
-    project = state.get("project") or state.get("title") or "session"
-    same = [s for s in states if (s.get("project") or s.get("title")) == project]
-    if len(same) > 1 and state.get("branch"):
-        project = f"{project} · {state['branch']}"
-    return clip(project, 20)
+    """セッション行のラベル。
+
+    一覧ではラベルが唯一の手掛かりなので、同じものが並ばないよう必要な分だけ
+    細かくする: プロジェクト名 → ブランチを添える → 同じ worktree で複数開いて
+    いるならセッション名。幅が限られるので、区別に要る分しか足さない。
+    """
+    def base(s):
+        return s.get("project") or s.get("title") or "session"
+
+    label = base(state)
+    same = [s for s in states if base(s) == label]
+    if len(same) <= 1:
+        return clip(label, MAX_LABEL_WIDTH)
+
+    branch = state.get("branch")
+    if not branch:
+        return clip(label, MAX_LABEL_WIDTH)
+    if sum(1 for s in same if s.get("branch") == branch) <= 1:
+        return clip(f"{label} · {branch}", MAX_LABEL_WIDTH)
+    # プロジェクトもブランチも同じ。残る手掛かりはセッション名だけ
+    return clip(state.get("title") or f"{label} · {branch}", MAX_LABEL_WIDTH)
+
+
+def head(value, keep):
+    """` · ` 区切りの値から先頭 keep 個だけ残す。
+
+    Model は `Opus 5 · xhigh · think · fast`、Elapsed は `45m · API 2m18s` の
+    ように詳細が続く。1 行へ畳むと長すぎるので、一覧では頭だけ使う。
+    """
+    parts = [p for p in str(value or "").split(" · ") if p]
+    return " · ".join(parts[:keep]) or None
 
 
 def session_summary(state):
     """セッション行の値。使用率・モデル・経過を 1 行へ畳む。"""
-    parts = []
     ctx_pct = num(state.get("ctx_pct"))
-    if ctx_pct is not None:
-        parts.append(f"{ctx_pct:g}%")
-    if state.get("model"):
-        parts.append(str(state["model"]))
-    if state.get("elapsed"):
-        parts.append(str(state["elapsed"]))
-    return " · ".join(parts) or None
+    parts = [
+        f"{round(ctx_pct, 1):g}%" if ctx_pct is not None else None,  # 一覧では小数第 1 位で十分
+        head(state.get("model"), 2),   # モデル名と effort まで
+        head(state.get("elapsed"), 1),  # API 時間は落とす
+    ]
+    return clip(" · ".join(p for p in parts if p)) or None
 
 
 # --- カードの組み立て -----------------------------------------------------------
 
-def detail_metrics(state, limits, now_epoch, stale):
-    """セッションが 1 つのときのレイアウト (1 行 1 項目)。"""
-    ctx_pct = num(state.get("ctx_pct"))
-    ctx_row = None
-    if ctx_pct is not None:
-        ctx_row = context_row(state.get("ctx_used"), state.get("ctx_size"), ctx_pct)
-    project = state.get("project")
-    branch = state.get("branch")
-    return [
-        row("Model", state.get("model")),
-        ctx_row,
-        rate_limit_row("5h", limits.get("five_hour", {}), now_epoch, stale=stale),
-        rate_limit_row("7d", limits.get("seven_day", {}), now_epoch, stale=stale),
-        row("Cost", state.get("cost")),
-        row("Elapsed", state.get("elapsed")),
-        row("Edits", state.get("edits")),
-        row("Project", clip(f"{project} · {branch}" if project and branch else (project or branch))),
-        row("Session", clip(state.get("title"))),
-        row("Agent", clip(state.get("agent"))),
-        row("PR", state.get("pr")),
-    ]
+def build_card(states, limits, now_epoch, stale):
+    """生きているセッションからカードを組む。
 
-
-def summary_metrics(states, limits, now_epoch, stale):
-    """セッションが複数のときのレイアウト (レート制限 + 1 セッション 1 行)。"""
+    レート制限を頭に置き、以降はセッションごとに 1 行。セッション数によらず
+    同じ形にすることで、行が増減して見た目が変わらないようにしている。
+    """
     metrics = [
         rate_limit_row("5h", limits.get("five_hour", {}), now_epoch, stale=stale),
         rate_limit_row("7d", limits.get("seven_day", {}), now_epoch, stale=stale),
@@ -399,16 +405,6 @@ def summary_metrics(states, limits, now_epoch, stale):
             session_summary(state),
             ctx_pct / 100 if ctx_pct is not None else None,
         ))
-    return metrics
-
-
-def build_card(states, limits, now_epoch, stale):
-    """生きているセッションからカードを組む。"""
-    if len(states) <= 1:
-        state = states[0] if states else {}
-        metrics = detail_metrics(state, limits, now_epoch, stale)
-    else:
-        metrics = summary_metrics(states, limits, now_epoch, stale)
     return snapshot(metrics, fmt_bar_value(limits.get("seven_day", {}), stale=stale))
 
 
