@@ -25,8 +25,8 @@ RunCat Neo の Custom Metrics 形式
     行       例                                 statusLine  hook
     Model    Opus 4.8 · xhigh · think · fast        ◯    ◯ (think/fast は無し)
     Context  31% · 62.5k/200k                       ◯    ◯ (上限は 200k 固定)
-    5h / 7d  23.5% · 2h41m left                     ◯    ✗ (hook 入力に無い)
-    Cost     $0.42                                  ◯    ✗ (同上。トークン単価は持たない)
+    5h / 7d  23.5% · 2h41m left                     ◯    △ (statusLine の控えを使う)
+    Cost     $0.42                                  ◯    ✗ (hook 入力に無い。トークン単価も持たない)
     Elapsed  45m · API 2m18s                        ◯    ◯ (API 時間は無し)
     Edits    +156 / -23                             ◯    ✗
     Project  setup · feature-xyz                    ◯    ◯ (worktree 名でなくブランチ名)
@@ -34,11 +34,20 @@ RunCat Neo の Custom Metrics 形式
     Agent    security-reviewer                      ◯    ✗
     PR       #1234 · pending                        ◯    ◯ (レビュー状態は無し)
 
+メニューバーへ出す値 (metricsBarValue) は週間制限の使用率。
+
+レート制限は hook 入力にも transcript にも無いため、statusLine モードで取れた値を
+控え (RATE_LIMITS_CACHE)、hook モードではリセット時刻を過ぎるまでそれを使う。
+控えは最後に取れた時点の値で実際はそれ以上なので、下限として ≥ を頭に付けて出す。
+モデル別の週間制限 (Opus / Sonnet / Fable) は Claude Code が statusLine へ渡すのが
+five_hour と seven_day だけのため出せない (2.1.205 時点)。
+
 意図的に出していないもの: session_id・prompt_id・transcript_path・cwd (カード向きでない
 ID / パス)、version・output_style.name・vim.mode (常時見る価値が薄い)、
 exceeds_200k_tokens (Context 行と重複。1M コンテキストのモデルでのみ差が出る)。
 
 環境変数 RUNCAT_OUT_FILE で出力先を上書きできる (既定: ~/.claude/runcat-usage.json)。
+レート制限の控えは同じディレクトリの runcat-rate-limits.json に置く。
 """
 
 import json
@@ -49,6 +58,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 OUT = Path(os.environ.get("RUNCAT_OUT_FILE", str(Path.home() / ".claude" / "runcat-usage.json")))
+
+# statusLine で取れたレート制限の控え (hook モードから読む)
+RATE_LIMITS_CACHE = OUT.parent / "runcat-rate-limits.json"
 
 # hook モードでは文脈上限が入力に無いため既定値を使う (1M コンテキストのモデルでは過大に出る)
 DEFAULT_CONTEXT_WINDOW = 200_000
@@ -126,16 +138,14 @@ def fmt_model_id(model_id):
 
 
 def context_row(used_tokens, size_tokens, used_pct=None):
-    """Context 行と、メニューバーへ出す文字列を返す。"""
     if used_pct is None:
         if not used_tokens or not size_tokens:
-            return None, None
+            return None
         used_pct = round(used_tokens / size_tokens * 100, 1)
     text = f"{used_pct:g}%"
     if used_tokens is not None and size_tokens:
         text += f" · {fmt_tokens(used_tokens)}/{fmt_tokens(size_tokens)}"
-    # メニューバーは幅が狭く長い文字列は切られるため、整数へ丸めて出す
-    return row("Context", text, used_pct / 100), f"{used_pct:.0f}%"
+    return row("Context", text, used_pct / 100)
 
 
 def snapshot(metrics, bar_value=None):
@@ -150,28 +160,69 @@ def snapshot(metrics, bar_value=None):
     return result
 
 
-def write_snapshot(data):
-    """RunCat が半端な内容を読まないよう、一時ファイル経由で原子的に置き換える。"""
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".runcat-", dir=str(OUT.parent))
+def write_json(path, data):
+    """読み手が半端な内容を読まないよう、一時ファイル経由で原子的に置き換える。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".runcat-", dir=str(path.parent))
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, OUT)
+    os.replace(tmp, path)
 
 
-# --- statusLine モード ---------------------------------------------------------
+# --- レート制限 ----------------------------------------------------------------
 
-def rate_limit_row(title, window, now_epoch):
-    """レート制限の行。使用率にリセットまでの残り時間を添える。"""
+def rate_limit_row(title, window, now_epoch, stale=False):
+    """レート制限の行。使用率にリセットまでの残り時間を添える。
+
+    stale は控えから読んだ値。以後も使用率は上がる一方なので下限として ≥ を付ける。
+    """
     used = num(window.get("used_percentage"))
     if used is None:
         return None
-    text = f"{used:g}%"
+    text = f"{'≥' if stale else ''}{used:g}%"
     resets_at = num(window.get("resets_at"))
     left = fmt_duration(resets_at - now_epoch) if resets_at is not None else None
     if left:
         text += f" · {left} left"
     return row(title, text, used / 100)
+
+
+def fmt_bar_value(window, stale=False):
+    """メニューバーは幅が狭く長い文字列は切られるため、整数へ丸めて出す。"""
+    used = num(window.get("used_percentage"))
+    if used is None:
+        return None
+    return f"{'≥' if stale else ''}{used:.0f}%"
+
+
+def save_rate_limits(windows):
+    """statusLine で取れたレート制限を hook モード用に控える。"""
+    kept = {}
+    for key, window in windows.items():
+        used = num(window.get("used_percentage"))
+        resets_at = num(window.get("resets_at"))
+        if used is None or resets_at is None:
+            continue  # リセット時刻が無い値は古さを判定できないので控えない
+        kept[key] = {"used_percentage": used, "resets_at": resets_at}
+    if kept:
+        write_json(RATE_LIMITS_CACHE, kept)
+
+
+def load_rate_limits(now_epoch):
+    """控えのうち、まだリセットされていないウィンドウだけ返す。"""
+    try:
+        cached = json.loads(RATE_LIMITS_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(cached, dict):
+        return {}
+    return {
+        key: window for key, window in cached.items()
+        if isinstance(window, dict) and (num(window.get("resets_at")) or 0) > now_epoch
+    }
+
+
+# --- statusLine モード ---------------------------------------------------------
 
 
 def from_statusline(payload):
@@ -193,9 +244,15 @@ def from_statusline(payload):
     in_tokens = num(context.get("total_input_tokens"))
     out_tokens = num(context.get("total_output_tokens"))
     used_tokens = (in_tokens or 0) + (out_tokens or 0) if (in_tokens is not None or out_tokens is not None) else None
-    ctx_row, bar_value = (None, None)
+    ctx_row = None
     if ctx_pct is not None:
-        ctx_row, bar_value = context_row(used_tokens, num(context.get("context_window_size")), ctx_pct)
+        ctx_row = context_row(used_tokens, num(context.get("context_window_size")), ctx_pct)
+
+    # レート制限: hook モード (デスクトップアプリ) では取れないのでここで控えておく
+    five_hour = obj(payload, "rate_limits", "five_hour")
+    seven_day = obj(payload, "rate_limits", "seven_day")
+    if five_hour or seven_day:
+        save_rate_limits({"five_hour": five_hour, "seven_day": seven_day})
 
     # Cost / Elapsed / Edits
     cost = obj(payload, "cost")
@@ -226,8 +283,8 @@ def from_statusline(payload):
     metrics = [
         row("Model", " · ".join(parts)),
         ctx_row,
-        rate_limit_row("5h", obj(payload, "rate_limits", "five_hour"), now_epoch),
-        rate_limit_row("7d", obj(payload, "rate_limits", "seven_day"), now_epoch),
+        rate_limit_row("5h", five_hour, now_epoch),
+        rate_limit_row("7d", seven_day, now_epoch),
         row("Cost", f"${cost_usd:,.2f}" if cost_usd is not None else None),
         row("Elapsed", elapsed),
         row("Edits", f"+{added:.0f} / -{removed:.0f}" if added is not None and removed is not None else None),
@@ -236,7 +293,7 @@ def from_statusline(payload):
         row("Agent", obj(payload, "agent").get("name")),
         row("PR", pr_text),
     ]
-    return snapshot(metrics, bar_value), str(model_name)
+    return snapshot(metrics, fmt_bar_value(seven_day)), str(model_name)
 
 
 # --- hook モード ---------------------------------------------------------------
@@ -281,6 +338,7 @@ def parse_ts(value):
 
 
 def from_transcript(path):
+    now_epoch = datetime.now(timezone.utc).timestamp()
     entries = read_transcript(path)
     assistants = [e for e in entries if e.get("type") == "assistant" and not e.get("isSidechain")]
     last = assistants[-1] if assistants else {}
@@ -297,7 +355,11 @@ def from_transcript(path):
         num(usage.get(k)) or 0
         for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
     ) or None
-    ctx_row, bar_value = context_row(used_tokens, DEFAULT_CONTEXT_WINDOW)
+    ctx_row = context_row(used_tokens, DEFAULT_CONTEXT_WINDOW)
+
+    # レート制限: hook 入力には無いので statusLine モードの控えを使う
+    cached_limits = load_rate_limits(now_epoch)
+    seven_day = cached_limits.get("seven_day", {})
 
     # Elapsed: transcript の最初と最後のエントリの時刻差
     start = parse_ts(entries[0].get("timestamp")) if entries else None
@@ -318,12 +380,14 @@ def from_transcript(path):
     metrics = [
         row("Model", " · ".join(parts)),
         ctx_row,
+        rate_limit_row("5h", cached_limits.get("five_hour", {}), now_epoch, stale=True),
+        rate_limit_row("7d", seven_day, now_epoch, stale=True),
         row("Elapsed", elapsed),
         row("Project", f"{project} · {branch}" if project and branch else (project or branch)),
         row("Session", title),
         row("PR", f"#{pr_number}" if pr_number is not None else None),
     ]
-    return snapshot(metrics, bar_value)
+    return snapshot(metrics, fmt_bar_value(seven_day, stale=True))
 
 
 # --- エントリポイント -----------------------------------------------------------
@@ -339,13 +403,13 @@ def main():
     if payload.get("hook_event_name"):
         # hook を止めないよう、失敗しても黙って終了する
         try:
-            write_snapshot(from_transcript(payload["transcript_path"]))
+            write_json(OUT, from_transcript(payload["transcript_path"]))
         except Exception:
             pass
         return
 
     data, model_name = from_statusline(payload)
-    write_snapshot(data)
+    write_json(OUT, data)
     print(model_name)
 
 
