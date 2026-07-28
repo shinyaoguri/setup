@@ -19,22 +19,65 @@ SCRIPT = Path(__file__).resolve().parent.parent / "runcat-metrics.py"
 
 
 class ScriptTestCase(unittest.TestCase):
-    def run_script(self, stdin_text):
-        """stdin を流してスクリプトを実行し、(スナップショット, stdout) を返す。"""
+    def run_script(self, stdin_text, workdir=None):
+        """stdin を流してスクリプトを実行し、(スナップショット, stdout) を返す。
+
+        workdir を渡すと出力先を共有できる (レート制限の控えを跨ぐ実行の検証用)。
+        """
+        if workdir is not None:
+            return self.run_script_in(stdin_text, Path(workdir))
         with tempfile.TemporaryDirectory() as tmpdir:
-            out = Path(tmpdir) / "usage.json"
-            proc = subprocess.run(
-                [sys.executable, str(SCRIPT)],
-                input=stdin_text,
-                capture_output=True,
-                text=True,
-                env={"RUNCAT_OUT_FILE": str(out), "PATH": "/usr/bin:/bin", "HOME": tmpdir},
-                check=True,
-            )
-            return json.loads(out.read_text(encoding="utf-8")), proc.stdout.strip()
+            return self.run_script_in(stdin_text, Path(tmpdir))
+
+    def run_script_in(self, stdin_text, workdir):
+        out = workdir / "usage.json"
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT)],
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            env={"RUNCAT_OUT_FILE": str(out), "PATH": "/usr/bin:/bin", "HOME": str(workdir)},
+            check=True,
+        )
+        return json.loads(out.read_text(encoding="utf-8")), proc.stdout.strip()
 
     def rows(self, snapshot):
         return {m["title"]: m for m in snapshot["metrics"]}
+
+    def run_hook(self, entries, event="Stop", workdir=None):
+        """transcript JSONL を作り、hook 入力を流してスナップショットを返す。"""
+        if workdir is None:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                return self.run_hook(entries, event, Path(tmpdir))
+        workdir = Path(workdir)
+        transcript = workdir / "transcript.jsonl"
+        transcript.write_text(
+            "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries), encoding="utf-8"
+        )
+        snapshot, stdout = self.run_script(json.dumps({
+            "hook_event_name": event,
+            "session_id": "abc123",
+            "transcript_path": str(transcript),
+            "cwd": "/Users/so/.setup",
+        }), workdir=workdir)
+        # hook の stdout は会話へ混ざり得るので何も出さない
+        self.assertEqual(stdout, "")
+        return snapshot
+
+    def assistant_entry(self, **overrides):
+        entry = {
+            "type": "assistant",
+            "timestamp": "2026-07-23T09:19:24.246Z",
+            "cwd": "/Users/so/.setup",
+            "gitBranch": "feat/runcat-metrics-hook",
+            "effort": "high",
+            "message": {"model": "claude-opus-4-8", "usage": {
+                "input_tokens": 2, "cache_creation_input_tokens": 1970,
+                "cache_read_input_tokens": 138413, "output_tokens": 2163,
+            }},
+        }
+        entry.update(overrides)
+        return entry
 
 
 class StatusLineModeTest(ScriptTestCase):
@@ -79,7 +122,8 @@ class StatusLineModeTest(ScriptTestCase):
 
         self.assertEqual(stdout, "Opus 4.8")
         self.assertEqual(snapshot["title"], "Claude Code")
-        self.assertEqual(snapshot["metricsBarValue"], "31%")  # メニューバーは整数へ丸める
+        # メニューバーへ出すのは週間制限の使用率 (整数へ丸める)
+        self.assertEqual(snapshot["metricsBarValue"], "41%")
         self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · xhigh · think · fast")
         self.assertEqual(rows["Context"]["formattedValue"], "31.35% · 62.7k/200k")
         self.assertAlmostEqual(rows["Context"]["normalizedValue"], 0.3135)
@@ -128,6 +172,8 @@ class StatusLineModeTest(ScriptTestCase):
         row = self.rows(snapshot)["5h"]
         self.assertEqual(row["formattedValue"], "150%")  # 過去のリセット時刻は添えない
         self.assertEqual(row["normalizedValue"], 1.0)  # バーは [0,1] にクランプ
+        # 週間制限が無ければメニューバーの値も出さない (Context では代用しない)
+        self.assertNotIn("metricsBarValue", snapshot)
 
     def test_million_token_context_window(self):
         payload = {"context_window": {
@@ -136,7 +182,6 @@ class StatusLineModeTest(ScriptTestCase):
         }}
         snapshot, _ = self.run_script(json.dumps(payload))
         self.assertEqual(self.rows(snapshot)["Context"]["formattedValue"], "8.4% · 84.5k/1M")
-        self.assertEqual(snapshot["metricsBarValue"], "8%")
 
     def test_project_falls_back_to_directory_name(self):
         payload = {"workspace": {"project_dir": "/Users/so/foo/"}, "worktree": {"name": "my-feature"}}
@@ -151,7 +196,6 @@ class StatusLineModeTest(ScriptTestCase):
         self.assertEqual(rows["Cost"]["formattedValue"], "$0.00")
         self.assertEqual(rows["Edits"]["formattedValue"], "+0 / -0")
         self.assertEqual(rows["Context"]["formattedValue"], "0%")
-        self.assertEqual(snapshot["metricsBarValue"], "0%")
 
     def test_snapshot_is_valid_custom_metrics_schema(self):
         snapshot, _ = self.run_script('{"model": {"display_name": "Opus 4.8"}}')
@@ -185,38 +229,6 @@ class StatusLineModeTest(ScriptTestCase):
 class HookModeTest(ScriptTestCase):
     """hook から呼ばれる経路 (デスクトップアプリではこちらだけが動く)。"""
 
-    def run_hook(self, entries, event="Stop"):
-        """transcript JSONL を作り、hook 入力を流してスナップショットを返す。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            transcript = Path(tmpdir) / "transcript.jsonl"
-            transcript.write_text(
-                "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries), encoding="utf-8"
-            )
-            snapshot, stdout = self.run_script(json.dumps({
-                "hook_event_name": event,
-                "session_id": "abc123",
-                "transcript_path": str(transcript),
-                "cwd": "/Users/so/.setup",
-            }))
-            # hook の stdout は会話へ混ざり得るので何も出さない
-            self.assertEqual(stdout, "")
-            return snapshot
-
-    def assistant_entry(self, **overrides):
-        entry = {
-            "type": "assistant",
-            "timestamp": "2026-07-23T09:19:24.246Z",
-            "cwd": "/Users/so/.setup",
-            "gitBranch": "feat/runcat-metrics-hook",
-            "effort": "high",
-            "message": {"model": "claude-opus-4-8", "usage": {
-                "input_tokens": 2, "cache_creation_input_tokens": 1970,
-                "cache_read_input_tokens": 138413, "output_tokens": 2163,
-            }},
-        }
-        entry.update(overrides)
-        return entry
-
     def test_transcript_renders_available_rows(self):
         snapshot = self.run_hook([
             {"type": "user", "timestamp": "2026-07-23T08:48:54.157Z", "cwd": "/Users/so/.setup"},
@@ -228,14 +240,14 @@ class HookModeTest(ScriptTestCase):
         self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
         # 142,548 / 200,000 = 71.274% → 小数第 1 位へ丸める
         self.assertEqual(rows["Context"]["formattedValue"], "71.3% · 142.5k/200k")
-        self.assertEqual(snapshot["metricsBarValue"], "71%")
         self.assertEqual(rows["Elapsed"]["formattedValue"], "30m")
         self.assertEqual(rows["Project"]["formattedValue"], "setup · feat/runcat-metrics-hook")
         self.assertEqual(rows["Session"]["formattedValue"], "RunCat 連携")
         self.assertEqual(rows["PR"]["formattedValue"], "#23")
-        # hook 入力からは取れない行は出さない
+        # hook 入力からは取れない行は出さない (5h / 7d は控えが無ければ同様)
         for absent in ("5h", "7d", "Cost", "Edits", "Agent"):
             self.assertNotIn(absent, rows)
+        self.assertNotIn("metricsBarValue", snapshot)
 
     def test_model_id_is_prettified(self):
         for model_id, expected in [
@@ -298,6 +310,79 @@ class HookModeTest(ScriptTestCase):
             self.assertEqual(proc.returncode, 0)
             self.assertEqual(proc.stdout, "")
             self.assertFalse(out.exists())  # 既存のカードを壊さない
+
+
+class RateLimitCacheTest(ScriptTestCase):
+    """レート制限は hook 入力に無いため、statusLine で取れた値を控えて使い回す。"""
+
+    CACHE_NAME = "runcat-rate-limits.json"
+
+    def statusline_payload(self, five_hour=None, seven_day=None):
+        limits = {}
+        if five_hour is not None:
+            limits["five_hour"] = five_hour
+        if seven_day is not None:
+            limits["seven_day"] = seven_day
+        return json.dumps({"model": {"display_name": "Opus 4.8"}, "rate_limits": limits})
+
+    def cache(self, workdir):
+        return json.loads((Path(workdir) / self.CACHE_NAME).read_text(encoding="utf-8"))
+
+    def test_statusline_caches_rate_limits_for_the_hook(self):
+        now = int(time.time())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.run_script(self.statusline_payload(
+                five_hour={"used_percentage": 23.5, "resets_at": now + 9_660 + 30},
+                seven_day={"used_percentage": 41.2, "resets_at": now + 273_600 + 30},
+            ), workdir=tmpdir)
+            self.assertEqual(self.cache(tmpdir)["five_hour"]["used_percentage"], 23.5)
+
+            snapshot = self.run_hook([self.assistant_entry()], workdir=tmpdir)
+            rows = self.rows(snapshot)
+            # 控えは最後に取れた時点の値で実際はそれ以上なので、下限として ≥ を付ける
+            self.assertEqual(rows["5h"]["formattedValue"], "≥23.5% · 2h41m left")
+            self.assertEqual(rows["7d"]["formattedValue"], "≥41.2% · 3d4h left")
+            self.assertEqual(snapshot["metricsBarValue"], "≥41%")
+            # 控えを使っても他の行は transcript 由来のまま
+            self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
+
+    def test_reset_windows_are_not_reused(self):
+        """リセット済みのウィンドウの使用率はもう当てにならないので出さない。"""
+        now = int(time.time())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.run_script(self.statusline_payload(
+                five_hour={"used_percentage": 23.5, "resets_at": now - 60},
+                seven_day={"used_percentage": 41.2, "resets_at": now + 273_600 + 30},
+            ), workdir=tmpdir)
+            rows = self.rows(self.run_hook([self.assistant_entry()], workdir=tmpdir))
+            self.assertNotIn("5h", rows)
+            self.assertEqual(rows["7d"]["formattedValue"], "≥41.2% · 3d4h left")
+
+    def test_windows_without_reset_time_are_not_cached(self):
+        """リセット時刻が無いと古さを判定できないため控えない。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.run_script(self.statusline_payload(
+                five_hour={"used_percentage": 23.5}), workdir=tmpdir)
+            self.assertFalse((Path(tmpdir) / self.CACHE_NAME).exists())
+            self.assertNotIn("5h", self.rows(self.run_hook([self.assistant_entry()], workdir=tmpdir)))
+
+    def test_statusline_without_rate_limits_keeps_the_cache(self):
+        """API キー利用などで制限が来ないターンがあっても、控えを消さない。"""
+        now = int(time.time())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.run_script(self.statusline_payload(
+                seven_day={"used_percentage": 41.2, "resets_at": now + 273_600 + 30}), workdir=tmpdir)
+            self.run_script('{"model": {"display_name": "Opus 4.8"}}', workdir=tmpdir)
+            self.assertEqual(self.cache(tmpdir)["seven_day"]["used_percentage"], 41.2)
+            self.assertIn("7d", self.rows(self.run_hook([self.assistant_entry()], workdir=tmpdir)))
+
+    def test_broken_cache_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / self.CACHE_NAME).write_text("{ truncated", encoding="utf-8")
+            snapshot = self.run_hook([self.assistant_entry()], workdir=tmpdir)
+            rows = self.rows(snapshot)
+            self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
+            self.assertNotIn("5h", rows)
 
 
 if __name__ == "__main__":
