@@ -18,12 +18,16 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "runcat-metrics.py"
 
+# カード上部に固定で並ぶレート制限の行。残りがセッション行
+LIMIT_TITLES = ("5h", "7d")
+
 
 class ScriptTestCase(unittest.TestCase):
     def run_script(self, stdin_text, workdir=None):
         """stdin を流してスクリプトを実行し、(スナップショット, stdout) を返す。
 
-        workdir を渡すと出力先を共有できる (レート制限の控えを跨ぐ実行の検証用)。
+        workdir を渡すと出力先を共有できる (レート制限の控えやセッション状態を
+        跨ぐ実行の検証用)。
         """
         if workdir is not None:
             return self.run_script_in(stdin_text, Path(workdir))
@@ -44,6 +48,16 @@ class ScriptTestCase(unittest.TestCase):
 
     def rows(self, snapshot):
         return {m["title"]: m for m in snapshot["metrics"]}
+
+    def sessions(self, snapshot):
+        """レート制限を除いた行 = セッション行 (カードに並ぶ順)。"""
+        return [m for m in snapshot["metrics"] if m["title"] not in LIMIT_TITLES]
+
+    def only_session(self, snapshot):
+        """セッションが 1 つである前提で、その行を返す。"""
+        rows = self.sessions(snapshot)
+        self.assertEqual(len(rows), 1, f"セッション行が 1 つではない: {rows}")
+        return rows[0]
 
     def run_hook(self, entries, event="Stop", workdir=None):
         """transcript JSONL を作り、hook 入力を流してスナップショットを返す。"""
@@ -84,9 +98,10 @@ class ScriptTestCase(unittest.TestCase):
 class StatusLineModeTest(ScriptTestCase):
     """ターミナルの statusLine から呼ばれる経路。"""
 
-    def test_full_payload_renders_every_row(self):
+    def test_full_payload_renders_the_session_row(self):
         now = int(time.time())
         payload = {
+            "session_id": "s1",
             "model": {"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
             "session_name": "runcat-metrics",
             "workspace": {
@@ -123,28 +138,26 @@ class StatusLineModeTest(ScriptTestCase):
 
         self.assertEqual(stdout, "Opus 4.8")
         self.assertEqual(snapshot["title"], "Claude Code")
-        # メニューバーへ出すのは週間制限の使用率 (整数へ丸める)
-        self.assertEqual(snapshot["metricsBarValue"], "41%")
-        self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · xhigh · think · fast")
-        self.assertEqual(rows["Context"]["formattedValue"], "31.35% · 62.7k/200k")
-        self.assertAlmostEqual(rows["Context"]["normalizedValue"], 0.3135)
+        # レート制限が先頭 2 行、その下がセッション行
+        self.assertEqual([m["title"] for m in snapshot["metrics"]][:2], ["5h", "7d"])
         self.assertEqual(rows["5h"]["formattedValue"], "23.5% · 2h41m left")
         self.assertEqual(rows["7d"]["formattedValue"], "41.2% · 3d4h left")
-        self.assertEqual(rows["Cost"]["formattedValue"], "$12.35")
-        self.assertEqual(rows["Elapsed"]["formattedValue"], "1h15m · API 2m")
-        self.assertEqual(rows["Edits"]["formattedValue"], "+156 / -23")
-        self.assertEqual(rows["Project"]["formattedValue"], "setup · feature-xyz")
-        self.assertEqual(rows["Session"]["formattedValue"], "runcat-metrics")
-        self.assertEqual(rows["Agent"]["formattedValue"], "security-reviewer")
-        self.assertEqual(rows["PR"]["formattedValue"], "#1234 · pending")
-        # 進捗バーは割合を持つ行にだけ付く
-        self.assertNotIn("normalizedValue", rows["Model"])
-        self.assertNotIn("normalizedValue", rows["Cost"])
+        # メニューバーへ出すのは週間制限の使用率 (整数へ丸める)
+        self.assertEqual(snapshot["metricsBarValue"], "41%")
 
-    def test_empty_payload_falls_back_to_model_row_only(self):
+        session = self.only_session(snapshot)
+        self.assertEqual(session["title"], "setup")
+        # 使用率 · モデルと effort · 経過。think/fast と API 時間は一覧では落とす
+        self.assertEqual(session["formattedValue"], "31.4% · Opus 4.8 · xhigh · 1h15m")
+        self.assertAlmostEqual(session["normalizedValue"], 0.3135)
+
+    def test_empty_payload_still_renders_one_session(self):
         snapshot, stdout = self.run_script("{}")
         self.assertEqual(stdout, "Claude Code")
-        self.assertEqual([m["title"] for m in snapshot["metrics"]], ["Model"])
+        session = self.only_session(snapshot)
+        # プロジェクト名もセッション名も無いときのラベル
+        self.assertEqual(session["title"], "session")
+        self.assertEqual(session["formattedValue"], "Claude Code")
         self.assertNotIn("metricsBarValue", snapshot)
 
     def test_malformed_stdin_does_not_crash(self):
@@ -152,7 +165,7 @@ class StatusLineModeTest(ScriptTestCase):
             with self.subTest(stdin=stdin_text):
                 snapshot, stdout = self.run_script(stdin_text)
                 self.assertEqual(stdout, "Claude Code")
-                self.assertEqual(self.rows(snapshot)["Model"]["formattedValue"], "Claude Code")
+                self.assertEqual(self.only_session(snapshot)["formattedValue"], "Claude Code")
 
     def test_wrong_types_are_ignored_instead_of_rendered(self):
         payload = {
@@ -164,8 +177,8 @@ class StatusLineModeTest(ScriptTestCase):
             "fast_mode": "yes",  # true でなければマーカーを出さない
         }
         snapshot, _ = self.run_script(json.dumps(payload))
-        self.assertEqual([m["title"] for m in snapshot["metrics"]], ["Model"])
-        self.assertEqual(self.rows(snapshot)["Model"]["formattedValue"], "Claude Code")
+        self.assertEqual([m["title"] for m in snapshot["metrics"]], ["session"])
+        self.assertEqual(self.only_session(snapshot)["formattedValue"], "Claude Code")
 
     def test_expired_reset_and_over_limit_percentage(self):
         payload = {"rate_limits": {"five_hour": {"used_percentage": 150, "resets_at": 1}}}
@@ -182,21 +195,20 @@ class StatusLineModeTest(ScriptTestCase):
             "total_output_tokens": 1_500, "context_window_size": 1_000_000,
         }}
         snapshot, _ = self.run_script(json.dumps(payload))
-        self.assertEqual(self.rows(snapshot)["Context"]["formattedValue"], "8.4% · 84.5k/1M")
+        self.assertEqual(self.only_session(snapshot)["formattedValue"], "8.4% · Claude Code")
 
     def test_project_falls_back_to_directory_name(self):
         payload = {"workspace": {"project_dir": "/Users/so/foo/"}, "worktree": {"name": "my-feature"}}
         snapshot, _ = self.run_script(json.dumps(payload))
-        self.assertEqual(self.rows(snapshot)["Project"]["formattedValue"], "foo · my-feature")
+        # 同名プロジェクトが他に無いので worktree 名は添えない
+        self.assertEqual(self.only_session(snapshot)["title"], "foo")
 
     def test_zero_values_are_rendered_not_dropped(self):
-        payload = {"cost": {"total_cost_usd": 0, "total_lines_added": 0, "total_lines_removed": 0},
-                   "context_window": {"used_percentage": 0}}
+        payload = {"context_window": {"used_percentage": 0}}
         snapshot, _ = self.run_script(json.dumps(payload))
-        rows = self.rows(snapshot)
-        self.assertEqual(rows["Cost"]["formattedValue"], "$0.00")
-        self.assertEqual(rows["Edits"]["formattedValue"], "+0 / -0")
-        self.assertEqual(rows["Context"]["formattedValue"], "0%")
+        session = self.only_session(snapshot)
+        self.assertEqual(session["formattedValue"], "0% · Claude Code")
+        self.assertEqual(session["normalizedValue"], 0.0)
 
     def test_snapshot_is_valid_custom_metrics_schema(self):
         snapshot, _ = self.run_script('{"model": {"display_name": "Opus 4.8"}}')
@@ -233,25 +245,20 @@ class StatusLineModeTest(ScriptTestCase):
 class HookModeTest(ScriptTestCase):
     """hook から呼ばれる経路 (デスクトップアプリではこちらだけが動く)。"""
 
-    def test_transcript_renders_available_rows(self):
+    def test_transcript_renders_the_session_row(self):
         snapshot = self.run_hook([
             {"type": "user", "timestamp": "2026-07-23T08:48:54.157Z", "cwd": "/Users/so/.setup"},
             {"type": "custom-title", "customTitle": "RunCat 連携"},
             {"type": "pr-link", "prNumber": 23, "prRepository": "shinyaoguri/setup"},
             self.assistant_entry(),
         ])
-        rows = self.rows(snapshot)
-        self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
+        session = self.only_session(snapshot)
+        self.assertEqual(session["title"], "setup")
         # Opus は 1M 文脈。142,548 / 1M = 14.2548% → 小数第 1 位へ丸める
-        self.assertEqual(rows["Context"]["formattedValue"], "14.3% · 142.5k/1M")
-        self.assertEqual(rows["Elapsed"]["formattedValue"], "30m")
-        # 28 幅を超える値は切り詰める (カードが横に伸びるのを防ぐ)
-        self.assertEqual(rows["Project"]["formattedValue"], "setup · feat/runcat-metrics…")
-        self.assertEqual(rows["Session"]["formattedValue"], "RunCat 連携")
-        self.assertEqual(rows["PR"]["formattedValue"], "#23")
-        # hook 入力からは取れない行は出さない (5h / 7d は控えが無ければ同様)
-        for absent in ("5h", "7d", "Cost", "Edits", "Agent"):
-            self.assertNotIn(absent, rows)
+        self.assertEqual(session["formattedValue"], "14.3% · Opus 4.8 · high · 30m")
+        # hook 入力からは取れないレート制限は出さない (控えが無ければ同様)
+        for absent in LIMIT_TITLES:
+            self.assertNotIn(absent, self.rows(snapshot))
         self.assertNotIn("metricsBarValue", snapshot)
 
     def test_model_id_is_prettified(self):
@@ -264,26 +271,27 @@ class HookModeTest(ScriptTestCase):
             with self.subTest(model_id=model_id):
                 snapshot = self.run_hook([self.assistant_entry(
                     message={"model": model_id, "usage": {}}, effort=None)])
-                self.assertEqual(self.rows(snapshot)["Model"]["formattedValue"], expected)
+                # エントリが 1 つだけなので経過は 0s。使用率は usage が空で出ない
+                self.assertEqual(
+                    self.only_session(snapshot)["formattedValue"], f"{expected} · 0s")
 
     def test_worktree_cwd_falls_back_to_the_repository_name(self):
         """worktree の中では末尾が worktree 名になるので、元のリポジトリ名を出す。"""
         snapshot = self.run_hook([self.assistant_entry(
             cwd="/Users/so/Repos/myapp/.claude/worktrees/feat-something-250692",
             gitBranch="feat/something")])
-        self.assertEqual(
-            self.rows(snapshot)["Project"]["formattedValue"], "myapp · feat/something")
+        self.assertEqual(self.only_session(snapshot)["title"], "myapp")
 
     def test_sidechain_entries_are_ignored(self):
         """サブエージェント (isSidechain) の usage は本セッションの文脈量ではない。"""
         snapshot = self.run_hook([
+            {"type": "user", "timestamp": "2026-07-23T08:48:54.157Z", "cwd": "/Users/so/.setup"},
             self.assistant_entry(),
             self.assistant_entry(isSidechain=True, message={
                 "model": "claude-haiku-4-5", "usage": {"input_tokens": 10, "output_tokens": 5}}),
         ])
-        rows = self.rows(snapshot)
-        self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
-        self.assertEqual(rows["Context"]["formattedValue"], "14.3% · 142.5k/1M")
+        self.assertEqual(
+            self.only_session(snapshot)["formattedValue"], "14.3% · Opus 4.8 · high · 30m")
 
     def test_broken_transcript_lines_are_skipped(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -295,7 +303,7 @@ class HookModeTest(ScriptTestCase):
             snapshot, stdout = self.run_script(json.dumps({
                 "hook_event_name": "Stop", "transcript_path": str(transcript)}))
             self.assertEqual(stdout, "")
-            self.assertEqual(self.rows(snapshot)["Model"]["formattedValue"], "Opus 4.8 · high")
+            self.assertIn("Opus 4.8", self.only_session(snapshot)["formattedValue"])
 
     def test_huge_transcript_reads_only_the_tail(self):
         """毎ツール呼び出しで走るため、巨大な transcript でも末尾しか読まない。"""
@@ -305,10 +313,10 @@ class HookModeTest(ScriptTestCase):
                   for _ in range(400)]  # 800KB 超 > TRANSCRIPT_TAIL_BYTES (256KB)
         start = {"type": "user", "timestamp": "2026-07-23T08:48:54.157Z", "cwd": "/Users/so/.setup"}
         snapshot = self.run_hook([start] + filler + [self.assistant_entry()])
-        rows = self.rows(snapshot)
-        self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
         # 先頭行だけは別途読むので、セッション開始からの経過時間になる (末尾からなら 9m)
-        self.assertEqual(rows["Elapsed"]["formattedValue"], "30m")
+        self.assertTrue(
+            self.only_session(snapshot)["formattedValue"].endswith("30m"),
+            self.only_session(snapshot)["formattedValue"])
 
     def test_missing_transcript_does_not_fail_the_hook(self):
         """hook を止めないため、transcript が読めなくても異常終了しない。"""
@@ -362,8 +370,8 @@ class RateLimitCacheTest(ScriptTestCase):
             self.assertEqual(rows["5h"]["formattedValue"], "≥23.5% · 2h41m left")
             self.assertEqual(rows["7d"]["formattedValue"], "≥41.2% · 3d4h left")
             self.assertEqual(snapshot["metricsBarValue"], "≥41%")
-            # 控えを使っても他の行は transcript 由来のまま
-            self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
+            # 控えを使ってもセッション行は transcript 由来のまま
+            self.assertIn("Opus 4.8", self.only_session(snapshot)["formattedValue"])
 
     def test_reset_windows_are_not_reused(self):
         """リセット済みのウィンドウの使用率はもう当てにならないので出さない。"""
@@ -391,7 +399,8 @@ class RateLimitCacheTest(ScriptTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             self.run_script(self.statusline_payload(
                 seven_day={"used_percentage": 41.2, "resets_at": now + 273_600 + 30}), workdir=tmpdir)
-            self.run_script('{"model": {"display_name": "Opus 4.8"}}', workdir=tmpdir)
+            self.run_script('{"session_id": "abc123", "model": {"display_name": "Opus 4.8"}}',
+                            workdir=tmpdir)
             self.assertEqual(self.cache(tmpdir)["seven_day"]["used_percentage"], 41.2)
             self.assertIn("7d", self.rows(self.run_hook([self.assistant_entry()], workdir=tmpdir)))
 
@@ -399,9 +408,8 @@ class RateLimitCacheTest(ScriptTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             (Path(tmpdir) / self.CACHE_NAME).write_text("{ truncated", encoding="utf-8")
             snapshot = self.run_hook([self.assistant_entry()], workdir=tmpdir)
-            rows = self.rows(snapshot)
-            self.assertEqual(rows["Model"]["formattedValue"], "Opus 4.8 · high")
-            self.assertNotIn("5h", rows)
+            self.assertIn("Opus 4.8", self.only_session(snapshot)["formattedValue"])
+            self.assertNotIn("5h", self.rows(snapshot))
 
 
 class MultiSessionTest(ScriptTestCase):
@@ -443,20 +451,15 @@ class MultiSessionTest(ScriptTestCase):
             self.assertEqual(rows["setup"]["formattedValue"], "21% · Opus 5 · 1h15m")
             self.assertEqual(rows["divive"]["formattedValue"], "8% · Opus 5 · 3m")
             self.assertAlmostEqual(rows["setup"]["normalizedValue"], 0.21)
-            # 畳んだので 1 項目 1 行の詳細レイアウトは出さない
-            for absent in ("Model", "Context", "Project", "Elapsed"):
-                self.assertNotIn(absent, rows)
 
-    def test_single_session_keeps_the_detail_layout(self):
-        """1 つだけのときは畳まず詳細を出す (情報量を落とさない)。"""
+    def test_a_single_session_uses_the_same_layout(self):
+        """セッションが 1 つでも形を変えない (行が増減して見た目が動かないように)。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             snapshot, _ = self.run_script(
                 self.statusline_payload("s1", "setup", 21, 4_500_000), workdir=tmpdir)
-            rows = self.rows(snapshot)
-            self.assertEqual(rows["Model"]["formattedValue"], "Opus 5")
-            self.assertEqual(rows["Context"]["formattedValue"], "21%")
-            self.assertEqual(rows["Project"]["formattedValue"], "setup")
-            self.assertNotIn("setup", rows)
+            self.assertEqual([m["title"] for m in snapshot["metrics"]], ["setup"])
+            self.assertEqual(
+                self.rows(snapshot)["setup"]["formattedValue"], "21% · Opus 5 · 1h15m")
 
     def test_stale_sessions_are_dropped(self):
         """終了したセッションはカードに残さない (更新が途絶えたら畳む)。"""
@@ -465,10 +468,7 @@ class MultiSessionTest(ScriptTestCase):
             self.age_session(tmpdir, 31 * 60)  # SESSION_TTL_SECONDS (30 分) 超え
             snapshot, _ = self.run_script(
                 self.statusline_payload("s2", "divive", 8, 180_000), workdir=tmpdir)
-            rows = self.rows(snapshot)
-            # 生きているのは s2 だけなので詳細レイアウトに戻る
-            self.assertEqual(rows["Project"]["formattedValue"], "divive")
-            self.assertNotIn("setup", rows)
+            self.assertEqual([m["title"] for m in self.sessions(snapshot)], ["divive"])
 
     def test_same_project_rows_are_told_apart_by_branch(self):
         """同じリポジトリの worktree を 2 つ開くとラベルが衝突するのでブランチを添える。"""
@@ -481,8 +481,32 @@ class MultiSessionTest(ScriptTestCase):
             self.assertIn("setup · feat/a", rows)
             self.assertIn("setup · feat/b", rows)
 
-    def test_rate_limits_lead_the_folded_card(self):
-        """畳んだ形でもレート制限は主役のまま先頭に置く。"""
+    def test_same_branch_rows_fall_back_to_the_session_name(self):
+        """同じ worktree で 2 つ開くとブランチでも区別できないので、セッション名で分ける。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for session_id, title in (("s1", "レビューの続き"), ("s2", "テスト追加")):
+                payload = json.loads(
+                    self.statusline_payload(session_id, "setup", 21, 60_000, branch="main"))
+                payload["session_name"] = title
+                self.run_script(json.dumps(payload), workdir=tmpdir)
+            snapshot, _ = self.run_script(json.dumps(payload), workdir=tmpdir)
+            labels = [m["title"] for m in self.sessions(snapshot)]
+            self.assertEqual(sorted(labels), ["テスト追加", "レビューの続き"])
+
+    def test_session_name_is_only_used_when_the_branch_collides(self):
+        """ブランチで区別できるならセッション名は使わない (ラベルを短く保つ)。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for session_id, branch in (("s1", "feat/a"), ("s2", "feat/b")):
+                payload = json.loads(
+                    self.statusline_payload(session_id, "setup", 21, 60_000, branch=branch))
+                payload["session_name"] = "使わないはずの名前"
+                self.run_script(json.dumps(payload), workdir=tmpdir)
+            snapshot, _ = self.run_script(json.dumps(payload), workdir=tmpdir)
+            labels = [m["title"] for m in self.sessions(snapshot)]
+            self.assertEqual(sorted(labels), ["setup · feat/a", "setup · feat/b"])
+
+    def test_rate_limits_lead_the_card(self):
+        """レート制限は主役なので常に先頭に置く。"""
         now = int(time.time())
         with tempfile.TemporaryDirectory() as tmpdir:
             self.run_script(self.statusline_payload("s1", "setup", 21, 60_000), workdir=tmpdir)
@@ -513,36 +537,53 @@ class MultiSessionTest(ScriptTestCase):
 
 
 class DisplayWidthTest(ScriptTestCase):
-    """カード幅は一番長い行に引きずられるため、可変長の値は切り詰める。"""
+    """カード幅は一番長い行に引きずられるため、ラベルと値を切り詰める。"""
 
     def width(self, text):
         return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
 
-    def test_long_values_are_clipped(self):
+    def test_long_labels_are_clipped(self):
         payload = {
-            "session_name": "アドオンのプロダクション対応レビューと後片付け",
-            "workspace": {
-                "repo": {"name": "setup"},
-                "git_worktree": "global-claude-md-symlinks-250692",
-            },
+            "workspace": {"repo": {"name": "global-claude-md-symlinks-250692"}},
         }
         snapshot, _ = self.run_script(json.dumps(payload))
-        rows = self.rows(snapshot)
-        # 全角は 2 幅として数える (28 幅 = 全角 14 文字 / 半角 28 文字)
-        self.assertEqual(rows["Session"]["formattedValue"], "アドオンのプロダクション対…")
-        self.assertEqual(rows["Project"]["formattedValue"], "setup · global-claude-md-sy…")
-        for title in ("Session", "Project"):
-            self.assertLessEqual(self.width(rows[title]["formattedValue"]), 28)
+        # ラベルは 20 幅まで
+        self.assertEqual(self.only_session(snapshot)["title"], "global-claude-md-sy…")
+        self.assertLessEqual(self.width(self.only_session(snapshot)["title"]), 20)
+
+    def test_long_values_are_clipped(self):
+        payload = {
+            "model": {"display_name": "Some Very Long Model Name Indeed"},
+            "workspace": {"repo": {"name": "setup"}},
+            "context_window": {"used_percentage": 21},
+            "effort": {"level": "xhigh"},
+        }
+        snapshot, _ = self.run_script(json.dumps(payload))
+        value = self.only_session(snapshot)["formattedValue"]
+        self.assertLessEqual(self.width(value), 32)
+        self.assertTrue(value.endswith("…"), value)
+        # 先頭の使用率は必ず読める
+        self.assertTrue(value.startswith("21% · "), value)
+
+    def test_full_width_labels_count_as_two(self):
+        payload = {"session_name": "アドオンのプロダクション対応レビューと後片付け"}
+        snapshot, _ = self.run_script(json.dumps(payload))
+        # プロジェクト名が無ければセッション名をラベルにする。全角は 2 幅 (20 幅 = 全角 10 文字)
+        self.assertEqual(self.only_session(snapshot)["title"], "アドオンのプロダク…")
+        self.assertLessEqual(self.width(self.only_session(snapshot)["title"]), 20)
 
     def test_short_values_are_left_alone(self):
-        payload = {"session_name": "runcat", "workspace": {"repo": {"name": "setup"}}}
-        rows = self.rows(self.run_script(json.dumps(payload))[0])
-        self.assertEqual(rows["Session"]["formattedValue"], "runcat")
-        self.assertEqual(rows["Project"]["formattedValue"], "setup")
+        payload = {"workspace": {"repo": {"name": "setup"}}, "model": {"display_name": "Opus 5"}}
+        snapshot, _ = self.run_script(json.dumps(payload))
+        self.assertEqual(self.only_session(snapshot)["title"], "setup")
+        self.assertEqual(self.only_session(snapshot)["formattedValue"], "Opus 5")
 
 
 class ContextWindowTest(ScriptTestCase):
     """hook 入力には文脈の上限が無いので、モデル名から引く。"""
+
+    # 経過時間を既存テストと揃えるための開始エントリ (これが無いと 0s になる)
+    START = {"type": "user", "timestamp": "2026-07-23T08:48:54.157Z", "cwd": "/Users/so/.setup"}
 
     def usage_entry(self, model, cache_read):
         return self.assistant_entry(message={"model": model, "usage": {
@@ -552,23 +593,27 @@ class ContextWindowTest(ScriptTestCase):
 
     def test_claude_5_models_get_the_1m_window(self):
         """Opus / Sonnet / Fable 5 はいずれも 1M が既定 (ベータヘッダ不要)。"""
-        for model in ("claude-opus-5", "claude-sonnet-5", "claude-fable-5"):
+        for model, name in (("claude-opus-5", "Opus 5"), ("claude-sonnet-5", "Sonnet 5"),
+                            ("claude-fable-5", "Fable 5")):
             with self.subTest(model=model):
-                rows = self.rows(self.run_hook([self.usage_entry(model, 411_465)]))
+                snapshot = self.run_hook([self.START, self.usage_entry(model, 411_465)])
+                session = self.only_session(snapshot)
                 # 415,600 / 1M = 41.56% → 小数第 1 位へ丸める
-                self.assertEqual(rows["Context"]["formattedValue"], "41.6% · 415.6k/1M")
-                self.assertAlmostEqual(rows["Context"]["normalizedValue"], 0.416)
+                self.assertEqual(session["formattedValue"], f"41.6% · {name} · high · 30m")
+                self.assertAlmostEqual(session["normalizedValue"], 0.416)
 
     def test_haiku_gets_the_200k_window(self):
         """現行モデルで 200k なのは Haiku 4.5 だけ。"""
-        rows = self.rows(self.run_hook([self.usage_entry("claude-haiku-4-5-20251001", 138_413)]))
-        self.assertEqual(rows["Context"]["formattedValue"], "71.3% · 142.5k/200k")
+        snapshot = self.run_hook([self.START, self.usage_entry("claude-haiku-4-5-20251001", 138_413)])
+        self.assertEqual(
+            self.only_session(snapshot)["formattedValue"], "71.3% · Haiku 4.5 · high · 30m")
 
     def test_usage_above_the_known_window_does_not_exceed_100_percent(self):
         """表に無い上限のモデルでも 100% 超えの表示にはしない。"""
-        rows = self.rows(self.run_hook([self.usage_entry("claude-haiku-4-5", 411_465)]))
-        self.assertEqual(rows["Context"]["formattedValue"], "100% · 415.6k/415.6k")
-        self.assertEqual(rows["Context"]["normalizedValue"], 1.0)
+        snapshot = self.run_hook([self.START, self.usage_entry("claude-haiku-4-5", 411_465)])
+        session = self.only_session(snapshot)
+        self.assertTrue(session["formattedValue"].startswith("100% · "), session["formattedValue"])
+        self.assertEqual(session["normalizedValue"], 1.0)
 
 
 if __name__ == "__main__":
