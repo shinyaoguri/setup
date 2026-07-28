@@ -2,12 +2,22 @@
 # Claude Code グローバル設定 (CLAUDE.md / settings.json / statusLine スクリプト) と
 # 全プロジェクト共通スキル (claude/skills/*) のリンク
 
-# runcat-metrics.py は RunCat Neo の Custom Metrics 連携 (~/.claude/runcat-usage.json を
-# 書き出す)。上流サンプルをベースに全メトリクスを出すよう拡張し、statusLine が動かない
-# デスクトップアプリ向けに hook 経由の入口も持たせている:
+# runcat-metrics.py は RunCat Neo の Custom Metrics 連携。上流サンプルをベースに拡張し、
+# statusLine が動かないデスクトップアプリ向けに hook 経由の入口も持たせている:
 # https://github.com/runcat-dev/RunCatNeo/tree/main/docs/samples/claude-code
 # 呼び出し口は settings.json の statusLine / hooks、テストは
 # claude/tests/runcat_metrics_test.py (python3 で直接実行)
+#
+# カードは 2 枚に分けて書き出す。RunCat 側には別々のソースとして登録する:
+#
+#   設定 → Metrics → Custom Metrics → Add Custom Metrics Source
+#     ~/.claude/runcat-usage.json     レート制限 (5h / 週間 / モデル別)
+#     ~/.claude/runcat-sessions.json  動いているセッションの一覧
+#
+# この登録だけは RunCat アプリ側の設定 (security-scoped bookmark) なので playbook では
+# 面倒を見られない。代わりに、登録時にファイルが無いと選べないため、下の seed タスクで
+# 空のカードを先に置いておく。カードそのものは実行時の生成物なのでリポジトリでは
+# 管理しない (管理するのは書き出す側のスクリプトと、それを呼ぶ settings.json)。
 - name: Define Claude global config files
   ansible.builtin.set_fact:
     claude_config_files:
@@ -45,6 +55,13 @@
     state: link
     force: true
   loop: "{{ claude_config_files }}"
+
+# Claude Code を一度も動かしていない環境でも RunCat へ登録できるよう、空のカードを置く。
+# スクリプト側が「既にあるカードは触らない」ので、走らせ直しても中身は消えない。
+- name: Seed RunCat metrics cards so they can be registered in RunCat
+  ansible.builtin.command:
+    cmd: "{{ ansible_facts['env']['HOME'] }}/.claude/runcat-metrics.py --seed"
+    creates: "{{ ansible_facts['env']['HOME'] }}/.claude/runcat-sessions.json"
 
 # 全プロジェクト共通の汎用スキル。実体は claude/skills/<name>/ に置き、
 # 各スキルを ~/.claude/skills/<name> へ個別 symlink する。個別リンクなので
