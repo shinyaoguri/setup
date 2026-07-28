@@ -28,8 +28,9 @@ RunCat Neo の Custom Metrics 形式
 カードはセッション数によらず同じ形をとる。行が増減して見た目が変わらない方が
 一覧として読みやすいため:
 
-    5h        23.5% · 2h41m left     レート制限 (取れたときだけ)
-    7d        41.2% · 3d4h left
+    5h        0% · 2h41m left        レート制限 (取れたときだけ)
+    7d        18% · 4d12h left
+    7d Fable  10% · 4d12h left       モデル別の枠があればそれも
     setup     21% · Opus 5 · 12m     ここから下はセッションごとに 1 行
     divive    8% · Opus 5 · 3m
 
@@ -43,11 +44,14 @@ RunCat Neo の Custom Metrics 形式
 
 メニューバーへ出す値 (metricsBarValue) は週間制限の使用率。
 
-レート制限は hook 入力にも transcript にも無いため、statusLine モードで取れた値を
-控え (RATE_LIMITS_CACHE)、hook モードではリセット時刻を過ぎるまでそれを使う。
-控えは最後に取れた時点の値で実際はそれ以上なので、下限として ≥ を付けて出す。
-モデル別の週間制限 (Opus / Sonnet / Fable) は Claude Code が statusLine へ渡すのが
-five_hour と seven_day だけのため出せない (2.1.212 時点)。
+レート制限は Claude Code の /usage と同じ使用量エンドポイント (USAGE_URL) から取る。
+statusLine が渡す rate_limits は five_hour と seven_day だけで、モデル別の週間制限
+(`7d Fable` など) はそこに来ないため。応答の limits 配列を kind と scope で読むので、
+枠が増えても拾える。トークンは keychain から読み、プロセスの中だけで使う。
+
+非公式・非文書化の API なので、壊れたときは statusLine 入力 → その控え
+(RATE_LIMITS_CACHE) の順に落ち、モデル別の行が消えるだけで他は出続ける。控えや
+古い応答から読んだ値は、その後も使用率は上がる一方なので下限として ≥ を付ける。
 
 文脈の上限は statusLine 入力にしか無い。hook モードではモデル名から引く
 (200k なのは Haiku 4.5 だけで、Claude 5 系はいずれも 1M が既定)。
@@ -68,16 +72,34 @@ version・output_style.name・vim.mode (常時見る価値が薄い)、exceeds_2
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unicodedata
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 OUT = Path(os.environ.get("RUNCAT_OUT_FILE", str(Path.home() / ".claude" / "runcat-usage.json")))
 
-# statusLine で取れたレート制限の控え (hook モードから読む)
+# statusLine で取れたレート制限の控え (usage API が使えないときのフォールバック)
 RATE_LIMITS_CACHE = OUT.parent / "runcat-rate-limits.json"
+
+# Claude Code の /usage と同じ使用量エンドポイント。statusLine が渡す rate_limits は
+# five_hour と seven_day だけで、モデル別の週間制限はここからしか取れない。
+# 非公式・非文書化のため、壊れたら黙って statusLine の控えへ落ちる (行が消えるだけ)。
+# RUNCAT_USAGE_URL はテストから file:// のスタブを差すための差し替え口。
+USAGE_URL = os.environ.get("RUNCAT_USAGE_URL", "https://api.anthropic.com/api/oauth/usage")
+USAGE_CACHE = OUT.parent / "runcat-usage-limits.json"
+
+# hook は毎ツール呼び出しで走るので、この間隔より短ければ控えを使い回す
+USAGE_MAX_AGE_SECONDS = 60
+
+# hook を待たせないための上限。落ちても諦めて次の実行に任せる
+USAGE_TIMEOUT_SECONDS = 3
+
+# Claude Code が OAuth トークンを預けている keychain のサービス名
+KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 # セッションごとの状態 (<session_id>.json)。カードはここを集約して組む
 SESSIONS_DIR = OUT.parent / "runcat-sessions"
@@ -268,6 +290,121 @@ def fmt_bar_value(window, stale=False):
     return f"{'≥' if stale else ''}{used:.0f}%"
 
 
+# --- 使用量エンドポイント --------------------------------------------------------
+
+def oauth_token():
+    """Claude Code の OAuth トークンを keychain から読む。
+
+    値はこのプロセスの中だけで使い、控えにもログにも書かない。
+    """
+    proc = subprocess.run(
+        ["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if proc.returncode != 0:
+        return None
+    account = obj(json.loads(proc.stdout), "claudeAiOauth")
+    return account.get("accessToken") or account.get("access_token")
+
+
+def fetch_usage():
+    """使用量エンドポイントを叩いて生のレスポンスを返す。"""
+    headers = {"anthropic-beta": "oauth-2025-04-20"}
+    if not USAGE_URL.startswith("file:"):  # file: はテスト用スタブ
+        token = oauth_token()
+        if not token:
+            return None
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(USAGE_URL, headers=headers)
+    with urllib.request.urlopen(request, timeout=USAGE_TIMEOUT_SECONDS) as response:
+        return json.load(response)
+
+
+def usage_label(entry):
+    """limits の 1 件をカードのラベルへ。読めない種別は捨てる。"""
+    kind = entry.get("kind")
+    if kind == "session":
+        return "5h"
+    if kind == "weekly_all":
+        return "7d"
+    if kind == "weekly_scoped":
+        model = obj(entry, "scope", "model").get("display_name")
+        return f"7d {model}" if model else None
+    return None
+
+
+def rows_from_usage(payload, stale=False):
+    """レスポンスの limits 配列をレート制限の行へ。
+
+    kind と scope からラベルを決めるので、モデル別の枠が増えても拾える。
+    """
+    rows = []
+    limits = payload.get("limits") if isinstance(payload, dict) else None
+    for entry in limits or []:
+        if not isinstance(entry, dict):
+            continue
+        used = num(entry.get("percent"))
+        label = usage_label(entry)
+        if used is None or not label:
+            continue
+        resets_at = parse_ts(entry.get("resets_at"))
+        rows.append({
+            "label": label,
+            "used_percentage": used,
+            "resets_at": resets_at.timestamp() if resets_at else None,
+            "stale": stale,
+        })
+    return rows
+
+
+def usage_limits(now_epoch):
+    """使用量エンドポイントから取れたレート制限の行。取れなければ空。
+
+    hook は毎ツール呼び出しで走るため、USAGE_MAX_AGE_SECONDS の間は控えを使う。
+    再取得に失敗したときは古い控えで凌ぐ (使用率は上がる一方なので ≥ を付ける)。
+    """
+    try:
+        cached = json.loads(USAGE_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        cached = None
+    fetched_at = num(cached.get("fetched_at")) if isinstance(cached, dict) else None
+    if fetched_at is not None and now_epoch - fetched_at < USAGE_MAX_AGE_SECONDS:
+        return rows_from_usage(cached.get("payload"))
+
+    try:
+        payload = fetch_usage()
+    except Exception:
+        payload = None
+    if payload is not None:
+        try:
+            write_json(USAGE_CACHE, {"fetched_at": now_epoch, "payload": payload})
+        except Exception:
+            pass
+        return rows_from_usage(payload)
+    if isinstance(cached, dict) and cached.get("payload"):
+        return rows_from_usage(cached["payload"], stale=True)
+    return []
+
+
+def rows_from_windows(windows, stale):
+    """statusLine 由来の five_hour / seven_day を行へ (usage API のフォールバック)。"""
+    rows = []
+    for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
+        window = windows.get(key) or {}
+        used = num(window.get("used_percentage"))
+        if used is None:
+            continue
+        rows.append({
+            "label": label,
+            "used_percentage": used,
+            "resets_at": num(window.get("resets_at")),
+            "stale": stale,
+        })
+    return rows
+
+
+# --- レート制限の控え (statusLine 由来) --------------------------------------------
+
 def save_rate_limits(windows):
     """statusLine で取れたレート制限を hook モード用に控える。"""
     kept = {}
@@ -388,15 +525,15 @@ def session_summary(state):
 
 # --- カードの組み立て -----------------------------------------------------------
 
-def build_card(states, limits, now_epoch, stale):
+def build_card(states, limit_rows, now_epoch):
     """生きているセッションからカードを組む。
 
     レート制限を頭に置き、以降はセッションごとに 1 行。セッション数によらず
     同じ形にすることで、行が増減して見た目が変わらないようにしている。
     """
     metrics = [
-        rate_limit_row("5h", limits.get("five_hour", {}), now_epoch, stale=stale),
-        rate_limit_row("7d", limits.get("seven_day", {}), now_epoch, stale=stale),
+        rate_limit_row(limit["label"], limit, now_epoch, stale=limit.get("stale", False))
+        for limit in limit_rows
     ]
     for state in states:
         ctx_pct = num(state.get("ctx_pct"))
@@ -405,7 +542,9 @@ def build_card(states, limits, now_epoch, stale):
             session_summary(state),
             ctx_pct / 100 if ctx_pct is not None else None,
         ))
-    return snapshot(metrics, fmt_bar_value(limits.get("seven_day", {}), stale=stale))
+    # メニューバーは週間 (全モデル) の使用率
+    weekly = next((limit for limit in limit_rows if limit["label"] == "7d"), {})
+    return snapshot(metrics, fmt_bar_value(weekly, stale=weekly.get("stale", False)))
 
 
 # --- statusLine モード ---------------------------------------------------------
@@ -583,11 +722,30 @@ def from_transcript(path, session_id=None):
 
 # --- エントリポイント -----------------------------------------------------------
 
-def render(state, limits, now_epoch, stale):
+def render(state, limit_rows, now_epoch):
     """自分の状態を保存し、生きている全セッションからカードを組んで書き出す。"""
     save_session(state)
     states = load_sessions(now_epoch, current_id=state.get("session_id"))
-    write_json(OUT, build_card(states, limits, now_epoch, stale))
+    write_json(OUT, build_card(states, limit_rows, now_epoch))
+
+
+def resolve_limits(payload, now_epoch):
+    """出すべきレート制限の行を決める。
+
+    使用量エンドポイントが使えればそれだけで足りる (5h / 週間 / モデル別が揃う)。
+    落ちているときは statusLine 入力、それも無ければ控えへ順に落ちる。
+    """
+    rows = usage_limits(now_epoch)
+    if rows:
+        return rows
+    windows = {
+        "five_hour": obj(payload, "rate_limits", "five_hour"),
+        "seven_day": obj(payload, "rate_limits", "seven_day"),
+    }
+    rows = rows_from_windows(windows, stale=False)
+    if rows:
+        return rows
+    return rows_from_windows(load_rate_limits(now_epoch), stale=True)
 
 
 def main():
@@ -604,21 +762,20 @@ def main():
         # hook を止めないよう、失敗しても黙って終了する
         try:
             state = from_transcript(payload["transcript_path"], payload.get("session_id"))
-            # レート制限は hook 入力に無いので statusLine モードの控えを使う
-            render(state, load_rate_limits(now_epoch), now_epoch, stale=True)
+            render(state, resolve_limits({}, now_epoch), now_epoch)
         except Exception:
             pass
         return
 
     state, model_name = from_statusline(payload)
 
-    # レート制限: hook モード (デスクトップアプリ) では取れないのでここで控えておく
+    # 使用量エンドポイントが落ちたときのために statusLine 由来の値を控えておく
     five_hour = obj(payload, "rate_limits", "five_hour")
     seven_day = obj(payload, "rate_limits", "seven_day")
     if five_hour or seven_day:
         save_rate_limits({"five_hour": five_hour, "seven_day": seven_day})
 
-    render(state, {"five_hour": five_hour, "seven_day": seven_day}, now_epoch, stale=False)
+    render(state, resolve_limits(payload, now_epoch), now_epoch)
     print(model_name)
 
 

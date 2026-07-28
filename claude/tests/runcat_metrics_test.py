@@ -22,26 +22,37 @@ SCRIPT = Path(__file__).resolve().parent.parent / "runcat-metrics.py"
 LIMIT_TITLES = ("5h", "7d")
 
 
+# 既定ではここを向けて使用量エンドポイントを叩かせない。実際の API を叩くと
+# テストが外部とネットワークに依存し、ユーザーのレート制限も消費してしまう
+NO_USAGE_URL = "file:///nonexistent/runcat-usage-stub.json"
+
+
 class ScriptTestCase(unittest.TestCase):
-    def run_script(self, stdin_text, workdir=None):
+    def run_script(self, stdin_text, workdir=None, usage_url=NO_USAGE_URL):
         """stdin を流してスクリプトを実行し、(スナップショット, stdout) を返す。
 
         workdir を渡すと出力先を共有できる (レート制限の控えやセッション状態を
-        跨ぐ実行の検証用)。
+        跨ぐ実行の検証用)。usage_url に file:// のスタブを渡すと、使用量
+        エンドポイントから取れたときの経路を検証できる。
         """
         if workdir is not None:
-            return self.run_script_in(stdin_text, Path(workdir))
+            return self.run_script_in(stdin_text, Path(workdir), usage_url)
         with tempfile.TemporaryDirectory() as tmpdir:
-            return self.run_script_in(stdin_text, Path(tmpdir))
+            return self.run_script_in(stdin_text, Path(tmpdir), usage_url)
 
-    def run_script_in(self, stdin_text, workdir):
+    def run_script_in(self, stdin_text, workdir, usage_url=NO_USAGE_URL):
         out = workdir / "usage.json"
         proc = subprocess.run(
             [sys.executable, str(SCRIPT)],
             input=stdin_text,
             capture_output=True,
             text=True,
-            env={"RUNCAT_OUT_FILE": str(out), "PATH": "/usr/bin:/bin", "HOME": str(workdir)},
+            env={
+                "RUNCAT_OUT_FILE": str(out),
+                "PATH": "/usr/bin:/bin",
+                "HOME": str(workdir),
+                "RUNCAT_USAGE_URL": usage_url,
+            },
             check=True,
         )
         return json.loads(out.read_text(encoding="utf-8")), proc.stdout.strip()
@@ -577,6 +588,160 @@ class DisplayWidthTest(ScriptTestCase):
         snapshot, _ = self.run_script(json.dumps(payload))
         self.assertEqual(self.only_session(snapshot)["title"], "setup")
         self.assertEqual(self.only_session(snapshot)["formattedValue"], "Opus 5")
+
+
+class UsageApiTest(ScriptTestCase):
+    """Claude Code の /usage と同じ使用量エンドポイントから制限を取る経路。
+
+    statusLine が渡す rate_limits には five_hour / seven_day しか無く、
+    モデル別の週間制限はここからしか取れない。
+    """
+
+    # ユーザーの実レスポンスから、行の材料になる部分だけを写したもの
+    RESPONSE = {
+        "five_hour": {"utilization": 0.0, "resets_at": "2026-07-28T09:50:00.712514+00:00"},
+        "seven_day": {"utilization": 18.0, "resets_at": "2026-08-02T00:59:59.712531+00:00"},
+        "seven_day_opus": None,
+        "limits": [
+            {"kind": "session", "group": "session", "percent": 0,
+             "resets_at": "2026-07-28T09:50:00.712514+00:00", "scope": None, "is_active": False},
+            {"kind": "weekly_all", "group": "weekly", "percent": 18,
+             "resets_at": "2026-08-02T00:59:59.712531+00:00", "scope": None, "is_active": True},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+             "resets_at": "2026-08-02T00:59:59.712746+00:00",
+             "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+             "is_active": False},
+        ],
+    }
+
+    def stub(self, workdir, payload):
+        """使用量エンドポイントの代わりに読ませる file:// スタブを置く。"""
+        path = Path(workdir) / "usage-response.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path.as_uri()
+
+    def payload(self, session_id="s1", project="setup"):
+        return json.dumps({
+            "session_id": session_id,
+            "model": {"display_name": "Opus 5"},
+            "workspace": {"repo": {"name": project}},
+            "context_window": {"used_percentage": 21},
+        })
+
+    def test_all_three_limits_are_rendered(self):
+        """5 時間 / 週間 (全モデル) / 週間 (モデル別) の 3 本が出る。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = self.stub(tmpdir, self.RESPONSE)
+            snapshot, _ = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+            rows = self.rows(snapshot)
+
+            self.assertEqual([m["title"] for m in snapshot["metrics"]][:3], ["5h", "7d", "7d Fable"])
+            self.assertTrue(rows["5h"]["formattedValue"].startswith("0% · "),
+                            rows["5h"]["formattedValue"])
+            self.assertTrue(rows["7d"]["formattedValue"].startswith("18% · "),
+                            rows["7d"]["formattedValue"])
+            self.assertTrue(rows["7d Fable"]["formattedValue"].startswith("10% · "),
+                            rows["7d Fable"]["formattedValue"])
+            # 控えから読んだ値ではないので ≥ は付けない
+            self.assertNotIn("≥", rows["7d"]["formattedValue"])
+            # メニューバーは週間 (全モデル)
+            self.assertEqual(snapshot["metricsBarValue"], "18%")
+
+    def test_scoped_label_comes_from_the_model_name(self):
+        """モデル別の枠が増えても scope から拾える。"""
+        response = dict(self.RESPONSE, limits=[
+            {"kind": "weekly_scoped", "percent": 42,
+             "resets_at": "2026-08-02T00:59:59+00:00",
+             "scope": {"model": {"display_name": "Opus"}}},
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = self.stub(tmpdir, response)
+            snapshot, _ = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+            self.assertIn("7d Opus", self.rows(snapshot))
+
+    def test_unknown_kinds_are_skipped(self):
+        """知らない種別や percent の無い行は捨てる (増えても壊れない)。"""
+        response = dict(self.RESPONSE, limits=[
+            {"kind": "weekly_all", "percent": 18, "resets_at": "2026-08-02T00:59:59+00:00"},
+            {"kind": "brand_new_kind", "percent": 5},
+            {"kind": "session"},  # percent が無い
+            {"kind": "weekly_scoped", "percent": 7, "scope": {"model": {}}},  # 名前が無い
+            "not a dict",
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = self.stub(tmpdir, response)
+            snapshot, _ = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+            self.assertEqual([m["title"] for m in snapshot["metrics"]][:1], ["7d"])
+            self.assertEqual(len(self.sessions(snapshot)), 1)
+
+    def test_response_is_cached_between_runs(self):
+        """hook は毎ツール呼び出しで走るので、短い間隔では叩き直さない。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = self.stub(tmpdir, self.RESPONSE)
+            self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+
+            # 応答の中身を差し替えても、控えが新しいうちは読み直さない
+            self.stub(tmpdir, {"limits": [
+                {"kind": "weekly_all", "percent": 99,
+                 "resets_at": "2026-08-02T00:59:59+00:00"}]})
+            snapshot, _ = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+            rows = self.rows(snapshot)
+            self.assertTrue(rows["7d"]["formattedValue"].startswith("18% · "),
+                            rows["7d"]["formattedValue"])
+            self.assertIn("7d Fable", rows)
+
+    def test_stale_cache_is_marked_when_refresh_fails(self):
+        """控えが古いまま再取得に失敗したら、下限として ≥ を付ける。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = self.stub(tmpdir, self.RESPONSE)
+            self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+
+            cache = Path(tmpdir) / "runcat-usage-limits.json"
+            cached = json.loads(cache.read_text(encoding="utf-8"))
+            cached["fetched_at"] -= 3600  # USAGE_MAX_AGE_SECONDS を大きく超えさせる
+            cache.write_text(json.dumps(cached), encoding="utf-8")
+            (Path(tmpdir) / "usage-response.json").unlink()  # 再取得は失敗する
+
+            snapshot, _ = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+            self.assertTrue(self.rows(snapshot)["7d"]["formattedValue"].startswith("≥18%"),
+                            self.rows(snapshot)["7d"]["formattedValue"])
+
+    def test_usage_api_wins_over_the_statusline_values(self):
+        """両方あるときは、モデル別まで取れる使用量エンドポイントを使う。"""
+        now = int(time.time())
+        payload = json.loads(self.payload())
+        payload["rate_limits"] = {
+            "five_hour": {"used_percentage": 99, "resets_at": now + 3600},
+            "seven_day": {"used_percentage": 88, "resets_at": now + 3600},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = self.stub(tmpdir, self.RESPONSE)
+            snapshot, _ = self.run_script(json.dumps(payload), workdir=tmpdir, usage_url=url)
+            rows = self.rows(snapshot)
+            self.assertTrue(rows["7d"]["formattedValue"].startswith("18% · "),
+                            rows["7d"]["formattedValue"])
+            self.assertIn("7d Fable", rows)
+
+    def test_falls_back_to_statusline_when_the_endpoint_is_unreachable(self):
+        """エンドポイントが壊れても行が消えるだけで、他の値は出し続ける。"""
+        now = int(time.time())
+        payload = json.loads(self.payload())
+        payload["rate_limits"] = {
+            "seven_day": {"used_percentage": 41.2, "resets_at": now + 273_600 + 30},
+        }
+        snapshot, _ = self.run_script(json.dumps(payload))  # 既定の届かない URL
+        rows = self.rows(snapshot)
+        self.assertEqual(rows["7d"]["formattedValue"], "41.2% · 3d4h left")
+        self.assertNotIn("7d Fable", rows)
+        self.assertEqual(len(self.sessions(snapshot)), 1)
+
+    def test_broken_response_does_not_break_the_card(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "usage-response.json"
+            path.write_text("{ truncated", encoding="utf-8")
+            snapshot, _ = self.run_script(
+                self.payload(), workdir=tmpdir, usage_url=path.as_uri())
+            self.assertEqual([m["title"] for m in snapshot["metrics"]], ["setup"])
 
 
 class ContextWindowTest(ScriptTestCase):
