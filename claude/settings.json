@@ -36,9 +36,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.command // \"\"' | grep -qiE -- '--no-gpg-sign|gpgsign[[:space:]=]+(false|0)' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"署名なしコミットは禁止(全コミット Verified 運用)。--no-gpg-sign / commit.gpgsign=false は使わない。署名が失敗するときは順に対処する: (1) 1Password アプリを起動しロックを解除する (2) TMPDIR=/private/tmp git commit ... で再実行する。サンドボックス既定の TMPDIR からは op-ssh-sign が 1Password に到達できず Could not connect to socket / failed to fill whole buffer になる (3) それでも失敗するならユーザーに報告して指示を仰ぐ。署名のバイパスは最後まで選択肢にしない。\"}}' || true",
-            "timeout": 10,
-            "statusMessage": "コミット署名ポリシーを確認中"
+            "command": "~/.claude/git-signing-preflight.sh",
+            "timeout": 20,
+            "statusMessage": "コミット署名を事前確認中"
           }
         ]
       }

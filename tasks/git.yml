@@ -6,6 +6,9 @@
 #   2. Settings → Developer → "Use the SSH agent" を有効化
 #   3. Settings → Developer → "Integrate with 1Password CLI" を有効化
 #   4. 署名用 SSH 鍵アイテムを vault に保存
+#   5. Settings → General → "Keep 1Password in the menu bar" を有効化
+#      SSH agent はアプリと一緒に止まる。常駐させておかないと、ウィンドウを閉じた時点で
+#      コミット署名が Could not connect to socket で落ちるようになる
 # 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags git
 
 - name: Set Git global username
@@ -39,6 +42,7 @@
       - "  2. Settings → Developer → Use the SSH agent を有効化"
       - "  3. Settings → Developer → Integrate with 1Password CLI を有効化"
       - "  4. 署名用 SSH 鍵アイテムを vault に保存"
+      - "  5. Settings → General → Keep 1Password in the menu bar を有効化"
       - "完了後:  ansible-playbook playbook_sillicon_mac.yml --tags git"
   when: ssh_pubkey.rc != 0 or ssh_pubkey.stdout == ""
 
