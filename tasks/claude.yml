@@ -18,12 +18,17 @@
 # 面倒を見られない。代わりに、登録時にファイルが無いと選べないため、下の seed タスクで
 # 空のカードを先に置いておく。カードそのものは実行時の生成物なのでリポジトリでは
 # 管理しない (管理するのは書き出す側のスクリプトと、それを呼ぶ settings.json)。
+#
+# git-signing-preflight.sh は 1Password の承認待ちでコミット署名が落ちるのを防ぐ
+# PreToolUse フック。呼び出し口は settings.json の hooks、テストは
+# claude/tests/git_signing_preflight_test.py (python3 で直接実行)
 - name: Define Claude global config files
   ansible.builtin.set_fact:
     claude_config_files:
       - CLAUDE.md
       - settings.json
       - runcat-metrics.py
+      - git-signing-preflight.sh
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
