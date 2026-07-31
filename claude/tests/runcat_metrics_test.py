@@ -14,10 +14,20 @@ import tempfile
 import time
 import unicodedata
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
 SCRIPT = Path(__file__).resolve().parent.parent / "runcat-metrics.py"
+
+
+def iso_in(seconds):
+    """今から seconds 秒後を、使用量エンドポイントと同じ ISO8601 (UTC) で返す。
+
+    リセット時刻を絶対時刻でベタ書きすると、その時刻を過ぎた日から残り時間が
+    出なくなってテストだけが落ちる (時限爆弾になる) ので、必ず今を基準に組む。
+    """
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
 
 
 class Cards(NamedTuple):
@@ -694,17 +704,20 @@ class UsageApiTest(ScriptTestCase):
     """
 
     # ユーザーの実レスポンスから、行の材料になる部分だけを写したもの
+    # (リセット時刻だけは、いつ流しても同じ結果になるよう今からの相対で組む)
+    SESSION_RESET = 2 * 3600         # 5 時間の枠が切り替わるまで
+    WEEKLY_RESET = 4 * 86400 + 3600  # 週間の枠が切り替わるまで
     RESPONSE = {
-        "five_hour": {"utilization": 0.0, "resets_at": "2026-07-28T09:50:00.712514+00:00"},
-        "seven_day": {"utilization": 18.0, "resets_at": "2026-08-02T00:59:59.712531+00:00"},
+        "five_hour": {"utilization": 0.0, "resets_at": iso_in(SESSION_RESET)},
+        "seven_day": {"utilization": 18.0, "resets_at": iso_in(WEEKLY_RESET)},
         "seven_day_opus": None,
         "limits": [
             {"kind": "session", "group": "session", "percent": 0,
-             "resets_at": "2026-07-28T09:50:00.712514+00:00", "scope": None, "is_active": False},
+             "resets_at": iso_in(SESSION_RESET), "scope": None, "is_active": False},
             {"kind": "weekly_all", "group": "weekly", "percent": 18,
-             "resets_at": "2026-08-02T00:59:59.712531+00:00", "scope": None, "is_active": True},
+             "resets_at": iso_in(WEEKLY_RESET), "scope": None, "is_active": True},
             {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
-             "resets_at": "2026-08-02T00:59:59.712746+00:00",
+             "resets_at": iso_in(WEEKLY_RESET),
              "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
              "is_active": False},
         ],
@@ -743,11 +756,25 @@ class UsageApiTest(ScriptTestCase):
             # メニューバーは週間 (全モデル)
             self.assertEqual(cards.limits["metricsBarValue"], "18%")
 
+    def test_reset_time_in_the_past_leaves_the_percentage_alone(self):
+        """リセット時刻を過ぎた枠は使用率だけ出す (負の残り時間は出さない)。
+
+        枠が切り替わる瞬間の境界。実レスポンスを写した fixture が古びると
+        この経路に落ちるので、期待値をここで固定しておく。
+        """
+        response = dict(self.RESPONSE, limits=[
+            {"kind": "weekly_all", "percent": 18, "resets_at": iso_in(-60)},
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            url = self.stub(tmpdir, response)
+            cards = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
+            self.assertEqual(self.rows(cards.limits)["7d"]["formattedValue"], "18%")
+
     def test_scoped_label_comes_from_the_model_name(self):
         """モデル別の枠が増えても scope から拾える。"""
         response = dict(self.RESPONSE, limits=[
             {"kind": "weekly_scoped", "percent": 42,
-             "resets_at": "2026-08-02T00:59:59+00:00",
+             "resets_at": iso_in(self.WEEKLY_RESET),
              "scope": {"model": {"display_name": "Opus"}}},
         ])
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -758,7 +785,7 @@ class UsageApiTest(ScriptTestCase):
     def test_unknown_kinds_are_skipped(self):
         """知らない種別や percent の無い行は捨てる (増えても壊れない)。"""
         response = dict(self.RESPONSE, limits=[
-            {"kind": "weekly_all", "percent": 18, "resets_at": "2026-08-02T00:59:59+00:00"},
+            {"kind": "weekly_all", "percent": 18, "resets_at": iso_in(self.WEEKLY_RESET)},
             {"kind": "brand_new_kind", "percent": 5},
             {"kind": "session"},  # percent が無い
             {"kind": "weekly_scoped", "percent": 7, "scope": {"model": {}}},  # 名前が無い
@@ -779,7 +806,7 @@ class UsageApiTest(ScriptTestCase):
             # 応答の中身を差し替えても、控えが新しいうちは読み直さない
             self.stub(tmpdir, {"limits": [
                 {"kind": "weekly_all", "percent": 99,
-                 "resets_at": "2026-08-02T00:59:59+00:00"}]})
+                 "resets_at": iso_in(self.WEEKLY_RESET)}]})
             cards = self.run_script(self.payload(), workdir=tmpdir, usage_url=url)
             rows = self.rows(cards.limits)
             self.assertTrue(rows["7d"]["formattedValue"].startswith("18% · "),
