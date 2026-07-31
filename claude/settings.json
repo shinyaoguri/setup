@@ -39,6 +39,12 @@
             "command": "~/.claude/git-signing-preflight.sh",
             "timeout": 20,
             "statusMessage": "コミット署名を事前確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/git-safety-guard.sh",
+            "timeout": 10,
+            "statusMessage": "git 操作の安全確認中"
           }
         ]
       }

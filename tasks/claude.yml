@@ -19,9 +19,10 @@
 # 空のカードを先に置いておく。カードそのものは実行時の生成物なのでリポジトリでは
 # 管理しない (管理するのは書き出す側のスクリプトと、それを呼ぶ settings.json)。
 #
-# git-signing-preflight.sh は 1Password の承認待ちでコミット署名が落ちるのを防ぐ
-# PreToolUse フック。呼び出し口は settings.json の hooks、テストは
-# claude/tests/git_signing_preflight_test.py (python3 で直接実行)
+# git-signing-preflight.sh は 1Password の承認待ちでコミット署名が落ちるのを防ぎ、
+# git-safety-guard.sh は取り返しのつかない git 操作と秘密ファイルのコミットを止める
+# PreToolUse フック。呼び出し口はどちらも settings.json の hooks、テストは
+# claude/tests/*_test.py (python3 で直接実行)
 - name: Define Claude global config files
   ansible.builtin.set_fact:
     claude_config_files:
@@ -29,6 +30,7 @@
       - settings.json
       - runcat-metrics.py
       - git-signing-preflight.sh
+      - git-safety-guard.sh
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
