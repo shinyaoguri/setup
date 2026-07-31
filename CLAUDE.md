@@ -14,6 +14,7 @@ macOS の環境構築 (Ansible) と、Claude Code のグローバル設定の実
 - `vars/packages.yml` — インストール対象のパッケージ一覧
 - `claude/` — Claude Code のグローバル設定の実体。`tasks/claude.yml` が `~/.claude/` へ symlink する
 - `zshrc` — `~/.zshrc` の実体
+- `.github/workflows/test.yml` — `claude/tests/` を macOS runner で流す唯一の CI
 
 ## コマンド
 
@@ -21,9 +22,11 @@ macOS の環境構築 (Ansible) と、Claude Code のグローバル設定の実
 # 特定のタスクだけ流す
 ansible-playbook playbook_sillicon_mac.yml --tags claude
 
-# claude/ のスクリプトのテスト。CI は無いのでここが唯一の自動検証
+# claude/ のスクリプトのテスト (PR では .github/workflows/test.yml が同じものを流す)
+python3 -m unittest discover -s claude/tests -p '*_test.py' -v
+
+# 1 本だけ流す
 python3 claude/tests/runcat_metrics_test.py
-python3 claude/tests/git_signing_preflight_test.py
 ```
 
 ## 非自明なところ

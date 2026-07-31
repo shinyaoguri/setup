@@ -35,3 +35,7 @@ Temporary Items
 *.icloud
 
 # End of https://www.toptal.com/developers/gitignore/api/macos
+
+### Python ###
+# unittest discover が claude/tests/ に残すバイトコード
+__pycache__/

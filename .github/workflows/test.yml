@@ -1,0 +1,24 @@
+name: test
+
+# claude/ のスクリプトのテストは手元で流すしかなく、落ちたまま気付かれずに残ることが
+# あった (issue #36: fixture の絶対時刻が古びて 1 件赤いまま数日放置)。PR ごとに
+# 自動で流して、文書ルールではなく CI で拾う。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  claude-scripts:
+    # 対象は macOS 前提のシェルスクリプト (bash 3.2 / BSD 系コマンド) なので、
+    # 実際に動く環境と同じ OS で流す
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: テストが存在することを確かめる
+        # discover はテストが 0 件でも成功するので、拾い漏れをここで落とす
+        run: ls claude/tests/*_test.py
+
+      - name: claude/tests を流す
+        run: python3 -m unittest discover -s claude/tests -p '*_test.py' -v
