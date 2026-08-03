@@ -48,9 +48,101 @@
       "layer": "repo",
       "level": "recommended",
       "applies_to": ["all"],
-      "check": { "type": "glob_exists", "path": ".github/workflows/*.yml" },
+      "check": { "type": "builtin", "name": "ci_workflow_exists" },
       "why": "決定論的に強制できる仕組み (CI) を文書ルールより優先する",
       "fix": "リポの検証コマンドを回す .github/workflows/ci.yml を追加する"
+    },
+    {
+      "id": "license-exists",
+      "layer": "repo",
+      "level": "required",
+      "applies_to": ["all"],
+      "when": { "visibility": "public" },
+      "check": { "type": "builtin", "name": "license_exists" },
+      "why": "public リポは利用条件の明示が必要 (ライセンス不明のコードは誰も使えない)",
+      "fix": "LICENSE を追加する (個人 OSS は MIT が既定)"
+    },
+    {
+      "id": "contributing-exists",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "when": { "visibility": "public" },
+      "check": { "type": "file_exists", "path": "CONTRIBUTING.md" },
+      "why": "public リポの外部協力者向けの入口。個人リポでは CLAUDE.md が兼ねる場合もある",
+      "fix": "開発フロー・検証コマンド・PR の出し方を書いた CONTRIBUTING.md を追加する"
+    },
+    {
+      "id": "adr-exists",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "adr_exists" },
+      "why": "設計判断の記録 (メモリリセット耐性の中核)。既に過半のリポで docs/decisions/ を採用済み",
+      "fix": "docs/decisions/ を作り、状態 / 文脈 / 決定 / 影響の 4 節で ADR を書き始める"
+    },
+    {
+      "id": "changelog-exists",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "changelog_exists" },
+      "why": "リリースするリポでは変更履歴が利用者への契約になる (タグが無いリポは対象外)",
+      "fix": "CHANGELOG.md を追加する (リリース workflow から自動生成してもよい)"
+    },
+    {
+      "id": "test-dir-exists",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "test_dir_exists" },
+      "why": "テストは実装 PR に含める規約 (グローバル CLAUDE.md) の受け皿",
+      "fix": "kind の慣習に沿ったテストディレクトリ (Tests/ ・tests/ ・spec/ など) を作る"
+    },
+    {
+      "id": "tests-run-in-ci",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "tests_run_in_ci" },
+      "why": "テストが CI で回っていないと落ちたまま気付かれない (setup リポ issue #36 の実例)",
+      "fix": "workflow にテスト実行ステップを追加し、ruleset の required_status_checks に登録する"
+    },
+    {
+      "id": "pr-title-lint",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "pr_title_lint_configured" },
+      "why": "squash merge では PR タイトルがそのままコミット履歴になるため、Conventional Commits の崩れが履歴全体に残る",
+      "fix": "PR タイトルを検査する workflow を追加する (claude-plugins の scripts/check-pr-title.sh が手本)"
+    },
+    {
+      "id": "scheduled-freshness",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "scheduled_workflow_exists" },
+      "why": "参照先・依存・リンクのドリフトは PR CI では捉えられず、定期実行でしか拾えない",
+      "fix": "schedule トリガの workflow を追加し、検知結果を Issue に起票する (claude-plugins の freshness.yml が手本)"
+    },
+    {
+      "id": "no-stale-branches",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "no_stale_branches" },
+      "why": "GitHub Flow: main が唯一の長命ブランチ。30 日以上動いていないリモートブランチは作業の取り残し",
+      "fix": "マージ済みなら git push origin --delete <branch>、未完なら Draft PR にして意図を残す (削除は提示のみ)"
+    },
+    {
+      "id": "no-committed-secrets",
+      "layer": "repo",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "no_committed_secrets" },
+      "why": "秘密情報の置き場は gitignore 済みの .env などに限る。追跡されている時点で漏洩リスク",
+      "fix": "git rm --cached で追跡を外し .gitignore に追加する。漏れた値は必ずローテートする (履歴の書き換えは不可逆なので実行前に要判断)"
     },
     {
       "id": "dependabot-config",
@@ -240,20 +332,56 @@
     {
       "id": "gh-pr-required",
       "layer": "github",
-      "level": "recommended",
+      "level": "required",
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_pr_required" },
-      "why": "main へは PR 経由 (approve 0 で可)。レビュー履歴と CI ゲートを残す",
+      "why": "main へは PR 経由 (approve 0 で可)。手入れされたリポ (metaphor / claude-plugins / skopos) が全て採用している",
       "fix": "ruleset に pull_request ルール (required_approving_review_count: 0) を追加する"
     },
     {
       "id": "gh-required-checks",
       "layer": "github",
-      "level": "recommended",
+      "level": "required",
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "required_checks_configured" },
-      "why": "CI green をマージ条件にする (auto-merge の判定にも使われる)",
+      "why": "CI green をマージ条件にする (auto-merge の判定にも使われる)。手入れされたリポが全て採用している",
       "fix": "ruleset に required_status_checks を追加し CI の必須ジョブ名を登録する"
+    },
+    {
+      "id": "gh-signatures-required",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "main_signatures_required" },
+      "why": "コミットの出所を保証する。グローバル hook (git-signing-preflight.sh) で署名前提の運用をしているのと整合",
+      "fix": "ruleset に required_signatures を追加する (1Password の署名設定が前提)"
+    },
+    {
+      "id": "gh-linear-history",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "main_linear_history" },
+      "why": "squash merge 前提なら履歴は直線になるはずで、崩れていれば運用が漏れている証拠になる",
+      "fix": "ruleset に required_linear_history を追加する"
+    },
+    {
+      "id": "gh-tag-protection",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "tag_protection" },
+      "why": "公開済みタグの改変・削除は利用者のビルドを壊す不可逆操作 (タグが無いリポは対象外)",
+      "fix": "target: tag / include: refs/tags/v* で deletion + non_fast_forward + update の ruleset を作る"
+    },
+    {
+      "id": "gh-branch-name-pattern",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "branch_name_pattern" },
+      "why": "ブランチ命名 `<type>/<短い説明>` は規約として明文化されているのに、どのリポでも強制されていなかった",
+      "fix": "ruleset に branch_name_pattern を追加する。bot と Claude Code のブランチを必ず許可する (例: ^(feat|fix|docs|refactor|test|chore|ci|perf|build|dependabot|claude)/ — dependabot/... と claude/... を弾くと PR が作れなくなる)"
     },
     {
       "id": "gh-vulnerability-alerts",
@@ -351,6 +479,37 @@
         "prompt": ".claude/skills/ の各スキルを読み、このリポ固有の内容か判定する。複数リポで使える汎用スキルは shinyaoguri/claude-plugins (marketplace) への昇格を提案する。第三者配布スキルの実体コピーが無いかも確認する"
       },
       "why": "スキルの置き場ルール (setup リポ claude/skills/README.md が正本) の維持"
+    },
+    {
+      "id": "claude-permissions-curated",
+      "layer": "claude",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": ".claude/settings.json の permissions.allow を読み、このリポで頻繁に使う読み取り系コマンド (ビルド・テスト・git/gh の参照系) が登録されているか判定する。未整備なら毎回確認プロンプトが出て作業が滞るため、リポの実際のコマンドから allow 候補を提案する。逆に破壊的なコマンドが allow に入っていないかも確認する"
+      },
+      "why": "確認プロンプトの削減。permissions はリポごとにスコープするのが原則 (グローバルの allow は空のまま保つ)"
+    },
+    {
+      "id": "claude-worktrees-clean",
+      "layer": "claude",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "worktrees_clean" },
+      "why": "使い終わった worktree の残骸。~/.claude の symlink が worktree を指してしまう事故の温床でもある",
+      "fix": "git worktree remove <path> で掃除する (削除は提示のみ)"
+    },
+    {
+      "id": "claude-mcp-config-sane",
+      "layer": "claude",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": ".mcp.json があれば読み、(1) このリポの作業に実際に必要なサーバだけか、(2) API キー・トークンが直書きされていないか (環境変数参照になっているか) を判定する。無ければ対象外"
+      },
+      "why": "不要な MCP サーバは起動コストと文脈汚染になり、直書きされた秘密はコミットされる"
     }
   ]
 }
