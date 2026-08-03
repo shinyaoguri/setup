@@ -1,0 +1,356 @@
+{
+  "version": 1,
+  "kinds": [
+    { "id": "swift", "marker": "Package.swift" },
+    { "id": "web", "marker": "package.json" },
+    { "id": "python", "marker": "pyproject.toml" },
+    { "id": "generic", "marker": null }
+  ],
+  "items": [
+    {
+      "id": "gitignore-exists",
+      "layer": "repo",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": { "type": "file_exists", "path": ".gitignore" },
+      "why": "全リポジトリで唯一共通の必須ファイル (2026-08 の手持ち 40 リポ調査)",
+      "fix": "リポ種別の生成物に合わせた最小構成の .gitignore を作成する"
+    },
+    {
+      "id": "readme-exists",
+      "layer": "repo",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": { "type": "file_exists", "path": "README.md" },
+      "why": "目的・構成・使い方の正本。CLAUDE.md からも参照される前提",
+      "fix": "目的・構成・使い方を含む README.md を作成する"
+    },
+    {
+      "id": "claude-md-exists",
+      "layer": "repo",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": { "type": "file_exists", "path": "CLAUDE.md" },
+      "why": "プロジェクト固有規約の正本は各リポの CLAUDE.md (グローバル CLAUDE.md の建付け)",
+      "fix": "リポ固有の文脈 (コマンド・構成・非自明な注意) だけを書いた CLAUDE.md を作成する"
+    },
+    {
+      "id": "gitignore-covers-env",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "gitignore_covers_env" },
+      "why": "秘密情報の置き場は gitignore 済みの .env などに限る (グローバル CLAUDE.md)",
+      "fix": ".gitignore に .env / .env.* を追記する"
+    },
+    {
+      "id": "ci-workflow-exists",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "glob_exists", "path": ".github/workflows/*.yml" },
+      "why": "決定論的に強制できる仕組み (CI) を文書ルールより優先する",
+      "fix": "リポの検証コマンドを回す .github/workflows/ci.yml を追加する"
+    },
+    {
+      "id": "dependabot-config",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "file_exists", "path": ".github/dependabot.yml" },
+      "why": "依存とワークフローの陳腐化防止。主要リポの半数が採用済み",
+      "fix": "エコシステムに応じた .github/dependabot.yml を追加する (cooldown 7 日: claude-plugins ADR 0005 参照)"
+    },
+    {
+      "id": "issue-template-exists",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "glob_exists", "path": ".github/ISSUE_TEMPLATE/*" },
+      "why": "気付き・改善案を作業を止めず Issue へ残す文化の受け皿",
+      "fix": "改善提案などの最小テンプレートを .github/ISSUE_TEMPLATE/ に追加する"
+    },
+    {
+      "id": "pr-template-exists",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "pr_template_exists" },
+      "why": "PR 本文 (目的・変更点・確認方法) を丁寧に書く規約の受け皿",
+      "fix": ".github/pull_request_template.md を追加する"
+    },
+    {
+      "id": "editorconfig-rejected",
+      "layer": "repo",
+      "level": "rejected",
+      "applies_to": ["all"],
+      "check": { "type": "file_absent", "path": ".editorconfig" },
+      "why": "全リポで不採用 (2026-08 調査)。フォーマットは各言語のツールに任せる",
+      "fix": "削除を検討する (採用へ転じる場合はこの項目を正本から外す)"
+    },
+    {
+      "id": "gh-squash-only",
+      "layer": "github",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".allow_squash_merge and (.allow_merge_commit | not) and (.allow_rebase_merge | not)",
+        "expect": "true"
+      },
+      "why": "Squash merge 前提 (グローバル CLAUDE.md)",
+      "fix": "gh api -X PATCH repos/{repo} -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false"
+    },
+    {
+      "id": "gh-squash-title-pr",
+      "layer": "github",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".squash_merge_commit_title",
+        "expect": "PR_TITLE"
+      },
+      "why": "PR タイトルがそのまま squash コミットの要約になる規約 (Conventional Commits を PR タイトルに書く)",
+      "fix": "gh api -X PATCH repos/{repo} -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY"
+    },
+    {
+      "id": "gh-squash-body-pr",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".squash_merge_commit_message",
+        "expect": "PR_BODY"
+      },
+      "why": "PR 本文 (目的・変更点・確認方法) を squash コミット本文として履歴に残す",
+      "fix": "gh api -X PATCH repos/{repo} -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY"
+    },
+    {
+      "id": "gh-delete-branch-on-merge",
+      "layer": "github",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".delete_branch_on_merge",
+        "expect": "true"
+      },
+      "why": "merge 後のブランチ掃除 (git fetch -p) とセットの運用",
+      "fix": "gh api -X PATCH repos/{repo} -F delete_branch_on_merge=true"
+    },
+    {
+      "id": "gh-default-branch-main",
+      "layer": "github",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".default_branch",
+        "expect": "main"
+      },
+      "why": "GitHub Flow: main が唯一の長命ブランチ",
+      "fix": "gh api -X POST \"repos/{repo}/branches/<現 default>/rename\" -f new_name=main"
+    },
+    {
+      "id": "gh-issues-enabled",
+      "layer": "github",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".has_issues",
+        "expect": "true"
+      },
+      "why": "気付きを Issue へ起票する文化の前提",
+      "fix": "gh repo edit {repo} --enable-issues"
+    },
+    {
+      "id": "gh-description-set",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": "(.description // \"\") != \"\"",
+        "expect": "true"
+      },
+      "why": "リポ一覧で目的が分かる状態を保つ",
+      "fix": "gh repo edit {repo} --description \"<1 行の説明>\""
+    },
+    {
+      "id": "gh-wiki-disabled",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".has_wiki",
+        "expect": "false"
+      },
+      "why": "ドキュメントはリポ内 (docs/・ADR) が正本。wiki に分散させない",
+      "fix": "gh repo edit {repo} --enable-wiki=false"
+    },
+    {
+      "id": "gh-auto-merge-enabled",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".allow_auto_merge",
+        "expect": "true"
+      },
+      "why": "CI green を待つ auto-merge 運用 (Dependabot 自動マージ等) の前提",
+      "fix": "gh api -X PATCH repos/{repo} -F allow_auto_merge=true"
+    },
+    {
+      "id": "gh-allow-update-branch",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".allow_update_branch",
+        "expect": "true"
+      },
+      "why": "PR を base 最新へワンクリックで追従させる",
+      "fix": "gh api -X PATCH repos/{repo} -F allow_update_branch=true"
+    },
+    {
+      "id": "gh-main-protected",
+      "layer": "github",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "main_branch_protected" },
+      "why": "main への force push・削除を機械的に禁止する (不可逆操作の仕組み化)",
+      "fix": "enforcement=active で ~DEFAULT_BRANCH を対象に deletion + non_fast_forward ルールを持つ ruleset を作成する (gh api -X POST repos/{repo}/rulesets --input -)"
+    },
+    {
+      "id": "gh-pr-required",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "main_pr_required" },
+      "why": "main へは PR 経由 (approve 0 で可)。レビュー履歴と CI ゲートを残す",
+      "fix": "ruleset に pull_request ルール (required_approving_review_count: 0) を追加する"
+    },
+    {
+      "id": "gh-required-checks",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "required_checks_configured" },
+      "why": "CI green をマージ条件にする (auto-merge の判定にも使われる)",
+      "fix": "ruleset に required_status_checks を追加し CI の必須ジョブ名を登録する"
+    },
+    {
+      "id": "gh-vulnerability-alerts",
+      "layer": "github",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "vulnerability_alerts_enabled" },
+      "why": "依存脆弱性の検知は全リポ必須",
+      "fix": "gh api -X PUT repos/{repo}/vulnerability-alerts"
+    },
+    {
+      "id": "gh-automated-security-fixes",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "automated_security_fixes_enabled" },
+      "why": "脆弱性修正 PR の自動作成 (自動マージは各リポの CI ゲートに委ねる)",
+      "fix": "gh api -X PUT repos/{repo}/automated-security-fixes"
+    },
+    {
+      "id": "gh-secret-scanning",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "when": { "visibility": "public" },
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".security_and_analysis.secret_scanning.status // \"disabled\"",
+        "expect": "enabled"
+      },
+      "why": "public リポの秘密情報混入の検知",
+      "fix": "gh api -X PATCH repos/{repo} -f \"security_and_analysis[secret_scanning][status]=enabled\""
+    },
+    {
+      "id": "gh-secret-scanning-push-protection",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "when": { "visibility": "public" },
+      "check": {
+        "type": "gh_api",
+        "endpoint": "repos/{repo}",
+        "jq": ".security_and_analysis.secret_scanning_push_protection.status // \"disabled\"",
+        "expect": "enabled"
+      },
+      "why": "秘密情報を push 前にブロックする (検知より予防)",
+      "fix": "gh api -X PATCH repos/{repo} -f \"security_and_analysis[secret_scanning_push_protection][status]=enabled\""
+    },
+    {
+      "id": "gh-actions-permissions-read",
+      "layer": "github",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "actions_default_permissions_read" },
+      "why": "workflow の既定トークンは read-only (最小権限。書き込みは workflow 側で個別宣言)",
+      "fix": "gh api -X PUT repos/{repo}/actions/permissions/workflow -f default_workflow_permissions=read"
+    },
+    {
+      "id": "claude-commands-dir-absent",
+      "layer": "claude",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": { "type": "file_absent", "path": ".claude/commands" },
+      "why": "commands/ は公式非推奨。スラッシュコマンドは skills/<name>/SKILL.md で作る (claude-plugins ADR 0004)",
+      "fix": ".claude/skills/<name>/SKILL.md へ移行して .claude/commands/ を削除する"
+    },
+    {
+      "id": "claude-settings-local-not-committed",
+      "layer": "claude",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": { "type": "builtin", "name": "settings_local_not_committed" },
+      "why": "settings.local.json はマシンローカル専用。コミットすると他マシンの挙動を汚す",
+      "fix": "git rm --cached .claude/settings.local.json で追跡を外す"
+    },
+    {
+      "id": "claude-md-quality",
+      "layer": "claude",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": "CLAUDE.md を読み、(1) リポ固有の文脈だけか (グローバル CLAUDE.md や一般論の複製が無いか)、(2) 検証コマンドと非自明な注意が書かれているか、(3) 肥大していないか (目安 100 行以内) を判定する"
+      },
+      "why": "プロジェクト固有規約の正本としての質を保つ (存在チェックだけでは意味的な劣化を検出できない)"
+    },
+    {
+      "id": "claude-skills-placement",
+      "layer": "claude",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": ".claude/skills/ の各スキルを読み、このリポ固有の内容か判定する。複数リポで使える汎用スキルは shinyaoguri/claude-plugins (marketplace) への昇格を提案する。第三者配布スキルの実体コピーが無いかも確認する"
+      },
+      "why": "スキルの置き場ルール (setup リポ claude/skills/README.md が正本) の維持"
+    }
+  ]
+}

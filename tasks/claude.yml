@@ -23,11 +23,16 @@
 # git-safety-guard.sh は取り返しのつかない git 操作と秘密ファイルのコミットを止める
 # PreToolUse フック。呼び出し口はどちらも settings.json の hooks、テストは
 # claude/tests/*_test.py (python3 で直接実行)
+#
+# repo-standards.json はリポジトリ標準チェックリストの正本。消費者は claude-plugins の
+# repo-standards プラグイン (~/.claude/repo-standards.json 経由で読む)。
+# テストは claude/tests/repo_standards_test.py
 - name: Define Claude global config files
   ansible.builtin.set_fact:
     claude_config_files:
       - CLAUDE.md
       - settings.json
+      - repo-standards.json
       - runcat-metrics.py
       - git-signing-preflight.sh
       - git-safety-guard.sh
