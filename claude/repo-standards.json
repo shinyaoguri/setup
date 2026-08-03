@@ -78,8 +78,20 @@
       "level": "recommended",
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "adr_exists" },
-      "why": "設計判断の記録 (メモリリセット耐性の中核)。既に過半のリポで docs/decisions/ を採用済み",
+      "why": "設計判断の記録 (メモリリセット耐性の中核)。既に過半のリポで docs/decisions/ を採用済み。ディレクトリだけ作って空のまま放置されると記録の実体が無い",
       "fix": "docs/decisions/ を作り、状態 / 文脈 / 決定 / 影響の 4 節で ADR を書き始める"
+    },
+    {
+      "id": "adr-covers-decisions",
+      "layer": "repo",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": "docs/decisions/ の ADR 一覧と直近 30 コミット (git log --oneline -30) を突き合わせ、(1) 設計判断を伴う変更 (feat / refactor / 依存や CI の方針変更) で ADR が残っていないものが無いか、(2) 既存 ADR の決定内容が現在の実装と乖離していないか、(3) 各 ADR が 状態 / 文脈 / 決定 / 影響 の 4 節を保っているか を判定する。ADR が 0 件なら adr-exists 側の指摘に委ねてこの項目は skip とする"
+      },
+      "why": "ADR はディレクトリの存在ではなく「重要な意思決定がそこに残り続けているか」で価値が決まる。存在チェックでは書かれなくなった劣化を検出できない",
+      "fix": "漏れている決定を ADR に追記し、実装と乖離した ADR は状態を 廃止 / 置換 に更新する"
     },
     {
       "id": "changelog-exists",
@@ -170,6 +182,18 @@
       "check": { "type": "builtin", "name": "pr_template_exists" },
       "why": "PR 本文 (目的・変更点・確認方法) を丁寧に書く規約の受け皿",
       "fix": ".github/pull_request_template.md を追加する"
+    },
+    {
+      "id": "work-log-externalized",
+      "layer": "repo",
+      "level": "required",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": "進行中の作業がセッションの記憶に依存していないかを判定する。(1) 直近 30 日にコミットがあるのに open Issue が 0 件でないか (gh issue list --state open)、(2) 進行中の Issue / PR に調査の中間所見や検証ログのコメントが積まれているか、(3) 中長期の計画 (ロードマップ・マイルストーン・docs/ 配下の計画文書) が置かれ更新されているか。記憶ゼロの状態でこれらを読むだけで再開できるかを基準にする。直近 30 日にコミットが無い (動いていない) リポは skip とする"
+      },
+      "why": "セッションの記憶は常にリセットされる前提。恒久的な置き場に記録が無いと、状況・残タスク・中間所見・検証ログが失われて再開できない (グローバル CLAUDE.md の中核規約)",
+      "fix": "残タスクと課題を Issue に起票し、進行中の調査結果は該当 Issue / PR にコメントで追記する。中長期の計画は docs/ かマイルストーンに置く"
     },
     {
       "id": "editorconfig-rejected",

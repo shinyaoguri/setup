@@ -68,6 +68,17 @@ class RepoStandardsTestCase(unittest.TestCase):
                     missing, f"check.type={check['type']} に必須の {missing} が無い"
                 )
 
+    def test_check_fields_not_blank(self):
+        # 必須フィールドが空文字でも存在チェックだけは通ってしまう。空の prompt は
+        # LLM 判定が何も判定できないまま ok に見え、空の path は全ファイルに一致する
+        for item in self.items:
+            check = item["check"]
+            for field in CHECK_REQUIRED_FIELDS[check["type"]]:
+                with self.subTest(id=item["id"], field=field):
+                    self.assertTrue(
+                        str(check[field]).strip(), f"check.{field} が空"
+                    )
+
     def test_applies_to_resolves(self):
         kind_ids = {k["id"] for k in self.kinds} | {"all"}
         for item in self.items:
