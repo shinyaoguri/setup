@@ -38,8 +38,9 @@ python3 claude/tests/runcat_metrics_test.py
   忘れると配布されず、`settings.json` から参照しても動かない
 - 1Password 側は手動セットアップが前提。手順の正本は `tasks/git.yml` 冒頭のコメント。
   SSH agent は 1Password アプリと一緒に止まるので「メニューバーに常駐」が要る
-- 汎用スキルは `claude/skills/<name>/` に置くと playbook が `~/.claude/skills/` へ個別 symlink する。
-  第三者配布スキルはコピーせず、`claude/settings.json` の marketplace 宣言で入れて上流更新に追従する
+- スキルはこのリポでは配らない。自作の汎用スキルは shinyaoguri/claude-plugins (marketplace) の
+  プラグインとして配布し、第三者配布スキルも含めて `claude/settings.json` の marketplace 宣言
+  (`extraKnownMarketplaces` / `enabledPlugins`) で各マシンへ入れる
 - `claude/repo-standards.json` はリポジトリ標準チェックリストの正本。消費者は
   shinyaoguri/claude-plugins の repo-standards プラグイン (`/repo-audit` 等が
   `~/.claude/repo-standards.json` 経由で読む)。項目の増減はテストが守るが、
