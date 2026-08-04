@@ -399,15 +399,6 @@
       "fix": "target: tag / include: refs/tags/v* で deletion + non_fast_forward + update の ruleset を作る"
     },
     {
-      "id": "gh-branch-name-pattern",
-      "layer": "github",
-      "level": "recommended",
-      "applies_to": ["all"],
-      "check": { "type": "builtin", "name": "branch_name_pattern" },
-      "why": "ブランチ命名 `<type>/<短い説明>` は規約として明文化されているのに、どのリポでも強制されていなかった",
-      "fix": "ruleset に branch_name_pattern を追加する。bot と Claude Code のブランチを必ず許可する (例: ^(feat|fix|docs|refactor|test|chore|ci|perf|build|dependabot|claude)/ — dependabot/... と claude/... を弾くと PR が作れなくなる)"
-    },
-    {
       "id": "gh-vulnerability-alerts",
       "layer": "github",
       "level": "required",
