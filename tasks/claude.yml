@@ -114,8 +114,8 @@
   vars:
     gyazo_mcp_server_path: /Applications/Gyazo Menu.app/Contents/Helpers/cli-tool/GyazoMacMCPServer
 
-# claude mcp add は登録済みなら "already exists" を返して rc=0 で終わるので、
-# stdout を見て changed を判定するだけでよい (冪等)
+# claude mcp add は登録済みだと rc=1 で終わり "already exists" を stderr に出す。
+# 2 回目以降を失敗にしないよう failed_when で除外する (これが冪等性の要)
 - name: Register Gyazo MCP server for Claude Code
   ansible.builtin.command:
     cmd: >-
@@ -124,4 +124,7 @@
       -s user
   register: gyazo_mcp_add
   changed_when: "'Added stdio MCP server' in gyazo_mcp_add.stdout"
+  failed_when: >-
+    gyazo_mcp_add.rc != 0
+    and 'already exists' not in (gyazo_mcp_add.stderr | default(''))
   when: gyazo_mcp_bin.stat.exists
