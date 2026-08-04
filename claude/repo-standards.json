@@ -502,7 +502,7 @@
         "type": "llm",
         "prompt": ".claude/skills/ の各スキルを読み、このリポ固有の内容か判定する。複数リポで使える汎用スキルは shinyaoguri/claude-plugins (marketplace) への昇格を提案する。第三者配布スキルの実体コピーが無いかも確認する"
       },
-      "why": "スキルの置き場ルール (setup リポ claude/skills/README.md が正本) の維持"
+      "why": "スキルの置き場ルール (グローバル CLAUDE.md = setup リポ claude/CLAUDE.md のスキル節が正本) の維持"
     },
     {
       "id": "claude-permissions-curated",
