@@ -52,7 +52,10 @@
   },
   "enabledPlugins": {
     "swift-lsp@claude-plugins-official": true,
-    "cloudflare@cloudflare": true
+    "cloudflare@cloudflare": true,
+    "metaphor-sketch@shinyaoguri": true,
+    "metaphor-contrib@shinyaoguri": true,
+    "repo-standards@shinyaoguri": true
   },
   "extraKnownMarketplaces": {
     "cosense-cli": {
@@ -65,6 +68,13 @@
       "source": {
         "source": "github",
         "repo": "cloudflare/skills"
+      },
+      "autoUpdate": true
+    },
+    "shinyaoguri": {
+      "source": {
+        "source": "github",
+        "repo": "shinyaoguri/claude-plugins"
       },
       "autoUpdate": true
     }
