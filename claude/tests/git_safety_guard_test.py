@@ -97,6 +97,153 @@ class DestructiveCommandTest(HookTestCase):
         self.assert_decision(self.run_hook("git -C /tmp/repo reset --hard"), "ask")
 
 
+class ReversibleOperationTest(HookTestCase):
+    """その場で可逆と確認できた操作は、ユーザーを呼ばずに素通しする。"""
+
+    GONE_ALIAS = (
+        "!git fetch -pq && git for-each-ref "
+        "--format='%(upstream:track) %(refname:short)' refs/heads "
+        "| grep -F '[gone] ' | cut -d' ' -f2"
+    )
+    CLEAN_ALIAS = '!git gone | while read -r branch; do git branch -D "$branch"; done'
+
+    def commit(self, message="c"):
+        subprocess.run(
+            ["git", "commit", "-q", "--allow-empty", "-m", message],
+            cwd=self.repo, check=True,
+        )
+
+    def with_remote(self):
+        """origin を持つ作業リポジトリにする (push 済みの main を作る)。
+
+        origin は**作業リポジトリの外**に置く。中に作ると追跡外ディレクトリとして
+        git status に現れ、「作業ツリーが clean か」の判定が狂う。
+        """
+        remote_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(remote_dir.cleanup)
+        self.origin = Path(remote_dir.name) / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(self.origin)], check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(self.origin)], cwd=self.repo, check=True
+        )
+        self.commit("init")
+        subprocess.run(
+            ["git", "push", "-q", "-u", "origin", "HEAD:main"], cwd=self.repo, check=True
+        )
+        subprocess.run(
+            ["git", "branch", "-q", "--set-upstream-to=origin/main"],
+            cwd=self.repo, check=True,
+        )
+
+    def make_gone_branch(self, name):
+        """push 済みのブランチを作り、リモート側を消して [gone] 状態にする。"""
+        subprocess.run(["git", "checkout", "-q", "-b", name], cwd=self.repo, check=True)
+        self.commit(f"on {name}")
+        subprocess.run(
+            ["git", "push", "-q", "-u", "origin", name], cwd=self.repo, check=True
+        )
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "-C", str(self.origin), "update-ref", "-d", f"refs/heads/{name}"],
+            check=True,
+        )
+        subprocess.run(["git", "fetch", "-pq"], cwd=self.repo, check=True)
+
+    def set_alias(self, name, definition):
+        subprocess.run(
+            ["git", "config", f"alias.{name}", definition], cwd=self.repo, check=True
+        )
+
+    # --- git branch -D ---------------------------------------------------
+
+    def test_deleting_a_gone_branch_passes(self):
+        """upstream が消えたブランチ = squash merge 済み。内容は main にあり可逆。"""
+        self.with_remote()
+        self.make_gone_branch("feature/done")
+        self.assert_allowed(self.run_hook("git branch -D feature/done"))
+
+    def test_deleting_a_live_branch_asks(self):
+        """リモートが生きているブランチは、役目を終えたと言えない。"""
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/wip"], cwd=self.repo, check=True
+        )
+        self.commit("wip")
+        subprocess.run(
+            ["git", "push", "-q", "-u", "origin", "feature/wip"], cwd=self.repo, check=True
+        )
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        self.assert_decision(self.run_hook("git branch -D feature/wip"), "ask")
+
+    def test_deleting_a_local_only_branch_asks(self):
+        """upstream を持たない (push していない) ブランチは、消すと復元できない。"""
+        self.with_remote()
+        subprocess.run(["git", "branch", "feature/local"], cwd=self.repo, check=True)
+        self.assert_decision(self.run_hook("git branch -D feature/local"), "ask")
+
+    def test_mixed_targets_ask(self):
+        """1 つでも確認できない対象が混ざれば、全体を ask にする。"""
+        self.with_remote()
+        self.make_gone_branch("feature/done")
+        subprocess.run(["git", "branch", "feature/local"], cwd=self.repo, check=True)
+        self.assert_decision(
+            self.run_hook("git branch -D feature/done feature/local"), "ask"
+        )
+
+    def test_unknown_branch_asks(self):
+        self.with_remote()
+        self.assert_decision(self.run_hook("git branch -D feature/nope"), "ask")
+
+    # --- エイリアス経由 ---------------------------------------------------
+
+    def test_gone_clean_alias_passes(self):
+        """gone なブランチだけを消すと定義から確認できるエイリアスは素通し。"""
+        self.with_remote()
+        self.set_alias("gone", self.GONE_ALIAS)
+        self.set_alias("gone-clean", self.CLEAN_ALIAS)
+        self.assert_allowed(self.run_hook("git gone-clean"))
+
+    def test_tampered_alias_asks(self):
+        """定義を書き換えて gone 以外も消せるようにしたら、確認は成立しない。"""
+        self.with_remote()
+        self.set_alias("gone", self.GONE_ALIAS)
+        self.set_alias(
+            "gone-clean", '!git branch | while read -r b; do git branch -D "$b"; done'
+        )
+        self.assert_decision(self.run_hook("git gone-clean"), "ask")
+
+    def test_alias_hiding_a_destructive_command_asks(self):
+        """エイリアスに包んでも検査を素通りできない (展開してから見る)。"""
+        self.set_alias("nuke", "!git reset --hard HEAD~1")
+        self.assert_decision(self.run_hook("git nuke"), "ask")
+
+    def test_gone_alias_without_gone_check_asks(self):
+        """`git gone` 自体が [gone] 判定でなければ、それに依存する掃除も信用できない。"""
+        self.with_remote()
+        self.set_alias("gone", "!git branch --format='%(refname:short)'")
+        self.set_alias("gone-clean", self.CLEAN_ALIAS)
+        self.assert_decision(self.run_hook("git gone-clean"), "ask")
+
+    # --- git reset --hard -------------------------------------------------
+
+    def test_reset_hard_on_clean_pushed_tree_passes(self):
+        """捨てる変更が無く、HEAD がリモートにあるなら取り戻せる。"""
+        self.with_remote()
+        self.assert_allowed(self.run_hook("git reset --hard HEAD"))
+
+    def test_reset_hard_with_local_changes_asks(self):
+        """未コミットの変更があれば、それは他のどこにも無い。"""
+        self.with_remote()
+        (self.repo / "work.txt").write_text("in progress\n")
+        self.assert_decision(self.run_hook("git reset --hard HEAD"), "ask")
+
+    def test_reset_hard_on_unpushed_commit_asks(self):
+        """リモートに無いコミットは reflog 頼みになる。"""
+        self.with_remote()
+        self.commit("not pushed yet")
+        self.assert_decision(self.run_hook("git reset --hard HEAD~1"), "ask")
+
+
 class SafeCommandTest(HookTestCase):
     """日常の操作は止めない。"""
 
