@@ -257,7 +257,7 @@
         "jq": ".delete_branch_on_merge",
         "expect": "true"
       },
-      "why": "merge 後のブランチ掃除 (git fetch -p) とセットの運用",
+      "why": "merge 後のブランチ掃除とセットの運用。git fetch -p が消すのは remote-tracking 参照だけなので、ローカルブランチは upstream:track == [gone] を手がかりに掃除する (env-doctor の env-git-fetch-prune / env-git-gone-alias)",
       "fix": "gh api -X PATCH repos/{repo} -F delete_branch_on_merge=true"
     },
     {
