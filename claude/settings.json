@@ -45,10 +45,20 @@
             "command": "~/.claude/git-safety-guard.sh",
             "timeout": 10,
             "statusMessage": "git 操作の安全確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/provisioning-preflight.sh",
+            "timeout": 30,
+            "statusMessage": "プロビジョニングの変更内容を事前確認中"
           }
         ]
       }
     ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/runcat-metrics.py"
   },
   "enabledPlugins": {
     "swift-lsp@claude-plugins-official": true,
@@ -78,10 +88,6 @@
       },
       "autoUpdate": true
     }
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "~/.claude/runcat-metrics.py"
   },
   "language": "japanese",
   "tui": "fullscreen",

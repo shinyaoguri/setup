@@ -37,6 +37,7 @@
       - runcat-metrics.py
       - git-signing-preflight.sh
       - git-safety-guard.sh
+      - provisioning-preflight.sh
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
