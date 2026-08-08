@@ -23,6 +23,39 @@
     value: "ogrsny@gmail.com"
     scope: global
 
+# 日常運用: squash merge 前提でのローカルブランチ掃除
+#
+# GitHub 側で squash merge すると、feature ブランチのコミット群は main 上の
+# 新しい単一コミットに畳まれる。元コミットは main の祖先にならないため、
+# `git branch -d` も `git branch --merged` も「未マージ」と判定して役に立たない。
+# 代わりに「追跡していたリモートブランチが消えたか」(upstream:track == [gone]) を
+# 役目終了の判定に使う。誤爆を避けるため、一覧を出す `git gone` と、それを削除する
+# `git gone-clean` の 2 段構えにしてある。
+#
+#   git gone          # 掃除対象を一覧（fetch -p してから判定）
+#   git gone-clean    # 一覧のブランチを削除（worktree が掴んでいるものは拒否される）
+#
+# 削除するのはローカルの参照だけで、内容は main に入っており、元コミットも
+# GitHub 側に refs/pull/<N>/head として残るため情報は失われない。
+
+- name: Prune stale remote-tracking branches on every fetch
+  community.general.git_config:
+    name: fetch.prune
+    value: "true"
+    scope: global
+
+- name: Add git alias `gone` (list local branches whose upstream is gone)
+  community.general.git_config:
+    name: alias.gone
+    value: "!git fetch -pq && git for-each-ref --format='%(upstream:track) %(refname:short)' refs/heads | grep -F '[gone] ' | cut -d' ' -f2"
+    scope: global
+
+- name: Add git alias `gone-clean` (delete the branches listed by `git gone`)
+  community.general.git_config:
+    name: alias.gone-clean
+    value: "!git gone | while read -r branch; do git branch -D \"$branch\"; done"
+    scope: global
+
 - name: Read SSH public key from 1Password agent
   ansible.builtin.shell:
     cmd: "set -o pipefail && ssh-add -L | head -1"
