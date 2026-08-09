@@ -41,6 +41,12 @@ python3 claude/tests/runcat_metrics_test.py
 - スキルはこのリポでは配らない。自作の汎用スキルは shinyaoguri/claude-plugins (marketplace) の
   プラグインとして配布し、第三者配布スキルも含めて `claude/settings.json` の marketplace 宣言
   (`extraKnownMarketplaces` / `enabledPlugins`) で各マシンへ入れる
+- `settings.json` の `permissions.allow` に載せてよいのは**読み取り専用のコマンドだけ**。
+  allow は確認プロンプトを消す宣言なので、書き込み系を載せると「聞かれずに実行される」側へ倒れる。
+  サブコマンドまで固定して書く (`Bash(git log:*)` は可、`Bash(git:*)` は不可)。
+  判定は `claude/tests/settings_test.py` が CI で強制する — 引っかかったら足す前に考え直す。
+  プラグイン同梱スクリプトの実行許可はここでなく各スキルの `allowed-tools` frontmatter で宣言する
+  (`${CLAUDE_PLUGIN_ROOT}` が展開されるぶん、マシン依存の絶対パスを settings.json に書かずに済む)
 - `claude/repo-standards.json` はリポジトリ標準チェックリストの正本。消費者は
   shinyaoguri/claude-plugins の repo-standards プラグイン (`/repo-audit` 等が
   `~/.claude/repo-standards.json` 経由で読む)。項目の増減はテストが守るが、
