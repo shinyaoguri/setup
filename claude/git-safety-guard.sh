@@ -61,18 +61,10 @@ has() { printf '%s' "$scan" | grep -qE "$1"; }
 # いずれも「可逆と確認できたときだけ真」。リポジトリの外・判定材料が足りないときは
 # 偽を返し、呼び出し側で ask に落とす。
 
-# `git branch -D` の対象がすべて「追跡先が消えたブランチ」か。
-#
-# squash merge では feature ブランチのコミットが main の祖先にならないため
-# `--merged` では判定できない。代わりに upstream の消失 ([gone]) を役目終了の
-# 代理指標に使う (グローバル CLAUDE.md のブランチ掃除運用と同じ判定)。内容は main に
-# 入っており、元コミットも GitHub 側に refs/pull/<N>/head として残るため可逆。
+# `git branch -D` の対象がすべて「役目を終えたブランチ」か。
 branch_delete_targets_are_gone() {
-  local targets target track
-  targets=$(printf '%s' "$command" | awk '{
-    for (i = 1; i <= NF; i++)
-      if ($i == "-D") { for (j = i + 1; j <= NF; j++) print $j; exit }
-  }')
+  local targets target
+  targets=$(branch_delete_targets)
   [ -n "$targets" ] || return 1
 
   for target in $targets; do
@@ -80,10 +72,42 @@ branch_delete_targets_are_gone() {
     case "$target" in
       -*|*'$'*|*'"'*|*"'"*|*'`'*) return 1 ;;
     esac
-    track=$(git for-each-ref --format='%(upstream:track)' "refs/heads/$target" 2>/dev/null)
-    [ "$track" = "[gone]" ] || return 1
+    branch_is_spent "$target" || return 1
   done
   return 0
+}
+
+# `-D` に続くブランチ名を取り出す。シェルの区切り・リダイレクトが現れたら打ち切る。
+# `git branch -D x 2>&1 | tail -1` の "2>&1" までブランチ名として読むと、実在しない
+# 名前として判定不能に落ち、掃除のたびにユーザーを呼ぶことになる。
+branch_delete_targets() {
+  printf '%s' "$command" | awk '{
+    for (i = 1; i <= NF; i++)
+      if ($i == "-D") {
+        for (j = i + 1; j <= NF; j++) {
+          if ($j ~ /[;&|<>]/) exit
+          print $j
+        }
+        exit
+      }
+  }'
+}
+
+# そのブランチを消しても失うものが無いと確認できるか。
+#
+# squash merge では feature ブランチのコミットが main の祖先にならないため
+# `--merged` では判定できない。代わりに upstream の消失 ([gone]) を役目終了の
+# 代理指標に使う (グローバル CLAUDE.md のブランチ掃除運用と同じ判定)。内容は main に
+# 入っており、元コミットも GitHub 側に refs/pull/<N>/head として残るため可逆。
+#
+# 「内容が既定ブランチに入っているか」は指標にしない。squash merge 直後の掃除も
+# 通せて魅力的だが、それだけでは*まだ作業中の*ブランチ (main に無い変更をまだ
+# 持っていないだけ) と区別できず、生きた PR のブランチまで黙って消せてしまう。
+# マージ直後に消したいときは先に `git fetch -p` を通す — [gone] になってここを抜ける。
+branch_is_spent() {
+  local track
+  track=$(git for-each-ref --format='%(upstream:track)' "refs/heads/$1" 2>/dev/null)
+  [ "$track" = "[gone]" ]
 }
 
 # エイリアス経由の `git branch -D` が「gone なブランチだけ」を対象にすると確認できるか。
@@ -127,7 +151,7 @@ has "${GIT}restore([[:space:]]|$)" && ! has '\-\-staged' &&
   danger="git restore は作業ツリーの変更を復元できない形で捨てる"
 has "${GIT}branch${ARG}-D([[:space:]]|$)" &&
   ! branch_delete_targets_are_gone && ! alias_deletes_only_gone_branches &&
-  danger="git branch -D はマージ済みかを問わずブランチを消す"
+  danger="git branch -D はマージ済みかを問わずブランチを消す (マージ後の掃除なら先に git fetch -p を通す。追跡先が畳まれれば確認なしで通る)"
 has "${GIT}push${ARG}(--force|-f([[:space:]]|$))" &&
   danger="force push は remote の履歴を書き換える (他の作業や PR に影響する)"
 has "${GIT}stash${ARG}(drop|clear)" &&

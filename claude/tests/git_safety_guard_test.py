@@ -194,6 +194,65 @@ class ReversibleOperationTest(HookTestCase):
         self.with_remote()
         self.assert_decision(self.run_hook("git branch -D feature/nope"), "ask")
 
+    def test_redirection_after_the_branch_name_is_not_a_target(self):
+        """`git branch -D x 2>&1 | tail -1` の後続はブランチ名ではない。
+
+        リダイレクトやパイプまで対象として読むと、実在しない名前の判定不能で
+        ask に落ち、掃除のたびにユーザーを呼ぶことになる。
+        """
+        self.with_remote()
+        self.make_gone_branch("feature/done")
+        self.assert_allowed(self.run_hook("git branch -D feature/done 2>&1 | tail -1"))
+
+    def test_squash_merged_branch_asks_until_pruned(self):
+        """squash merge 済みでも、リモート追跡が生きている間は ask のまま。
+
+        「内容が main に入っているか」だけでは、まだ作業中のブランチ (main に無い
+        変更をまだ持っていないだけ) と区別できない。掃除は `git fetch -p` を通して
+        [gone] にしてから — それで確認なしに抜けられる。
+        """
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/squashed"], cwd=self.repo, check=True
+        )
+        (self.repo / "f.txt").write_text("done\n")
+        subprocess.run(["git", "add", "f.txt"], cwd=self.repo, check=True)
+        self.commit("work")
+        subprocess.run(
+            ["git", "push", "-q", "-u", "origin", "feature/squashed"],
+            cwd=self.repo, check=True,
+        )
+        # main へ squash 相当で取り込む (fetch -p はまだしない)
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "merge", "-q", "--squash", "feature/squashed"], cwd=self.repo, check=True
+        )
+        self.commit("squashed work")
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True)
+        self.assert_decision(self.run_hook("git branch -D feature/squashed"), "ask")
+
+        # マージ後にリモート側が畳まれ、fetch -p が届けば確認は要らなくなる
+        subprocess.run(
+            ["git", "-C", str(self.origin), "update-ref", "-d", "refs/heads/feature/squashed"],
+            check=True,
+        )
+        subprocess.run(["git", "fetch", "-pq"], cwd=self.repo, check=True)
+        self.assert_allowed(self.run_hook("git branch -D feature/squashed"))
+
+    def test_ask_reason_points_at_fetch_prune(self):
+        """確認を求めるときは、確認なしで通す道 (fetch -p) を示す。"""
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/wip"], cwd=self.repo, check=True
+        )
+        self.commit("wip")
+        subprocess.run(
+            ["git", "push", "-q", "-u", "origin", "feature/wip"], cwd=self.repo, check=True
+        )
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        reason = self.assert_decision(self.run_hook("git branch -D feature/wip"), "ask")
+        self.assertIn("fetch -p", reason)
+
     # --- エイリアス経由 ---------------------------------------------------
 
     def test_gone_clean_alias_passes(self):
