@@ -100,21 +100,54 @@ branch_delete_targets() {
   }'
 }
 
-# そのブランチを消しても失うものが無いと確認できるか。
+# そのブランチを消しても失うものが無いと確認できるか。指標は upstream の有無で分かれる。
 #
-# squash merge では feature ブランチのコミットが main の祖先にならないため
-# `--merged` では判定できない。代わりに upstream の消失 ([gone]) を役目終了の
-# 代理指標に使う (グローバル CLAUDE.md のブランチ掃除運用と同じ判定)。内容は main に
-# 入っており、元コミットも GitHub 側に refs/pull/<N>/head として残るため可逆。
+# (a) upstream があった → その消失 ([gone]) を役目終了の代理指標にする。squash merge では
+#     feature ブランチのコミットが main の祖先にならないため `--merged` では判定できない
+#     (グローバル CLAUDE.md のブランチ掃除運用と同じ判定)。内容は main に入っており、
+#     元コミットも GitHub 側に refs/pull/<N>/head として残るため可逆。
 #
-# 「内容が既定ブランチに入っているか」は指標にしない。squash merge 直後の掃除も
-# 通せて魅力的だが、それだけでは*まだ作業中の*ブランチ (main に無い変更をまだ
-# 持っていないだけ) と区別できず、生きた PR のブランチまで黙って消せてしまう。
-# マージ直後に消したいときは先に `git fetch -p` を通す — [gone] になってここを抜ける。
+# (b) upstream が無い (= まだ push していない手元だけの枝) → tip が既定ブランチの
+#     リモート追跡に含まれるかを見る。含まれていればコミットは remote から取り戻せる。
+#
+# upstream を持つブランチに (b) を当ててはいけない。「内容が既定ブランチに入っている」だけ
+# では*まだ作業中の*ブランチ (main に無い変更をまだ持っていないだけ) と区別できず、生きた
+# PR のブランチまで黙って消せてしまう。マージ直後に消したいときは先に `git fetch -p` を
+# 通す — [gone] になって (a) を抜ける。
+#
+# (b) でも「作ったばかりで、まだコミットが無いブランチ」は同じ形に見える。それを消しても
+# 失うのはブランチ名だけ (git switch -c で作り直せる) なので、確認を挟むほどではないと
+# 判断した — worktree セッションが残す push 前のブランチが溜まる実態のほうが重い。
 branch_is_spent() {
   local track
   track=$(git for-each-ref --format='%(upstream:track)' "refs/heads/$1" 2>/dev/null)
-  [ "$track" = "[gone]" ]
+  [ "$track" = "[gone]" ] && return 0
+  branch_is_local_only_and_contained "$1"
+}
+
+# 既定ブランチのリモート追跡参照。origin/HEAD が無いリポでも動くよう名前でも探す。
+default_remote_branch() {
+  local ref
+  ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if [ -z "$ref" ]; then
+    for ref in origin/main origin/master; do
+      git rev-parse --verify --quiet "$ref" >/dev/null 2>&1 && break
+      ref=""
+    done
+  fi
+  [ -n "$ref" ] || return 1
+  printf '%s' "$ref"
+}
+
+# push していないブランチで、tip が既定ブランチのリモート追跡に含まれているか。
+branch_is_local_only_and_contained() {
+  local upstream tip default_ref
+  upstream=$(git for-each-ref --format='%(upstream)' "refs/heads/$1" 2>/dev/null)
+  [ -z "$upstream" ] || return 1
+  tip=$(git rev-parse --verify --quiet "refs/heads/$1") || return 1
+  [ -n "$tip" ] || return 1
+  default_ref=$(default_remote_branch) || return 1
+  git merge-base --is-ancestor "$tip" "$default_ref" 2>/dev/null
 }
 
 # エイリアス経由の `git branch -D` が「gone なブランチだけ」を対象にすると確認できるか。
@@ -189,7 +222,8 @@ is_reversible_branch_cleanup() {
   # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)
   printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-d([[:space:]]|$)' &&
     return 0
-  # -D は追跡先が畳まれている (= 内容は既定ブランチ側にある) と確認できたときだけ
+  # -D は対象すべてが「消しても失うものが無い」と確認できたときだけ
+  # (追跡先が畳まれている / push 前で内容が既定ブランチに入っている)
   printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-D([[:space:]]|$)' &&
     branch_delete_targets_are_gone && return 0
   # `git gone-clean` のような、掃除エイリアス 1 本きりの呼び出し
@@ -200,7 +234,7 @@ is_reversible_branch_cleanup() {
 }
 
 if is_reversible_branch_cleanup; then
-  decide allow "消えて困るものが無いと確認できたブランチ削除 (-d は git がマージ済みかを確かめて未マージなら断る / -D と掃除エイリアスは追跡先が [gone] のブランチだけを対象にしており、内容は既定ブランチと GitHub の refs/pull に残る)。確認は不要。"
+  decide allow "消えて困るものが無いと確認できたブランチ削除 (-d は git がマージ済みかを確かめて未マージなら断る / -D と掃除エイリアスの対象は追跡先が [gone] か、push 前で内容が既定ブランチに入っているブランチだけで、コミットは remote から取り戻せる)。確認は不要。"
 fi
 
 # --- 3. 秘密情報らしきファイルのコミット -----------------------------------
