@@ -46,8 +46,13 @@ class HookTestCase(unittest.TestCase):
         )
 
     def assert_allowed(self, result):
+        """素通し (無出力)。判定は settings.json の permissions へ戻る。"""
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "", "素通しのはずが出力があった")
+
+    def assert_auto_approved(self, result):
+        """allow で打ち切る判定。素通しと違い、確認プロンプトそのものが出ない。"""
+        return self.assert_decision(result, "allow")
 
     def assert_decision(self, result, expected):
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -98,7 +103,12 @@ class DestructiveCommandTest(HookTestCase):
 
 
 class ReversibleOperationTest(HookTestCase):
-    """その場で可逆と確認できた操作は、ユーザーを呼ばずに素通しする。"""
+    """その場で可逆と確認できた操作は、ユーザーを呼ばない。
+
+    ブランチ掃除は allow で打ち切る (permissions には読み取り専用のコマンドしか
+    載せられないので、素通しにすると結局そこで確認プロンプトが出る)。それ以外は
+    従来どおり素通しで permissions の判断へ戻す。
+    """
 
     GONE_ALIAS = (
         "!git fetch -pq && git for-each-ref "
@@ -156,11 +166,29 @@ class ReversibleOperationTest(HookTestCase):
 
     # --- git branch -D ---------------------------------------------------
 
-    def test_deleting_a_gone_branch_passes(self):
+    def test_deleting_a_gone_branch_is_auto_approved(self):
         """upstream が消えたブランチ = squash merge 済み。内容は main にあり可逆。"""
         self.with_remote()
         self.make_gone_branch("feature/done")
-        self.assert_allowed(self.run_hook("git branch -D feature/done"))
+        reason = self.assert_auto_approved(self.run_hook("git branch -D feature/done"))
+        self.assertIn("確認は不要", reason)
+
+    def test_safe_delete_is_auto_approved(self):
+        """-d は git 自身がマージ済みかを確かめる。未マージなら git が断るので確認は要らない。"""
+        self.with_remote()
+        subprocess.run(["git", "branch", "feature/x"], cwd=self.repo, check=True)
+        self.assert_auto_approved(self.run_hook("git branch -d feature/x"))
+
+    def test_delete_with_another_command_is_not_auto_approved(self):
+        """allow はコマンド全体に効くので、削除以外が混ざったら allow は返さない。
+
+        素通しに落ちるだけで、判定は permissions へ戻る (危険側には倒れない)。
+        """
+        self.with_remote()
+        self.make_gone_branch("feature/done")
+        self.assert_allowed(
+            self.run_hook("git branch -D feature/done && rm -rf build")
+        )
 
     def test_deleting_a_live_branch_asks(self):
         """リモートが生きているブランチは、役目を終えたと言えない。"""
@@ -199,6 +227,8 @@ class ReversibleOperationTest(HookTestCase):
 
         リダイレクトやパイプまで対象として読むと、実在しない名前の判定不能で
         ask に落ち、掃除のたびにユーザーを呼ぶことになる。
+
+        削除以外が混ざる形なので allow ではなく素通し (permissions の判断へ戻る)。
         """
         self.with_remote()
         self.make_gone_branch("feature/done")
@@ -237,7 +267,7 @@ class ReversibleOperationTest(HookTestCase):
             check=True,
         )
         subprocess.run(["git", "fetch", "-pq"], cwd=self.repo, check=True)
-        self.assert_allowed(self.run_hook("git branch -D feature/squashed"))
+        self.assert_auto_approved(self.run_hook("git branch -D feature/squashed"))
 
     def test_ask_reason_points_at_fetch_prune(self):
         """確認を求めるときは、確認なしで通す道 (fetch -p) を示す。"""
@@ -255,12 +285,12 @@ class ReversibleOperationTest(HookTestCase):
 
     # --- エイリアス経由 ---------------------------------------------------
 
-    def test_gone_clean_alias_passes(self):
-        """gone なブランチだけを消すと定義から確認できるエイリアスは素通し。"""
+    def test_gone_clean_alias_is_auto_approved(self):
+        """gone なブランチだけを消すと定義から確認できるエイリアスは確認なしで通す。"""
         self.with_remote()
         self.set_alias("gone", self.GONE_ALIAS)
         self.set_alias("gone-clean", self.CLEAN_ALIAS)
-        self.assert_allowed(self.run_hook("git gone-clean"))
+        self.assert_auto_approved(self.run_hook("git gone-clean"))
 
     def test_tampered_alias_asks(self):
         """定義を書き換えて gone 以外も消せるようにしたら、確認は成立しない。"""
@@ -314,7 +344,7 @@ class SafeCommandTest(HookTestCase):
             "git add -A",
             "git push origin main",
             "git reset HEAD~1",  # --hard でなければ作業ツリーは残る
-            "git branch -d merged/x",  # 小文字 -d はマージ済みしか消せない
+            "git branch --list",
             "git stash",
         ):
             with self.subTest(command):
