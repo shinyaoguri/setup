@@ -70,6 +70,17 @@
             "statusMessage": "プロビジョニングの変更内容を事前確認中"
           }
         ]
+      },
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/worktree-path-guard.sh",
+            "timeout": 10,
+            "statusMessage": "編集先の worktree を確認中"
+          }
+        ]
       }
     ]
   },
