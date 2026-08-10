@@ -6,14 +6,21 @@
 # git reset --hard HEAD~1 を実行し、作業ツリーの変更ごと巻き戻した事故があった)。
 # 決定論的に効く場所へ移した形。
 #
-# 二つを見る:
+# 三つを見る:
 #   1. 作業ツリーや履歴を捨てる操作 → ask (ユーザーに判断を返す)
-#   2. 秘密情報らしきファイルのコミット → deny (代替を添えて止める)
+#   2. 可逆と確認できたブランチ掃除 → allow (確認を挟まず通す)
+#   3. 秘密情報らしきファイルのコミット → deny (代替を添えて止める)
 #
 # ただし 1 は「取り返しがつかない」から止めるのであって、**その場で可逆と確認できた
 # ものまで止めない**。確認は構文 (コマンド文字列のパターン) ではなくリポジトリの状態で
 # 行い、確認できなかったものだけ ask に残す (判定不能は安全側)。これが無いと、
 # マージ済みブランチの掃除のような日常操作まで毎回ユーザーを呼ぶことになる。
+#
+# 2 はその続き。素通し (無出力) は「このフックは異議なし」でしかなく、判定は
+# settings.json の permissions へ戻る。allow に載せてよいのは読み取り専用のコマンド
+# だけ (claude/tests/settings_test.py が CI で強制) なのでブランチ削除の許可規則は
+# 置けず、可逆と確認できた掃除まで結局ユーザーを呼んでいた。確認できたものは
+# ここで allow を返して打ち切る。
 #
 # 契約: stdin に PreToolUse の JSON。素通しは無出力 + 終了コード 0。
 # 呼び出し口は settings.json の hooks.PreToolUse、テストは
@@ -168,7 +175,35 @@ if [ -n "$danger" ]; then
 そのうえで必要なら、何を捨てるのかを伝えてユーザーの判断を仰ぐ。"
 fi
 
-# --- 2. 秘密情報らしきファイルのコミット -----------------------------------
+# --- 2. 可逆と確認できたブランチ掃除 ---------------------------------------
+# ここに来る時点で 1 の検査は通っている (危険と読めた -D は上で ask 済み)。
+#
+# allow はコマンド文字列**全体**に効くので、対象は「ブランチ削除しかしていない」と
+# 読める形に限る。区切り・リダイレクト・変数展開・コマンド置換が混ざるものは素通しへ
+# 落とす — 判定が permissions へ戻るだけで、危険側には倒れない。
+is_reversible_branch_cleanup() {
+  local trimmed
+  trimmed=$(printf '%s' "$command" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+
+  # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-d([[:space:]]|$)' &&
+    return 0
+  # -D は追跡先が畳まれている (= 内容は既定ブランチ側にある) と確認できたときだけ
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-D([[:space:]]|$)' &&
+    branch_delete_targets_are_gone && return 0
+  # `git gone-clean` のような、掃除エイリアス 1 本きりの呼び出し
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+[a-zA-Z][-a-zA-Z0-9_]*$' &&
+    alias_deletes_only_gone_branches && return 0
+
+  return 1
+}
+
+if is_reversible_branch_cleanup; then
+  decide allow "消えて困るものが無いと確認できたブランチ削除 (-d は git がマージ済みかを確かめて未マージなら断る / -D と掃除エイリアスは追跡先が [gone] のブランチだけを対象にしており、内容は既定ブランチと GitHub の refs/pull に残る)。確認は不要。"
+fi
+
+# --- 3. 秘密情報らしきファイルのコミット -----------------------------------
 # .env.example のような雛形は対象外。gitignore が効いていれば下の検査には現れないので、
 # ここに出てくる時点で「入れてはいけないものが漏れている」状態。
 readonly SECRET_PATTERN='(^|/)\.env($|\.[^/]*$)|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|\.(pem|p12|pfx|jks|keystore)$|(^|/)[^/]*_rsa$'

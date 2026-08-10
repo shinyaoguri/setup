@@ -47,6 +47,10 @@ python3 claude/tests/runcat_metrics_test.py
   判定は `claude/tests/settings_test.py` が CI で強制する — 引っかかったら足す前に考え直す。
   プラグイン同梱スクリプトの実行許可はここでなく各スキルの `allowed-tools` frontmatter で宣言する
   (`${CLAUDE_PLUGIN_ROOT}` が展開されるぶん、マシン依存の絶対パスを settings.json に書かずに済む)
+- 書き込み系のコマンドを確認なしで通したいときは allow ではなく PreToolUse フック側で判定する。
+  allow は文字列の前方一致でしかなく「安全な場合だけ」を表現できないが、フックはリポジトリの
+  状態を見て可逆と確認できたときだけ `allow` を返せる (`claude/git-safety-guard.sh` の
+  ブランチ掃除がその形。素通し = 無出力では permissions へ判定が戻り、結局確認プロンプトが出る)
 - `claude/repo-standards.json` はリポジトリ標準チェックリストの正本。消費者は
   shinyaoguri/claude-plugins の repo-standards プラグイン (`/repo-audit` 等が
   `~/.claude/repo-standards.json` 経由で読む)。項目の増減はテストが守るが、
