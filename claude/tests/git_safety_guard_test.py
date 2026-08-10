@@ -203,20 +203,65 @@ class ReversibleOperationTest(HookTestCase):
         subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
         self.assert_decision(self.run_hook("git branch -D feature/wip"), "ask")
 
-    def test_deleting_a_local_only_branch_asks(self):
-        """upstream を持たない (push していない) ブランチは、消すと復元できない。"""
+    def test_deleting_a_contained_local_only_branch_is_auto_approved(self):
+        """push 前でも、tip が origin/main にあるならコミットは remote から取り戻せる。
+
+        worktree セッションが残す push 前のブランチはこの形で溜まる (upstream を
+        持たないので [gone] にはなりえない)。
+        """
         self.with_remote()
         subprocess.run(["git", "branch", "feature/local"], cwd=self.repo, check=True)
-        self.assert_decision(self.run_hook("git branch -D feature/local"), "ask")
+        self.assert_auto_approved(self.run_hook("git branch -D feature/local"))
+
+    def test_deleting_a_local_only_branch_with_own_commits_asks(self):
+        """push もしておらず origin/main にも無いコミットは、消すと本当に失われる。"""
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/unpushed"], cwd=self.repo, check=True
+        )
+        self.commit("only here")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        self.assert_decision(self.run_hook("git branch -D feature/unpushed"), "ask")
 
     def test_mixed_targets_ask(self):
         """1 つでも確認できない対象が混ざれば、全体を ask にする。"""
         self.with_remote()
         self.make_gone_branch("feature/done")
-        subprocess.run(["git", "branch", "feature/local"], cwd=self.repo, check=True)
-        self.assert_decision(
-            self.run_hook("git branch -D feature/done feature/local"), "ask"
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/unpushed"], cwd=self.repo, check=True
         )
+        self.commit("only here")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        self.assert_decision(
+            self.run_hook("git branch -D feature/done feature/unpushed"), "ask"
+        )
+
+    def test_live_branch_without_own_commits_asks(self):
+        """push 済みのブランチは、内容が origin/main に入っていても ask のまま。
+
+        「内容が既定ブランチにある」は push 前のブランチにしか当てない指標。
+        push 済み = 共有済みで、まだ差分が無いだけの*作業中*のブランチと区別が
+        つかないため、これを当てると生きた PR のブランチまで黙って消せてしまう。
+        """
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/fresh"], cwd=self.repo, check=True
+        )
+        subprocess.run(
+            ["git", "push", "-q", "-u", "origin", "feature/fresh"],
+            cwd=self.repo, check=True,
+        )
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        self.assert_decision(self.run_hook("git branch -D feature/fresh"), "ask")
+
+    def test_local_only_branch_without_remote_asks(self):
+        """リモートを持たないリポジトリでは、取り戻せる先が無い。"""
+        subprocess.run(
+            ["git", "commit", "-q", "--allow-empty", "-m", "init"],
+            cwd=self.repo, check=True,
+        )
+        subprocess.run(["git", "branch", "feature/local"], cwd=self.repo, check=True)
+        self.assert_decision(self.run_hook("git branch -D feature/local"), "ask")
 
     def test_unknown_branch_asks(self):
         self.with_remote()
