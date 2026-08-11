@@ -37,6 +37,22 @@
 #
 # 削除するのはローカルの参照だけで、内容は main に入っており、元コミットも
 # GitHub 側に refs/pull/<N>/head として残るため情報は失われない。
+#
+# ただし [gone] 判定は **upstream を持つブランチしか拾えない**。一度も push して
+# いないローカル専用ブランチ（Claude Code の worktree 分離が作る worktree-agent-*
+# や、push せずに終わったセッションブランチ）は upstream が無いので永遠に対象外で、
+# これが実際に数十本まで積み上がった。
+#
+# そこで判定をもう 1 本用意する。「既定ブランチの祖先である」= 内容が完全に
+# 取り込み済みで、消しても 1 ビットも失われないローカルブランチ:
+#
+#   git stale         # 既定ブランチに取り込み済みのローカルブランチを一覧
+#   git stale-clean   # それを削除（-d のみ。取り込み済みでなければ git が拒否する）
+#
+# 除外は for-each-ref に任せる: %(worktreepath) が非空 = どこかの worktree が
+# 掴んでいる（現在のブランチを含む）ので候補から外れ、既定ブランチ自身も名前で
+# 外す。fetch はしない — 祖先判定は単調で、origin/main が古くても誤爆せず
+# 「拾い漏らす」側にしか倒れないため、オフラインでも安全に走る。
 
 - name: Prune stale remote-tracking branches on every fetch
   community.general.git_config:
@@ -54,6 +70,18 @@
   community.general.git_config:
     name: alias.gone-clean
     value: "!git gone | while read -r branch; do git branch -D \"$branch\"; done"
+    scope: global
+
+- name: Add git alias `stale` (list local branches already contained in the default branch)
+  community.general.git_config:
+    name: alias.stale
+    value: '!base=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main); git for-each-ref --format="%(refname:short) %(worktreepath)" refs/heads | awk "NF==1 {print \$1}" | grep -vxF "${base#origin/}" | while read -r branch; do git merge-base --is-ancestor "$branch" "$base" 2>/dev/null && echo "$branch"; done; true'
+    scope: global
+
+- name: Add git alias `stale-clean` (delete the branches listed by `git stale`)
+  community.general.git_config:
+    name: alias.stale-clean
+    value: '!git stale | while read -r branch; do git branch -d "$branch"; done'
     scope: global
 
 - name: Read SSH public key from 1Password agent
