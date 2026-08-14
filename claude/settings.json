@@ -3,7 +3,7 @@
     "TMPDIR": "/private/tmp"
   },
   "attribution": {
-    "commit": "",
+    "commit": "Assisted-by: Claude <noreply@anthropic.com>",
     "pr": "",
     "sessionUrl": false
   },
