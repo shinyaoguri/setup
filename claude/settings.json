@@ -18,6 +18,12 @@
       "Bash(git ls-files:*)",
       "Bash(git rev-parse:*)",
       "Bash(git worktree list:*)",
+      "Bash(git fetch:*)",
+      "Bash(git branch -d:*)",
+      "Bash(git gone)",
+      "Bash(git gone-clean)",
+      "Bash(git stale)",
+      "Bash(git stale-clean)",
       "Bash(gh auth status)",
       "Bash(gh repo view:*)",
       "Bash(gh issue view:*)",
@@ -53,6 +59,12 @@
             "type": "command",
             "command": "~/.claude/runcat-metrics.py",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "git rev-parse --git-dir >/dev/null 2>&1 && git gone-clean >/dev/null 2>&1 || true",
+            "timeout": 30,
+            "statusMessage": "役目を終えたブランチを掃除中"
           }
         ]
       }
