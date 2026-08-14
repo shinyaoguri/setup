@@ -45,6 +45,18 @@ READ_ONLY_EXCEPTIONS = {
 RULE_RE = re.compile(r"^Bash\((?P<cmd>.+?)(?P<glob>:\*|\s\*)?\)$")
 
 
+def mutation_tokens(cmd):
+    """状態変更語との照合に使う語を返す。
+
+    空白だけで割ると、ハイフンで繋がった名前 (エイリアスに多い `gone-clean`
+    `stale-clean` など) の中に隠れた語を取り逃がす。ハイフンで割った断片も
+    足して照合する。`cherry-pick` のように語そのものがハイフンを含むものは
+    分割前の形を集合に残すので、これまでどおり拾える。
+    """
+    tokens = set(cmd.split())
+    return tokens | {part for token in tokens for part in token.split("-") if part}
+
+
 class SettingsTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -83,7 +95,7 @@ class SettingsTestCase(unittest.TestCase):
             cmd = m.group("cmd").strip() if m else rule
             if cmd in READ_ONLY_EXCEPTIONS:
                 continue
-            hits = MUTATING_WORDS.intersection(cmd.split())
+            hits = MUTATING_WORDS.intersection(mutation_tokens(cmd))
             with self.subTest(rule=rule):
                 self.assertEqual(
                     hits, set(),
