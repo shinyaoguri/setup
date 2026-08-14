@@ -155,5 +155,61 @@ class AdditionalDirectoriesTestCase(unittest.TestCase):
         )
 
 
+class AutoModeTestCase(unittest.TestCase):
+    """auto mode の分類器設定 (autoMode) の検証。
+
+    分類器は allow / soft_deny / hard_deny / environment を配列として読むが、
+    `"$defaults"` を含まない配列を書くと**その節の組み込みルールを丸ごと捨てる**
+    (force push・curl | bash・本番デプロイ・データ持ち出し・auto-mode bypass)。
+    緩めた自覚が残らないまま守りが消えるので、書式の側で落とす。
+
+    この設定はプロジェクトの .claude/settings.json からもプラグインからも供給
+    できない (リポジトリが自分でルールを緩められないための公式仕様) ため、
+    このファイルが唯一の置き場になる。
+    """
+
+    SECTIONS = ("allow", "soft_deny", "hard_deny", "environment")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.data = json.loads(SETTINGS.read_text())
+        cls.auto = cls.data.get("autoMode", {})
+
+    def test_arrays_keep_builtin_defaults(self):
+        for name in self.SECTIONS:
+            value = self.auto.get(name)
+            if value is None:
+                continue
+            with self.subTest(section=name):
+                self.assertIsInstance(value, list, f"autoMode.{name} は配列で書く")
+                self.assertIn(
+                    "$defaults", value,
+                    f'autoMode.{name} に "$defaults" が無い '
+                    f"(この節の組み込みルールを丸ごと捨てている)",
+                )
+
+    def test_default_mode_is_auto(self):
+        """承認プロンプトを分類器へ寄せる前提そのもの。
+
+        auto でなければ autoMode の記述は効かず、上のテストも意味を失う。
+        """
+        self.assertEqual(
+            self.data.get("permissions", {}).get("defaultMode"), "auto",
+            "permissions.defaultMode を auto にする (ユーザー設定でのみ有効)",
+        )
+
+    def test_ask_rules_exist(self):
+        """取り返しのつかない操作で必ず人間に返る境界を残す。
+
+        ask ルールは分類器より前に評価され、auto モードでも確実にプロンプトになる。
+        空にすると、削除まで分類器の判断だけに委ねることになる。
+        """
+        ask = self.data.get("permissions", {}).get("ask", [])
+        self.assertTrue(ask, "permissions.ask に不可逆操作のチェックポイントを残す")
+        for rule in ask:
+            with self.subTest(rule=rule):
+                self.assertRegex(rule, RULE_RE, "ask は Bash(...) 形式で書く")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
