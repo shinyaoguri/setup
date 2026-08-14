@@ -47,6 +47,12 @@ python3 claude/tests/runcat_metrics_test.py
   判定は `claude/tests/settings_test.py` が CI で強制する — 引っかかったら足す前に考え直す。
   プラグイン同梱スクリプトの実行許可はここでなく各スキルの `allowed-tools` frontmatter で宣言する
   (`${CLAUDE_PLUGIN_ROOT}` が展開されるぶん、マシン依存の絶対パスを settings.json に書かずに済む)
+- `permissions.additionalDirectories` は「毎回同じ承認を押している場所」だけを足す。ここは
+  コマンドでなく**範囲**の宣言で、読み取りが無確認になるだけ (編集の可否は permission mode に
+  従うので default モードでは確認が残る)。worktree セッションはリポ本体も設定の実体も範囲外に
+  なるため、`~/Repos` / `~/.setup` / `~/.claude` を常設している。パスは `~/` 始まりで書く
+  (展開は効く。絶対パスだとユーザー名がマシンに依存する)。範囲の広すぎと書き方は
+  `claude/tests/settings_test.py` が CI で見る
 - 書き込み系のコマンドを確認なしで通したいときは allow ではなく PreToolUse フック側で判定する。
   allow は文字列の前方一致でしかなく「安全な場合だけ」を表現できないが、フックはリポジトリの
   状態を見て可逆と確認できたときだけ `allow` を返せる (`claude/git-safety-guard.sh` の

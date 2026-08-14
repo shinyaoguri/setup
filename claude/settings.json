@@ -24,9 +24,14 @@
       "Bash(gh issue list:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr list:*)",
-      "Bash(gh pr diff:*)"
+      "Bash(gh pr diff:*)",
+      "Bash(op read:*)"
     ],
-    "additionalDirectories": []
+    "additionalDirectories": [
+      "~/Repos",
+      "~/.setup",
+      "~/.claude"
+    ]
   },
   "hooks": {
     "PostToolUse": [
