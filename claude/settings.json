@@ -47,6 +47,17 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/plan-record.sh capture",
+            "timeout": 20,
+            "statusMessage": "プランを GitHub 用に整えています"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -56,6 +67,12 @@
             "type": "command",
             "command": "~/.claude/runcat-metrics.py",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/plan-record.sh guard",
+            "timeout": 30,
+            "statusMessage": "プランが GitHub に残ったか確認中"
           },
           {
             "type": "command",
