@@ -2,6 +2,11 @@
   "env": {
     "TMPDIR": "/private/tmp"
   },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
   "permissions": {
     "allow": [
       "Bash(jq:*)",
