@@ -95,5 +95,53 @@ class SettingsTestCase(unittest.TestCase):
         self.assertEqual(len(self.allow), len(set(self.allow)), "allow が重複している")
 
 
+class AdditionalDirectoriesTestCase(unittest.TestCase):
+    """`permissions.additionalDirectories` のテスト。
+
+    ここに書いたディレクトリは全マシンで確認なしに読める範囲になる (編集の可否は
+    permission mode に従うので、default モードなら書き込みの確認は残る)。緩めるのは
+    「毎回同じ承認を押している場所」だけに留めたいので、範囲の広すぎとマシン依存の
+    書き方を CI で落とす。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        data = json.loads(SETTINGS.read_text())
+        cls.dirs = data.get("permissions", {}).get("additionalDirectories", [])
+
+    def test_paths_are_home_relative(self):
+        """`~/` 始まりで書く (ユーザー名を埋め込むとマシンを移ったとき効かなくなる)。
+
+        `~` が展開されることは実測済み: 範囲外の空ディレクトリから `claude -p` を
+        走らせると、`~/Repos` を渡したときだけ範囲外のファイルを読めた。
+        """
+        for path in self.dirs:
+            with self.subTest(path=path):
+                self.assertTrue(
+                    path.startswith("~/"),
+                    "additionalDirectories は ~/ 始まりで書く "
+                    "(絶対パスはユーザー名がマシンに依存する)",
+                )
+
+    def test_paths_are_not_too_broad(self):
+        """ホーム直下や / をまるごと開けない。
+
+        個別のディレクトリを足すのは範囲の追加だが、ホームそのものを足すのは
+        「全部入り」への切り替えで意味が違う。
+        """
+        for path in self.dirs:
+            with self.subTest(path=path):
+                self.assertNotIn(
+                    path.rstrip("/"), {"~", "/", ""},
+                    "ホーム全体・ルート全体を開ける指定は置かない",
+                )
+
+    def test_paths_unique(self):
+        self.assertEqual(
+            len(self.dirs), len(set(self.dirs)),
+            "additionalDirectories が重複している",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
