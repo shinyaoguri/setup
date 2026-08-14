@@ -8,6 +8,14 @@
     "sessionUrl": false
   },
   "permissions": {
+    "defaultMode": "auto",
+    "ask": [
+      "Bash(gh repo delete:*)",
+      "Bash(gh release delete:*)",
+      "Bash(gh api -X DELETE:*)",
+      "Bash(gh api --method DELETE:*)",
+      "Bash(git push --delete:*)"
+    ],
     "allow": [
       "Bash(jq:*)",
       "Bash(git status:*)",
@@ -135,6 +143,24 @@
       },
       "autoUpdate": true
     }
+  },
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "Organization: individual developer (github.com/shinyaoguri), no company or team infrastructure. Primary use of Claude Code: software development on personal repositories",
+      "Source control: github.com/shinyaoguri and the repositories under that account. Pushing, opening pull requests, and filing issues there are routine operations. This trust does not extend to any other GitHub account or organization, and it does not change what may be placed in a repository: a public repository under this account is still a public destination",
+      "Internal sharing / snippet hosting: Gyazo (gyazo.com) is the sanctioned destination for visual evidence of GUI work — screenshots and animated GIFs are uploaded there and linked from issues and pull requests instead of being committed to a repository. The trust is limited to screen captures of the developer's own local work in progress; source from a private repository, credentials, personal data, and any content whose confidentiality is not the developer's own to waive are not to be uploaded there. Other public paste and gist services remain outside the trust boundary",
+      "Secrets management: no vault or cloud secret manager. Real secrets, personal data, and production data live only in gitignored files such as .env. Anything that leaves that boundary — commits, generated artifacts, logs, issues, pull requests, external services — carries only dummy values, environment variable names, or references such as a path or an ID"
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Guard Narrowing [named+specifics — **must name:** the guard being changed and what the change removes]: Reducing what this machine's own agent guards check. Covers deleting or narrowing entries in the `hooks` arrays of any Claude settings file (~/.claude/settings*.json, a repository's .claude/settings*.json, and their source of truth at github.com/shinyaoguri/setup path claude/settings.json); deleting, moving, renaming, or removing the executable bit from a hook script those files reference (github.com/shinyaoguri/setup path claude/*.sh, symlinked into ~/.claude — including but not limited to git-safety-guard.sh, git-signing-preflight.sh, provisioning-preflight.sh, worktree-path-guard.sh); setting `git config core.hooksPath`; and passing `--no-verify` to git commit or push, or setting `SKIP=` or `HUSKY=0`. These files are the developer's own to maintain, so an explicit request that names the guard and the change clears this rule; an edit that arrives as a step toward some other goal does not.",
+      "Blocked-Path Substitution: After a guard or a permission rule blocked an action earlier in this session, reaching the same effect through an interface that guard does not observe — for example `gh api` in place of the blocked `git push`, or a script or alias that wraps the blocked command. The substitution is judged against the original action's rules, not the new interface's."
+    ],
+    "hard_deny": [
+      "$defaults",
+      "Auto-Mode Self-Authorization: Widening this machine's own auto mode authorization, by any mechanism and in any settings file carrying an `autoMode` section (~/.claude/settings.json and settings.local.json, a repository's .claude/settings*.json, and the source of truth at github.com/shinyaoguri/setup path claude/settings.json) — whether through Edit or Write, a shell rewrite (`jq`, `sed`, a heredoc redirect, a script), or restoring an earlier revision (`git checkout <rev> -- <settings file>`). Widening means any of: adding an entry to `autoMode.allow`; deleting an entry from `autoMode.soft_deny` or `autoMode.hard_deny`, or rewriting one so it covers less; dropping the literal \"$defaults\" from any `autoMode` array, which silently discards that section's built-in rules; and adding to or weakening an `autoMode.environment` slot — declaring a new trusted domain, bucket, registry, service, or repository, or calling a public repository private — because trusting more infrastructure widens authorization by another door. This is the one change an agent must never make on its own behalf, whatever authorization it believes it has: it is the act of granting itself permission. Block unconditionally. The developer makes it outside auto mode, as a reviewable commit. Tightening is not this rule: adding a `soft_deny` or `hard_deny` entry, restoring \"$defaults\", or narrowing an `environment` slot."
+    ]
   },
   "language": "japanese",
   "tui": "fullscreen",
