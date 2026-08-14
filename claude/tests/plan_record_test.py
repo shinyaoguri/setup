@@ -1,0 +1,258 @@
+#!/usr/bin/env python3
+"""claude/plan-record.sh のテスト。
+
+フックの契約 (stdin の JSON → 記録ファイル + stderr の指示) をサブプロセス経由で
+検証する。投稿先の解決と投稿済み判定は gh に依存するので、PATH の先頭に偽の gh を
+置いて振る舞いを環境変数で決める。
+
+    python3 claude/tests/plan_record_test.py
+"""
+
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve().parent.parent / "plan-record.sh"
+
+# 引数から用件だけを見分ける最小の gh。number を返す問い合わせと、コメント本文を
+# 返す問い合わせの二つしか使われない
+FAKE_GH = """#!/bin/sh
+kind=$1
+case "$*" in
+  *comments*) printf '%s\\n' "${FAKE_GH_COMMENTS:-}"; exit 0 ;;
+esac
+case "$kind" in
+  pr)    [ -n "${FAKE_GH_PR:-}" ]    || exit 1; printf '%s\\n' "$FAKE_GH_PR" ;;
+  issue) [ -n "${FAKE_GH_ISSUE:-}" ] || exit 1; printf '%s\\n' "$FAKE_GH_ISSUE" ;;
+  *) exit 1 ;;
+esac
+"""
+
+
+class PlanRecordTestCase(unittest.TestCase):
+    def setUp(self):
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+        root = Path(self.workdir.name)
+
+        self.repo = root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q", "-b", "feat/plan-123")
+        self.git("config", "user.email", "t@example.com")
+        self.git("config", "user.name", "t")
+        (self.repo / "README.md").write_text("hi\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "init")
+
+        bindir = root / "bin"
+        bindir.mkdir()
+        gh = bindir / "gh"
+        gh.write_text(FAKE_GH)
+        gh.chmod(0o755)
+        self.bindir = bindir
+
+    def git(self, *args):
+        subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True)
+
+    def env(self, **overrides):
+        env = dict(os.environ)
+        env["PATH"] = f"{self.bindir}:{env['PATH']}"
+        for key, value in overrides.items():
+            env[key] = value
+        return env
+
+    def run_hook(self, mode, payload=None, stdin="", **env):
+        return subprocess.run(
+            [str(SCRIPT), mode],
+            input=json.dumps(payload) if payload is not None else stdin,
+            capture_output=True,
+            text=True,
+            cwd=str(self.repo),
+            env=self.env(**env),
+            timeout=30,
+        )
+
+    def capture(self, plan, **env):
+        return self.run_hook(
+            "capture",
+            {
+                "tool_name": "ExitPlanMode",
+                "cwd": str(self.repo),
+                "session_id": "abcd1234-ef56-7890",
+                "tool_input": {"plan": plan},
+            },
+            **env,
+        )
+
+    def guard(self, **env):
+        return self.run_hook("guard", {"cwd": str(self.repo)}, **env)
+
+    def records(self):
+        return sorted((self.repo / ".git" / "claude-plan-records").glob("*.md"))
+
+    # --- サニタイズ ---------------------------------------------------------
+
+    def test_sanitize_collapses_repo_and_home_paths(self):
+        body = (
+            "触るのは /Users/so/Repos/proj/.claude/worktrees/wt/Sources/App.swift。\n"
+            "他の人の /home/alice/notes.md も引用した。\n"
+        )
+        out = subprocess.run(
+            [str(SCRIPT), "sanitize", "/Users/so/Repos/proj/.claude/worktrees/wt"],
+            input=body, capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertIn("触るのは Sources/App.swift", out)
+        self.assertIn("~/notes.md", out)
+        self.assertNotIn("/Users/so", out)
+        self.assertNotIn("alice", out)
+
+    def test_sanitize_survives_regex_metacharacters_in_path(self):
+        # worktree のディレクトリ名に括弧やドットが入っても sed が壊れないこと
+        root = "/Users/so/Repos/proj (old)/.claude/wt+1"
+        out = subprocess.run(
+            [str(SCRIPT), "sanitize", root],
+            input=f"{root}/Sources/App.swift を直す\n",
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Sources/App.swift を直す", out.stdout)
+
+    # --- 検査 ---------------------------------------------------------------
+
+    def test_scan_flags_secrets_and_leaves_prose_alone(self):
+        body = (
+            "export GITHUB_TOKEN=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789\n"
+            "token は環境変数で渡す (値は書かない)\n"
+            "参照は $API_KEY と <your-token> のまま\n"
+        )
+        out = subprocess.run(
+            [str(SCRIPT), "scan"], input=body, capture_output=True, text=True, check=True
+        ).stdout
+        self.assertIn("BLOCK", out)
+        self.assertIn("行 1", out)
+        # 2〜3 行目は説明文と伏せ字なので、秘密情報として拾ってはいけない
+        self.assertNotIn("行 2", out)
+        self.assertNotIn("行 3", out)
+
+    def test_scan_warns_without_blocking(self):
+        body = "連絡は alice@example.com。参照は op://Vault/item/credential\n"
+        out = subprocess.run(
+            [str(SCRIPT), "scan"], input=body, capture_output=True, text=True, check=True
+        ).stdout
+        self.assertIn("WARN", out)
+        self.assertNotIn("BLOCK", out)
+
+    def test_scan_ignores_github_noreply(self):
+        out = subprocess.run(
+            [str(SCRIPT), "scan"],
+            input="Assisted-by: Claude <noreply@anthropic.com>\n",
+            capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertEqual(out.strip(), "")
+
+    # --- capture ------------------------------------------------------------
+
+    def test_capture_writes_sanitized_record_and_instructs(self):
+        result = self.capture(
+            f"## 方針\n\n{self.repo}/README.md を直す。却下案: 全面書き換え。\n",
+            FAKE_GH_PR="42",
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+        files = self.records()
+        self.assertEqual(len(files), 1)
+        body = files[0].read_text()
+        self.assertIn("却下案: 全面書き換え", body)
+        self.assertIn("README.md を直す", body)
+        self.assertNotIn(str(self.repo), body)  # 絶対パスは畳まれている
+        self.assertIn("<!-- plan-record: ", body)  # 投稿済み判定の目印
+
+        self.assertIn("gh pr comment 42", result.stderr)
+
+    def test_capture_falls_back_to_issue_named_by_the_plan(self):
+        result = self.capture("Closes #77 のための計画。\n", FAKE_GH_ISSUE="77")
+        self.assertIn("gh issue comment 77", result.stderr)
+
+    def test_capture_refuses_when_the_plan_carries_a_secret(self):
+        result = self.capture(
+            "手順:\n1. export GITHUB_TOKEN=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789\n",
+            FAKE_GH_PR="42",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.records(), [])  # 秘密を .git の中に置き去りにしない
+        self.assertIn("秘密情報", result.stderr)
+        # 検出した値そのものを再掲しない (hook の出力も記録に残るため)
+        self.assertNotIn("ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ", result.stderr)
+
+    def test_capture_still_records_when_no_target_exists_yet(self):
+        result = self.capture("PR も Issue もまだ無い状態の計画。\n")
+        self.assertEqual(len(self.records()), 1)
+        self.assertIn("まだありません", result.stderr)
+
+    def test_capture_reports_warnings_for_human_judgement(self):
+        result = self.capture("連絡先 alice@example.com を使う。\n", FAKE_GH_PR="42")
+        self.assertIn("メールアドレス", result.stderr)
+        self.assertEqual(len(self.records()), 1)  # 警告では止めない
+
+    def test_capture_outside_git_is_silent(self):
+        outside = Path(self.workdir.name) / "plain"
+        outside.mkdir()
+        result = subprocess.run(
+            [str(SCRIPT), "capture"],
+            input=json.dumps(
+                {"cwd": str(outside), "session_id": "x", "tool_input": {"plan": "計画"}}
+            ),
+            capture_output=True, text=True, cwd=str(outside), env=self.env(), timeout=30,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "")
+
+    # --- guard --------------------------------------------------------------
+
+    def test_guard_blocks_stop_while_the_plan_is_unposted(self):
+        self.capture("計画。\n", FAKE_GH_PR="42")
+        result = self.guard(FAKE_GH_PR="42")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("gh pr comment 42", result.stderr)
+
+    def test_guard_clears_the_record_once_it_is_posted(self):
+        self.capture("計画。\n", FAKE_GH_PR="42")
+        record_id = self.records()[0].read_text().split("plan-record: ")[1].split(" ")[0]
+
+        result = self.guard(
+            FAKE_GH_PR="42", FAKE_GH_COMMENTS=f"<!-- plan-record: {record_id} -->"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.records(), [])
+
+    def test_guard_is_quiet_when_there_is_nowhere_to_post(self):
+        self.capture("PR がまだ無い計画。\n")
+        result = self.guard()  # PR も Issue も解決できない
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.records()), 1)  # 記録は残す (急かさないだけ)
+
+    def test_guard_ignores_records_from_another_branch(self):
+        self.capture("別ブランチで立てた計画。\n", FAKE_GH_PR="42")
+        self.git("checkout", "-q", "-b", "other")
+        result = self.guard(FAKE_GH_PR="42")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_guard_gives_up_after_repeated_nags(self):
+        self.capture("計画。\n", FAKE_GH_PR="42")
+        for _ in range(3):
+            self.assertEqual(self.guard(FAKE_GH_PR="42").returncode, 2)
+        # 4 回目は諦めて人間の判断へ返す (無限に終われないセッションを作らない)
+        self.assertEqual(self.guard(FAKE_GH_PR="42").returncode, 0)
+        self.assertEqual(self.records(), [])
+
+    def test_guard_can_be_disabled(self):
+        self.capture("計画。\n", FAKE_GH_PR="42")
+        result = self.guard(FAKE_GH_PR="42", CLAUDE_PLAN_RECORD="0")
+        self.assertEqual(result.returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

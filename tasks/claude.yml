@@ -26,6 +26,13 @@
 # (パスの取り違え) を止める PreToolUse フック。呼び出し口はいずれも settings.json の
 # hooks、テストは claude/tests/*_test.py (python3 で直接実行)
 #
+# plan-record.sh は着手時のプランを GitHub (PR / Issue のコメント) 側に残すためのフック。
+# プランは ~/.claude/plans/ にも溜まるが、そこはローカルのマシンにしか無く、ランダムな
+# 3 語のファイル名でリポジトリとも紐づかない。PostToolUse (ExitPlanMode) で持ち出せる形に
+# 整えて .git/claude-plan-records/ へ置き (コミットされない)、Stop で未投稿を差し戻す。
+# 投稿は Claude に `gh ... comment` を打たせる — 公開の前に承認を一度通すため。
+# 呼び出し口は settings.json の hooks、テストは claude/tests/plan_record_test.py
+#
 # repo-standards.json はリポジトリ標準チェックリストの正本。消費者は claude-plugins の
 # repo-standards プラグイン (~/.claude/repo-standards.json 経由で読む)。
 # テストは claude/tests/repo_standards_test.py
@@ -40,6 +47,7 @@
       - git-safety-guard.sh
       - provisioning-preflight.sh
       - worktree-path-guard.sh
+      - plan-record.sh
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
