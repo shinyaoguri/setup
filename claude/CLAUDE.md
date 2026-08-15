@@ -27,6 +27,7 @@
 
 - コードの識別子は英語。コメント・ドキュメント・コミット要約は日本語でよい
 - GitHub Flow: main が唯一の長命ブランチ。作業は main から `<type>/<短い説明>` ブランチを切り、小さく作って早めに PR (WIP なら Draft)
+- **着手した Issue には `status: in progress` を付け、PR が merge されたら / 中断したら外す** (ラベルが無いリポでは `gh label create` で作る)。複数のセッションが同じリポで並行するので、着手は push を待たずに GitHub 側から見える必要がある。次のタスクを選ぶときはこのラベルが付いた Issue と、in-flight PR が触っているファイル群を避ける — 収集から着手までの手順は repo-standards プラグインの next-task スキルが持つ
 - コミットは Conventional Commits: `<type>(<scope>): <要約>`。type は feat / fix / docs / refactor / test / chore / ci。1 コミット 1 関心
 - Squash merge 前提。PR タイトルもコミットと同形式に書く (マージコミットのメッセージになる)
 - コミットログと PR 本文 (目的・変更点・確認方法) を丁寧に書くこと。それが書けていて CI が green なら、push / merge は指示を待たず進めてよい (force push・main への直接 push は上記の不可逆操作として事前確認)
