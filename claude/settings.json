@@ -112,6 +112,12 @@
             "command": "~/.claude/provisioning-preflight.sh",
             "timeout": 30,
             "statusMessage": "プロビジョニングの変更内容を事前確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/gh-comment-guard.sh",
+            "timeout": 10,
+            "statusMessage": "コメントの署名を確認中"
           }
         ]
       },

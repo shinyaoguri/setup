@@ -33,6 +33,13 @@
 # 投稿は Claude に `gh ... comment` を打たせる — 公開の前に承認を一度通すため。
 # 呼び出し口は settings.json の hooks、テストは claude/tests/plan_record_test.py
 #
+# gh-comment-guard.sh は Issue / PR コメントに Claude の署名が付いているかを見る
+# PreToolUse フック。同じ場所に人間と複数のエージェントが書き込むので、発言の出どころが
+# 後から辿れる必要がある (Codex は GitHub App 経由なので GitHub 側が「commented with 〜」を
+# 描くが、ローカルの gh CLI から投稿する Claude Code にその表示は出ない)。署名を付けるのは
+# 規約 (claude/CLAUDE.md) の仕事で、ここは付け忘れを差し戻すだけ — PreToolUse はツール入力を
+# 書き換えられないため。テストは claude/tests/gh_comment_guard_test.py
+#
 # repo-standards.json はリポジトリ標準チェックリストの正本。消費者は claude-plugins の
 # repo-standards プラグイン (~/.claude/repo-standards.json 経由で読む)。
 # テストは claude/tests/repo_standards_test.py
@@ -48,6 +55,7 @@
       - provisioning-preflight.sh
       - worktree-path-guard.sh
       - plan-record.sh
+      - gh-comment-guard.sh
 
 - name: Create ~/.claude directory
   ansible.builtin.file:

@@ -211,6 +211,9 @@ EOF
     printf '\n---\n\n'
     printf 'このプランは着手時点の判断です。実装の過程で変わった場合は、'
     printf 'このコメントに返信する形で差分を残してください。\n'
+    # Claude の発言だと後から辿れるようにする署名。CLAUDE.md の規約と同じ文字列で、
+    # gh-comment-guard.sh がこれの有無を見て投稿を通す (無いと差し戻される)
+    printf '\n<sub>🤖 Assisted by [Claude Code](https://claude.com/claude-code)</sub>\n'
   } > "$file"
 
   target=$(resolve_target "$branch" "$body")
