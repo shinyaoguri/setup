@@ -23,12 +23,23 @@
 #   sanitize  stdin の本文からパス類を落として stdout へ (テストと手動確認用)
 #   scan      stdin の本文から BLOCK / WARN 行を stdout へ (テストと手動確認用)
 #
+# 環境変数: CLAUDE_PLAN_RECORD=0 で無効化 / CLAUDE_PLAN_RECORD_DEBUG=1 で
+# 何もせず終わった理由を stderr へ出す (黙って効かなくなったときの切り分け用)。
+#
 # 呼び出し口は settings.json の hooks、テストは claude/tests/plan_record_test.py。
 
 set -uo pipefail
 
+# 何もせず終わる経路の理由を見せる。既定は無言 (フックは全リポで動くので、
+# 通常運転で喋ると邪魔になる)。仕組みが黙って効かなくなったときの切り分け用で、
+# CLAUDE_PLAN_RECORD_DEBUG=1 を付けて同じ payload を流し直せば理由が出る
+debug() { [ "${CLAUDE_PLAN_RECORD_DEBUG:-0}" = "0" ] || printf 'plan-record: %s\n' "$1" >&2; }
+
 # 一時的に止めたいときの逃げ道 (このフックは全リポで動くため)
-[ "${CLAUDE_PLAN_RECORD:-1}" = "0" ] && exit 0
+if [ "${CLAUDE_PLAN_RECORD:-1}" = "0" ]; then
+  debug 'CLAUDE_PLAN_RECORD=0 で無効化されている'
+  exit 0
+fi
 
 MAX_NAGS=3      # guard が差し戻す回数の上限。超えたら諦めて人間の判断へ返す
 STALE_DAYS=14   # 投稿先が現れないまま放置された記録を捨てるまでの日数
@@ -163,24 +174,77 @@ record_dir() {
   printf '%s/claude-plan-records' "$common"
 }
 
+# --- プラン本文の取り出し ---------------------------------------------------
+# 本文の置き場は Claude Code のバージョンで動く:
+#   以前 — モデルが ExitPlanMode の引数として本文を渡していた (.tool_input.plan)
+#   現在 — モデルは引数を取らず本文はファイルに書かれる。フックへは
+#          .tool_response.plan / .tool_response.filePath として返り、
+#          .tool_input は {"_targetMode":"auto"} だけになる
+# 1 箇所に賭けるとこの変化で黙って壊れる (Issue #87 がそれ) ので、ありうる場所を
+# 順に見て最初に見つかった本文を使い、本文が直接来ていなければファイルから読む。
+
+plan_body() { # $1=payload → プラン本文 (見つからなければ空)
+  local payload="$1" body file
+  body=$(printf '%s' "$payload" | jq -r '
+    first((
+      .tool_input.plan?, .tool_input.content?, .tool_input.text?, .tool_response.plan?
+    ) | select(type == "string" and . != ""))' 2>/dev/null)
+  if [ -z "$body" ]; then
+    file=$(printf '%s' "$payload" | jq -r '
+      first((
+        .tool_response.filePath?, .tool_response.planFilePath?, .tool_input.planFilePath?
+      ) | select(type == "string" and . != ""))' 2>/dev/null)
+    [ -n "$file" ] && [ -f "$file" ] && body=$(cat "$file")
+  fi
+  printf '%s' "$body"
+}
+
+payload_keys() { # $1=payload $2=キー名 → そのオブジェクトのキー一覧
+  # 値は出さない。プランにも tool_response にも秘密情報が混ざりうるので、
+  # 次に直す人の手がかりになるキー名だけを見せる
+  printf '%s' "$1" | jq -r --arg k "$2" '
+    .[$k] | if type == "object" then (keys | join(",")) else "(\(type))" end' 2>/dev/null ||
+    printf '(不明)'
+}
+
 # --- capture ----------------------------------------------------------------
 
 capture() {
   local payload plan cwd session root branch dir id file body findings blocks warns target
 
   payload=$(cat)
-  command -v jq >/dev/null 2>&1 || exit 0
+  if ! command -v jq >/dev/null 2>&1; then
+    debug 'jq が無い'
+    exit 0
+  fi
 
-  plan=$(printf '%s' "$payload" | jq -r '.tool_input | (.plan // .content // .text // "")' 2>/dev/null)
-  [ -n "$plan" ] || exit 0
+  plan=$(plan_body "$payload")
+  if [ -z "$plan" ]; then
+    # ExitPlanMode が通った以上プランは必ず存在するので、本文が取れないこと自体が異常。
+    # ここだけは黙って諦めない — 無言で終わると guard も黙り、「プランを GitHub に
+    # 残す」仕組みが誰にも気付かれないまま無効化される (それが Issue #87)
+    cat >&2 <<EOF
+ExitPlanMode は通りましたが、プラン本文を取り出せませんでした。GitHub 用の記録は作れていません。
+
+プランは ~/.claude/plans/ に残っているので、PR / Issue のコメントへ手で投稿してください。
+そのうえで、フックが受け取る形が変わっていないか claude/plan-record.sh の plan_body() を確かめてください。
+
+  受け取ったキー: tool_input=$(payload_keys "$payload" tool_input) / tool_response=$(payload_keys "$payload" tool_response)
+EOF
+    exit 2
+  fi
+
   cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""')
   session=$(printf '%s' "$payload" | jq -r '.session_id // "nosession"')
   [ -n "$cwd" ] && cd "$cwd" 2>/dev/null
 
   # git リポジトリの外で立てたプランには投稿先が無い。黙って通す
-  root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
-  dir=$(record_dir) || exit 0
+  if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    debug "git リポジトリの外 (cwd=$cwd)"
+    exit 0
+  fi
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || { debug 'HEAD を解決できない'; exit 0; }
+  dir=$(record_dir) || { debug 'record_dir を解決できない'; exit 0; }
 
   body=$(printf '%s' "$plan" | sanitize "$root" "$(logical_root "$cwd")")
   findings=$(printf '%s' "$body" | scan)
@@ -200,7 +264,7 @@ EOF
     exit 2
   fi
 
-  mkdir -p "$dir" 2>/dev/null || exit 0
+  mkdir -p "$dir" 2>/dev/null || { debug "記録の置き場を作れない ($dir)"; exit 0; }
   id="${session%%-*}-$(date +%s)"
   file="$dir/$id.md"
 
@@ -257,16 +321,16 @@ guard() {
   local payload cwd dir branch meta id file nags target kind number pending='' round=0
 
   payload=$(cat)
-  command -v jq >/dev/null 2>&1 || exit 0
-  command -v gh >/dev/null 2>&1 || exit 0
+  command -v jq >/dev/null 2>&1 || { debug 'jq が無い'; exit 0; }
+  command -v gh >/dev/null 2>&1 || { debug 'gh が無い'; exit 0; }
 
   cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""')
-  [ -n "$cwd" ] || exit 0
-  cd "$cwd" 2>/dev/null || exit 0
-  dir=$(record_dir) || exit 0
-  [ -d "$dir" ] || exit 0
+  [ -n "$cwd" ] || { debug 'payload に cwd が無い'; exit 0; }
+  cd "$cwd" 2>/dev/null || { debug "cwd へ移動できない ($cwd)"; exit 0; }
+  dir=$(record_dir) || { debug 'git リポジトリの外'; exit 0; }
+  [ -d "$dir" ] || { debug "未投稿の記録が無い ($dir)"; exit 0; }
 
-  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || { debug 'HEAD を解決できない'; exit 0; }
 
   for meta in "$dir"/*.meta; do
     [ -f "$meta" ] || continue
