@@ -87,6 +87,21 @@ class PlanRecordTestCase(unittest.TestCase):
             **env,
         )
 
+    def capture_payload(self, **overrides):
+        """tool_input / tool_response を差し替えて capture を叩く。
+
+        プラン本文の置き場は Claude Code のバージョンで動くので、素の payload を
+        組めるようにしておく (self.capture は旧来の tool_input.plan 形式の近道)。
+        """
+        env = {k: v for k, v in overrides.items() if k.isupper()}
+        payload = {
+            "tool_name": "ExitPlanMode",
+            "cwd": str(self.repo),
+            "session_id": "abcd1234-ef56-7890",
+            **{k: v for k, v in overrides.items() if not k.isupper()},
+        }
+        return self.run_hook("capture", payload, **env)
+
     def guard(self, **env):
         return self.run_hook("guard", {"cwd": str(self.repo)}, **env)
 
@@ -209,6 +224,76 @@ class PlanRecordTestCase(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stderr, "")
+
+    # --- プラン本文の取り出し (置き場は Claude Code のバージョンで動く) --------
+
+    def test_capture_reads_the_plan_from_the_tool_response(self):
+        # 現行の ExitPlanMode はモデルが引数を取らず、本文は tool_response に返る。
+        # tool_input だけを見ていたころは、ここで無言のまま記録が作られなかった
+        result = self.capture_payload(
+            tool_input={"_targetMode": "auto"},
+            tool_response={"plan": "## 方針\n\n却下案: 全面書き換え。\n", "isAgent": False},
+            FAKE_GH_PR="42",
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(len(self.records()), 1)
+        self.assertIn("却下案: 全面書き換え", self.records()[0].read_text())
+
+    def test_capture_reads_the_plan_from_the_file_it_was_written_to(self):
+        plan_file = Path(self.workdir.name) / "plan.md"
+        plan_file.write_text("## 方針\n\nファイル越しに渡されたプラン。\n")
+        result = self.capture_payload(
+            tool_input={"_targetMode": "auto"},
+            tool_response={"filePath": str(plan_file)},
+            FAKE_GH_PR="42",
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("ファイル越しに渡されたプラン", self.records()[0].read_text())
+
+    def test_capture_speaks_up_when_the_plan_cannot_be_found(self):
+        # ExitPlanMode が通った以上プランは必ずある。取り出せないなら異常なので、
+        # 黙って諦めると guard も黙り、仕組みごと無言で無効化される (Issue #87)
+        result = self.capture_payload(
+            tool_input={"_targetMode": "auto"}, tool_response={}, FAKE_GH_PR="42"
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.records(), [])
+        self.assertIn("取り出せませんでした", result.stderr)
+        # 次に直す人のために、受け取ったキーだけを見せる (値は出さない)
+        self.assertIn("_targetMode", result.stderr)
+
+    # --- 何もせず終わった理由の可視化 -----------------------------------------
+
+    def test_debug_explains_why_nothing_happened(self):
+        outside = Path(self.workdir.name) / "plain"
+        outside.mkdir()
+        result = subprocess.run(
+            [str(SCRIPT), "capture"],
+            input=json.dumps(
+                {"cwd": str(outside), "session_id": "x", "tool_input": {"plan": "計画"}}
+            ),
+            capture_output=True, text=True, cwd=str(outside),
+            env=self.env(CLAUDE_PLAN_RECORD_DEBUG="1"), timeout=30,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("plan-record:", result.stderr)
+        self.assertIn("git リポジトリの外", result.stderr)
+
+    def test_debug_is_off_by_default(self):
+        # 通常運転では黙っていること (全リポで動くフックなので喋ると邪魔になる)
+        result = self.capture_payload(
+            tool_input={"plan": "計画。\n"}, CLAUDE_PLAN_RECORD="0"
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "")
+
+    def test_debug_explains_being_disabled(self):
+        result = self.capture_payload(
+            tool_input={"plan": "計画。\n"},
+            CLAUDE_PLAN_RECORD="0", CLAUDE_PLAN_RECORD_DEBUG="1",
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("無効化されている", result.stderr)
 
     # --- guard --------------------------------------------------------------
 
