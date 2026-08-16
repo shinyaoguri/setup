@@ -115,9 +115,8 @@ _update_prompt_with_firebase
 
 export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
 
-# Gyazo Upload API のトークンの「参照」だけを置く (値は 1Password から都度読む)。
-# 使う側: op read "$GYAZO_TOKEN_REF" — 手順は gyazo-capture スキル
-export GYAZO_TOKEN_REF="op://Automation/Gyazo API/credential"
+# 秘密の参照 (GYAZO_TOKEN_REF) と setup リポジトリの PATH は zshenv へ移した。
+# 非対話シェル (Claude の hook・scheduled task・cron) は zshrc を読まないため。
 
 # direnv (.envrc を見てディレクトリ単位で環境を切替。metaphor-cli のローカル開発ビルド優先など)
 if command -v direnv >/dev/null 2>&1; then
