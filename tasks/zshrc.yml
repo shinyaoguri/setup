@@ -29,3 +29,12 @@
     dest: "{{ ansible_facts['env']['HOME'] }}/.zshrc"
     state: link
     force: true
+
+# zshenv は対話・非対話を問わず読まれる。非対話シェル (Claude の hook・scheduled task・
+# cron) から見える必要があるもの (秘密の参照・setup の PATH) はこちらに入っている
+- name: Create symlink for zshenv
+  ansible.builtin.file:
+    src: "{{ playbook_dir }}/zshenv"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.zshenv"
+    state: link
+    force: true
