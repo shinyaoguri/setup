@@ -1,7 +1,4 @@
 {
-  "env": {
-    "TMPDIR": "/private/tmp"
-  },
   "attribution": {
     "commit": "Assisted-by: Claude <noreply@anthropic.com>",
     "pr": "",
@@ -98,12 +95,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/git-signing-preflight.sh",
-            "timeout": 20,
-            "statusMessage": "コミット署名を事前確認中"
-          },
-          {
-            "type": "command",
             "command": "~/.claude/git-safety-guard.sh",
             "timeout": 10,
             "statusMessage": "git 操作の安全確認中"
@@ -188,7 +179,7 @@
     ],
     "soft_deny": [
       "$defaults",
-      "Guard Narrowing [named+specifics — **must name:** the guard being changed and what the change removes]: Reducing what this machine's own agent guards check. Covers deleting or narrowing entries in the `hooks` arrays of any Claude settings file (~/.claude/settings*.json, a repository's .claude/settings*.json, and their source of truth at github.com/shinyaoguri/setup path claude/settings.json); deleting, moving, renaming, or removing the executable bit from a hook script those files reference (github.com/shinyaoguri/setup path claude/*.sh, symlinked into ~/.claude — including but not limited to git-safety-guard.sh, git-signing-preflight.sh, provisioning-preflight.sh, worktree-path-guard.sh); setting `git config core.hooksPath`; and passing `--no-verify` to git commit or push, or setting `SKIP=` or `HUSKY=0`. These files are the developer's own to maintain, so an explicit request that names the guard and the change clears this rule; an edit that arrives as a step toward some other goal does not.",
+      "Guard Narrowing [named+specifics — **must name:** the guard being changed and what the change removes]: Reducing what this machine's own agent guards check. Covers deleting or narrowing entries in the `hooks` arrays of any Claude settings file (~/.claude/settings*.json, a repository's .claude/settings*.json, and their source of truth at github.com/shinyaoguri/setup path claude/settings.json); deleting, moving, renaming, or removing the executable bit from a hook script those files reference (github.com/shinyaoguri/setup paths claude/*.sh and claude/*.py, symlinked into ~/.claude — including but not limited to git-safety-guard.sh, provisioning-preflight.sh, worktree-path-guard.sh, gh-comment-guard.sh, automode-guard.py); setting `git config core.hooksPath`; and passing `--no-verify` to git commit or push, or setting `SKIP=` or `HUSKY=0`. These files are the developer's own to maintain, so an explicit request that names the guard and the change clears this rule; an edit that arrives as a step toward some other goal does not.",
       "Blocked-Path Substitution: After a guard or a permission rule blocked an action earlier in this session, reaching the same effect through an interface that guard does not observe — for example `gh api` in place of the blocked `git push`, or a script or alias that wraps the blocked command. The substitution is judged against the original action's rules, not the new interface's.",
       "Outbound Work on Repositories That Are Not the Developer's [named+specifics — **must name:** the repository and what is being sent to it]: Anything that becomes visible inside a repository outside github.com/shinyaoguri — filing an issue, opening or updating a pull request including from a fork, posting a review or a comment, pushing a branch — and this holds for upstream projects the developer depends on or has contributed to before. Reading those repositories, cloning them, running their code, and quoting them are not covered and proceed normally. The developer's own repositories are the routine case and stay outside this rule entirely. The reason for the asymmetry is who pays for a mistake: a premature or wrong post in someone else's project costs that project's maintainers, and the developer's own judgment about whether it is worth sending cannot be inferred from the work itself."
     ],

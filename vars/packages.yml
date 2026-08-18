@@ -14,6 +14,8 @@ homebrew_packages:
 homebrew_cask_packages:
   - 1password
   - 1password-cli
+  # SSH 鍵を Secure Enclave に置く agent (コミット署名と GitHub 認証。tasks/ssh.yml)
+  - secretive
   - google-chrome
   - google-drive
   - discord

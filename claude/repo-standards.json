@@ -377,8 +377,8 @@
       "level": "recommended",
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_signatures_required" },
-      "why": "コミットの出所を保証する。グローバル hook (git-signing-preflight.sh) で署名前提の運用をしているのと整合",
-      "fix": "ruleset に required_signatures を追加する (1Password の署名設定が前提)"
+      "why": "コミットの出所を保証する。ローカルは全コミット署名の運用なので、その最終ゲートをリポジトリ側に置く",
+      "fix": "ruleset に required_signatures を追加する (ローカルの署名設定が前提)"
     },
     {
       "id": "gh-linear-history",

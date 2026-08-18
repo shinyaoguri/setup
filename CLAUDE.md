@@ -36,8 +36,11 @@ python3 claude/tests/runcat_metrics_test.py
   playbook の再実行が要る
 - `claude/` にスクリプトを足したら `tasks/claude.yml` の `claude_config_files` にも足す。
   忘れると配布されず、`settings.json` から参照しても動かない
-- 1Password 側は手動セットアップが前提。手順の正本は `tasks/git.yml` 冒頭のコメント。
-  SSH agent は 1Password アプリと一緒に止まるので「メニューバーに常駐」が要る
+- SSH の鍵まわりは Secretive (Secure Enclave) 側の手動セットアップが前提。手順の正本は
+  `tasks/ssh.yml` 冒頭のコメント。鍵の生成は GUI 操作なので ansible では自動化できない。
+  **鍵タイプは ECDSA P-256、"Require Authentication" は外す** — どちらを外しても
+  無人セッションが承認待ちで止まる側に倒れる。1Password は秘密の保管庫としてのみ使う
+  (`bin/secret-read`)
 - スキルはこのリポでは配らない。自作の汎用スキルは shinyaoguri/claude-plugins (marketplace) の
   プラグインとして配布し、第三者配布スキルも含めて `claude/settings.json` の marketplace 宣言
   (`extraKnownMarketplaces` / `enabledPlugins`) で各マシンへ入れる

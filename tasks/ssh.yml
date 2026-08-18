@@ -1,0 +1,36 @@
+---
+# ~/.ssh/config — GitHub への SSH を Secretive (Secure Enclave) の agent に向ける
+#
+# 事前に Secretive 側で以下を手動セットアップしておくこと (GUI 操作なので自動化できない):
+#   1. Secretive.app を起動し、SecretAgent の常駐を許可する
+#   2. 「+」で鍵を 1 本作る
+#      - 鍵タイプは **ECDSA P-256** を選ぶ。macOS 26 では ML-DSA-65 も選べるが
+#        OpenSSH も GitHub もまだ対応しておらず、選ぶと署名が理由不明で落ちる
+#      - **"Require Authentication" のチェックは外す**。ここを外さないと使うたびに
+#        Touch ID を求められ、無人セッションが承認待ちで止まる (1Password と同じ轍)
+#   3. 公開鍵を GitHub に **authentication key と signing key の両方**で登録する
+#      gh api には admin:ssh_signing_key スコープが要る:
+#        gh auth refresh -h github.com -s admin:ssh_signing_key
+# 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+#
+# 秘密鍵は Secure Enclave の中にあり、設計上エクスポートできない。ファイルとしては
+# どこにも存在しないので、盗まれても持ち出せない代わりに **バックアップも移動もできない**。
+# マシンを替えたら新しい鍵を作って登録し直す (認証鍵は元々マシンごとに別鍵なので運用は同じ)。
+#
+# SSH で繋ぐ先は GitHub だけ (known_hosts に github.com しかない) なので、
+# Host のブロックは 1 つで足りる。1Password の SSH agent は使わない。
+
+- name: Ensure ~/.ssh exists
+  ansible.builtin.file:
+    path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
+    state: directory
+    mode: '0700'
+
+- name: Point GitHub SSH at the Secretive agent
+  ansible.builtin.copy:
+    dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/config"
+    mode: '0600'
+    content: |
+      # 実体は setup リポジトリの tasks/ssh.yml (ansible が書き出す)。直接編集しない
+      Host github.com
+          IdentityAgent ~/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh

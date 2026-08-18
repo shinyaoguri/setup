@@ -20,7 +20,6 @@
 # 空のカードを先に置いておく。カードそのものは実行時の生成物なのでリポジトリでは
 # 管理しない (管理するのは書き出す側のスクリプトと、それを呼ぶ settings.json)。
 #
-# git-signing-preflight.sh は 1Password の承認待ちでコミット署名が落ちるのを防ぎ、
 # git-safety-guard.sh は取り返しのつかない git 操作と秘密ファイルのコミットを止める
 # PreToolUse フック。worktree-path-guard.sh は同じリポジトリの別 worktree への書き込み
 # (パスの取り違え) を止める PreToolUse フック。呼び出し口はいずれも settings.json の
@@ -50,7 +49,6 @@
       - settings.json
       - repo-standards.json
       - runcat-metrics.py
-      - git-signing-preflight.sh
       - git-safety-guard.sh
       - provisioning-preflight.sh
       - worktree-path-guard.sh

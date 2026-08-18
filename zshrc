@@ -113,7 +113,10 @@ _update_prompt_with_firebase() {
 _update_prompt_with_firebase
 
 
-export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
+# SSH agent は Secretive (Secure Enclave)。ssh-keygen -Y sign は SSH_AUTH_SOCK から
+# agent を引くので、コミット署名にもこの変数が要る。zshenv ではなくここに置くのは、
+# SSH 越しのシェルで forwarding された agent を壊さないため (zshenv:8-9 の判断を踏襲)
+export SSH_AUTH_SOCK=~/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh
 
 # 秘密の参照 (GYAZO_TOKEN_REF) と setup リポジトリの PATH は zshenv へ移した。
 # 非対話シェル (Claude の hook・scheduled task・cron) は zshrc を読まないため。
