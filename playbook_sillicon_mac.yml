@@ -29,6 +29,10 @@
     # Step 5.5 / Step 5.6 で先行インストール済み (interactive TTY が必要なため
     # Ansible 配下の subprocess sudo では TTY 不足でコケる)。
 
+    - name: SSH client config (Secretive agent)
+      tags: ssh
+      ansible.builtin.import_tasks: tasks/ssh.yml
+
     - name: Git identity and SSH commit signing
       tags: git
       ansible.builtin.import_tasks: tasks/git.yml

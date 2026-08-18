@@ -1,15 +1,13 @@
 ---
-# Git アイデンティティと SSH 署名 (1Password agent 経由) の設定
+# Git アイデンティティと SSH コミット署名 (Secure Enclave / Secretive の agent 経由) の設定
 #
-# 事前に 1Password 側で以下を手動セットアップしておくこと:
-#   1. 1Password アプリにサインイン
-#   2. Settings → Developer → "Use the SSH agent" を有効化
-#   3. Settings → Developer → "Integrate with 1Password CLI" を有効化
-#   4. 署名用 SSH 鍵アイテムを vault に保存
-#   5. Settings → General → "Keep 1Password in the menu bar" を有効化
-#      SSH agent はアプリと一緒に止まる。常駐させておかないと、ウィンドウを閉じた時点で
-#      コミット署名が Could not connect to socket で落ちるようになる
-# 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags git
+# 署名鍵と認証鍵は Secure Enclave の中にある 1 本を兼用する。手動セットアップの手順は
+# tasks/ssh.yml の冒頭コメントが正本 (Secretive の GUI 操作と GitHub への鍵登録)。
+# 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+#
+# 1Password は SSH agent としては使わない (承認がプロセスツリー単位で 60 秒失効し、
+# 無人セッションが承認待ちで止まるため: shinyaoguri/setup#91)。秘密の保管庫としては
+# 引き続き使う (bin/secret-read)。
 
 - name: Set Git global username
   community.general.git_config:
@@ -84,82 +82,97 @@
     value: '!git stale | while read -r branch; do git branch -d "$branch"; done'
     scope: global
 
-- name: Read SSH public key from 1Password agent
+- name: Read the Secure Enclave public key that Secretive wrote out
+  # Secretive は作った鍵の公開鍵を PublicKeys/ に書き出す。agent (SecretAgent) が
+  # 止まっていても読めるので、ssh-add -L ではなくこのファイルを正とする。
+  # 鍵は 1 本だけ作る運用なので head -1 で足りる
   ansible.builtin.shell:
-    cmd: "set -o pipefail && ssh-add -L | head -1"
+    cmd: >-
+      set -o pipefail &&
+      cat "$HOME"/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/PublicKeys/*.pub
+      | head -1
     executable: /bin/zsh
-  environment:
-    SSH_AUTH_SOCK: "{{ ansible_facts['env']['HOME'] }}/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
   register: ssh_pubkey
   failed_when: false
   changed_when: false
+  check_mode: false # 読み取るだけなので --check でも実行する (でないと後続が空で落ちる)
 
-- name: Warn if 1Password SSH agent has no key yet
-  ansible.builtin.debug:
-    msg:
-      - "⚠️  1Password SSH agent から鍵を取得できませんでした。"
-      - "1Password の手動セットアップを完了してから再実行してください:"
-      - "  1. 1Password アプリにサインイン"
-      - "  2. Settings → Developer → Use the SSH agent を有効化"
-      - "  3. Settings → Developer → Integrate with 1Password CLI を有効化"
-      - "  4. 署名用 SSH 鍵アイテムを vault に保存"
-      - "  5. Settings → General → Keep 1Password in the menu bar を有効化"
-      - "完了後:  ansible-playbook playbook_sillicon_mac.yml --tags git"
+# 鍵が無いまま黙って先へ進むと、署名設定が未適用のまま「成功」してしまう
+# (1Password 版はそうなっていた)。ここで止めて何をすれば直るかを出す
+- name: Fail if Secretive has no key yet
+  ansible.builtin.fail:
+    msg: |
+      Secretive から公開鍵を取得できませんでした。
+      Secretive の手動セットアップを完了してから再実行してください (手順は tasks/ssh.yml の冒頭):
+        1. Secretive.app を起動し、SecretAgent の常駐を許可する
+        2. 「+」で鍵を 1 本作る (鍵タイプは ECDSA P-256 / "Require Authentication" は外す)
+        3. 公開鍵を GitHub に authentication key と signing key の両方で登録する
+      完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
   when: ssh_pubkey.rc != 0 or ssh_pubkey.stdout == ""
 
-- name: Configure SSH commit signing
-  when: ssh_pubkey.rc == 0 and ssh_pubkey.stdout != ""
-  block:
-    - name: Ensure ~/.ssh exists
-      ansible.builtin.file:
-        path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
-        state: directory
-        mode: '0700'
+- name: Ensure ~/.ssh exists
+  ansible.builtin.file:
+    path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
+    state: directory
+    mode: '0700'
 
-    - name: Write SSH signing public key
-      ansible.builtin.copy:
-        content: "{{ ssh_pubkey.stdout }}\n"
-        dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
-        mode: '0644'
+# 秘密鍵は Secure Enclave の中にありファイルとして存在しない。git には公開鍵の
+# パスだけ渡し、署名そのものは agent が行う (1Password 運用でも同じ形だった)
+- name: Write SSH signing public key
+  ansible.builtin.copy:
+    content: "{{ ssh_pubkey.stdout }}\n"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
+    mode: '0644'
 
-    - name: Ensure ~/.config/git exists
-      ansible.builtin.file:
-        path: "{{ ansible_facts['env']['HOME'] }}/.config/git"
-        state: directory
-        mode: '0755'
+- name: Ensure ~/.config/git exists
+  ansible.builtin.file:
+    path: "{{ ansible_facts['env']['HOME'] }}/.config/git"
+    state: directory
+    mode: '0755'
 
-    - name: Write allowed_signers for local verification
-      ansible.builtin.copy:
-        content: "ogrsny@gmail.com {{ ssh_pubkey.stdout }}\n"
-        dest: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
-        mode: '0644'
+# 追記であって上書きではない。過去のコミットは古い鍵で署名されており、その行を
+# 消すとローカルでの検証 (git log --show-signature) が壊れる
+- name: Add the signing key to allowed_signers
+  ansible.builtin.lineinfile:
+    path: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
+    line: "ogrsny@gmail.com {{ ssh_pubkey.stdout }}"
+    create: true
+    mode: '0644'
 
-    - name: Set gpg.format to ssh
-      community.general.git_config:
-        name: gpg.format
-        value: ssh
-        scope: global
+- name: Set gpg.format to ssh
+  community.general.git_config:
+    name: gpg.format
+    value: ssh
+    scope: global
 
-    - name: Set user.signingkey to SSH public key file
-      community.general.git_config:
-        name: user.signingkey
-        value: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
-        scope: global
+- name: Set user.signingkey to SSH public key file
+  community.general.git_config:
+    name: user.signingkey
+    value: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
+    scope: global
 
-    - name: Set gpg.ssh.allowedSignersFile
-      community.general.git_config:
-        name: gpg.ssh.allowedSignersFile
-        value: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
-        scope: global
+# 1Password 時代は op-ssh-sign を挟んでいた。Secure Enclave の鍵は
+# システムの ssh-keygen が agent 越しに署名できるので、経路から外す
+- name: Remove gpg.ssh.program so the system ssh-keygen signs
+  community.general.git_config:
+    name: gpg.ssh.program
+    scope: global
+    state: absent
 
-    - name: Enable commit signing
-      community.general.git_config:
-        name: commit.gpgsign
-        value: "true"
-        scope: global
+- name: Set gpg.ssh.allowedSignersFile
+  community.general.git_config:
+    name: gpg.ssh.allowedSignersFile
+    value: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
+    scope: global
 
-    - name: Enable tag signing
-      community.general.git_config:
-        name: tag.gpgsign
-        value: "true"
-        scope: global
+- name: Enable commit signing
+  community.general.git_config:
+    name: commit.gpgsign
+    value: "true"
+    scope: global
+
+- name: Enable tag signing
+  community.general.git_config:
+    name: tag.gpgsign
+    value: "true"
+    scope: global
