@@ -54,6 +54,7 @@
       - git-safety-guard.sh
       - provisioning-preflight.sh
       - worktree-path-guard.sh
+      - automode-guard.py
       - plan-record.sh
       - gh-comment-guard.sh
 
