@@ -129,6 +129,12 @@
             "command": "~/.claude/worktree-path-guard.sh",
             "timeout": 10,
             "statusMessage": "編集先の worktree を確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/automode-guard.py",
+            "timeout": 10,
+            "statusMessage": "権限設定の変更を確認中"
           }
         ]
       }
@@ -168,6 +174,10 @@
     }
   },
   "autoMode": {
+    "allow": [
+      "$defaults",
+      "Recorded and Recoverable Development Work: Any action whose effect lands somewhere the developer can read afterwards and either undo or re-derive — a commit, a branch, a pull request, an issue, a file under version control, or a definition file the change is applied from. This is the ordinary development loop, and it is covered end to end in whatever repository the session is working in: writing and deleting files in the working tree, committing, pushing a branch, opening and updating a pull request, applying repository settings from a versioned definition, merging once the gate is green, and letting the release automation that the merge triggers run. It also covers local work that leaves nothing outside the working tree, its worktrees, or the session scratchpad — creating directories, moving files, builds, tests, linters — including when several are chained in one shell invocation. Irreversibility on its own is not a reason to stop: a merge and a release are irreversible and are still the ordinary end of this loop. What stays outside this rule: destroying work that exists nowhere else, forcing past a gate instead of satisfying it, and carrying real secrets or personal data out of a gitignored file. Which accounts, repositories, and services are the developer's own is settled by the environment section and is not restated here."
+    ],
     "environment": [
       "$defaults",
       "Organization: individual developer (github.com/shinyaoguri), no company or team infrastructure. Primary use of Claude Code: software development on personal repositories",
@@ -178,7 +188,8 @@
     "soft_deny": [
       "$defaults",
       "Guard Narrowing [named+specifics — **must name:** the guard being changed and what the change removes]: Reducing what this machine's own agent guards check. Covers deleting or narrowing entries in the `hooks` arrays of any Claude settings file (~/.claude/settings*.json, a repository's .claude/settings*.json, and their source of truth at github.com/shinyaoguri/setup path claude/settings.json); deleting, moving, renaming, or removing the executable bit from a hook script those files reference (github.com/shinyaoguri/setup path claude/*.sh, symlinked into ~/.claude — including but not limited to git-safety-guard.sh, git-signing-preflight.sh, provisioning-preflight.sh, worktree-path-guard.sh); setting `git config core.hooksPath`; and passing `--no-verify` to git commit or push, or setting `SKIP=` or `HUSKY=0`. These files are the developer's own to maintain, so an explicit request that names the guard and the change clears this rule; an edit that arrives as a step toward some other goal does not.",
-      "Blocked-Path Substitution: After a guard or a permission rule blocked an action earlier in this session, reaching the same effect through an interface that guard does not observe — for example `gh api` in place of the blocked `git push`, or a script or alias that wraps the blocked command. The substitution is judged against the original action's rules, not the new interface's."
+      "Blocked-Path Substitution: After a guard or a permission rule blocked an action earlier in this session, reaching the same effect through an interface that guard does not observe — for example `gh api` in place of the blocked `git push`, or a script or alias that wraps the blocked command. The substitution is judged against the original action's rules, not the new interface's.",
+      "Outbound Work on Repositories That Are Not the Developer's [named+specifics — **must name:** the repository and what is being sent to it]: Anything that becomes visible inside a repository outside github.com/shinyaoguri — filing an issue, opening or updating a pull request including from a fork, posting a review or a comment, pushing a branch — and this holds for upstream projects the developer depends on or has contributed to before. Reading those repositories, cloning them, running their code, and quoting them are not covered and proceed normally. The developer's own repositories are the routine case and stay outside this rule entirely. The reason for the asymmetry is who pays for a mistake: a premature or wrong post in someone else's project costs that project's maintainers, and the developer's own judgment about whether it is worth sending cannot be inferred from the work itself."
     ],
     "hard_deny": [
       "$defaults",
