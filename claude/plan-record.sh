@@ -132,12 +132,16 @@ emit() { # $1=種別 $2=説明 $3=本文 $4=検出パターン $5=除外パタ�
 # --- 投稿先の解決 -----------------------------------------------------------
 # 優先順は「今そこにある器」から。PR があればそこ、無ければプランが閉じようと
 # している Issue、それも無ければブランチ名の数字列。どれも無ければ空を返す。
+#
+# PR はマージ後も投稿先のまま扱う。open だけを見ると、マージした瞬間に投稿済みの
+# プランを見失い、Closes で名乗った Issue (たいてい閉じている) へ催促が回る。
+# 除くのは放棄された CLOSED だけ。
 
 resolve_target() { # $1=ブランチ $2=本文 → "pr 123" / "issue 45" / ""
   local branch="$1" body="$2" number
 
   number=$(gh pr view "$branch" --json number,state \
-    -q 'select(.state == "OPEN") | .number' 2>/dev/null)
+    -q 'select(.state != "CLOSED") | .number' 2>/dev/null)
   if [ -n "$number" ]; then
     printf 'pr %s' "$number"
     return 0
@@ -147,8 +151,15 @@ resolve_target() { # $1=ブランチ $2=本文 → "pr 123" / "issue 45" / ""
   number=$(printf '%s' "$body" |
     grep -ioE '(closes|fixes|resolves|refs|ref|issue)[[:space:]]*#[0-9]+' |
     grep -oE '[0-9]+' | head -1)
-  # 名乗りが無ければブランチ名の数字列 (issues-123 / fix/123-foo)
-  [ -n "$number" ] || number=$(printf '%s' "$branch" | grep -oE '[0-9]{1,6}' | head -1)
+  # 名乗りが無ければブランチ名の数字列 (issues-123 / fix/123-foo)。ただし採るのは
+  # 区切りに接した数字だけにする。Claude Code が切るブランチ名の末尾 hex
+  # (claude/<説明>-c936e5 → 936) や worktree の自動生成名に紛れる断片
+  # (cse_0127aTN6... → 127) を番号と読むと、無関係な Issue へプランが飛ぶ。
+  # 番号が実在することは、そこが投稿先として正しいことを意味しない
+  [ -n "$number" ] || number=$(printf '%s' "$branch" |
+    sed -E 's#^(claude/.*)-[0-9a-f]{6}$#\1#' |
+    grep -oE '(^|[^0-9A-Za-z])[0-9]{1,6}([^0-9A-Za-z]|$)' |
+    grep -oE '[0-9]+' | head -1)
   [ -n "$number" ] || return 0
 
   # 実在して open かを確かめる。ブランチ名の数字はハッシュの断片でもありうる
@@ -382,6 +393,9 @@ guard() {
 $pending
 記憶がリセットされた次のセッションは、この PR / Issue を読むだけで再開できる必要があります。
 実装の途中で方針が変わっているなら、変わった点を本文に追記してから投稿してください。
+
+上の投稿先が違うと思うなら、ブランチ名から推定した番号かもしれません。正しい PR /
+Issue へ投稿したうえで、-F に出ている記録ファイルを消せばこの差し戻しは止まります。
 
 投稿しない判断をした場合 (プランが実装と食い違って役に立たない等) は、そのまま終えて
 構いません ($MAX_NAGS 回で自動的に黙ります)。
