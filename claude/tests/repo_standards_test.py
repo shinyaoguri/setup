@@ -18,6 +18,10 @@ MANIFEST = Path(__file__).resolve().parent.parent / "repo-standards.json"
 LAYERS = {"repo", "github", "claude"}
 LEVELS = {"required", "recommended", "rejected"}
 CHECK_TYPES = {"file_exists", "file_absent", "glob_exists", "gh_api", "builtin", "llm"}
+# 修正の性質。repo-audit-fix が承認の粒度を決める材料で、値はプラグイン側と共有する契約
+FIX_KINDS = {"deterministic", "generative", "destructive"}
+# 実行すると取り返しがつかない fix はこの語のどれかを必ず含む。分類の取りこぼしを機械で捕まえる
+DESTRUCTIVE_MARKERS = ("削除", "git rm ", "履歴の書き換え")
 # check type ごとの必須フィールド。消費側スクリプトとの契約
 CHECK_REQUIRED_FIELDS = {
     "file_exists": {"path"},
@@ -103,6 +107,33 @@ class RepoStandardsTestCase(unittest.TestCase):
                 continue
             with self.subTest(id=item["id"]):
                 self.assertTrue(item.get("fix", "").strip(), "required 項目に fix が無い")
+
+    def test_fix_kind_values(self):
+        for item in self.items:
+            if "fix_kind" not in item:
+                continue
+            with self.subTest(id=item["id"]):
+                self.assertIn(item["fix_kind"], FIX_KINDS)
+
+    def test_fix_kind_accompanies_fix(self):
+        # fix_kind は fix の性質を宣言するフィールド。fix が無い項目に付けると意味が濁り、
+        # fix があるのに付いていないと修正側が LLM 推定へ落ちて承認の粒度がブレる
+        for item in self.items:
+            with self.subTest(id=item["id"]):
+                if item.get("fix", "").strip():
+                    self.assertIn("fix_kind", item, "fix があるのに fix_kind が無い")
+                else:
+                    self.assertNotIn("fix_kind", item, "fix が無いのに fix_kind がある")
+
+    def test_destructive_fixes_are_marked(self):
+        # 削除・追跡外し・履歴の書き換えを促す fix が deterministic に紛れると、
+        # まとめて 1 承認の群に入って自動適用されてしまう
+        for item in self.items:
+            fix = item.get("fix", "")
+            if not any(marker in fix for marker in DESTRUCTIVE_MARKERS):
+                continue
+            with self.subTest(id=item["id"]):
+                self.assertEqual(item.get("fix_kind"), "destructive")
 
     def test_every_item_has_why(self):
         # why はレポートにそのまま出す根拠。無いと「なぜ直すのか」が説明できない

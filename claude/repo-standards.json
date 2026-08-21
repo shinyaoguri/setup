@@ -14,7 +14,8 @@
       "applies_to": ["all"],
       "check": { "type": "file_exists", "path": ".gitignore" },
       "why": "全リポジトリで唯一共通の必須ファイル (2026-08 の手持ち 40 リポ調査)",
-      "fix": "リポ種別の生成物に合わせた最小構成の .gitignore を作成する"
+      "fix": "リポ種別の生成物に合わせた最小構成の .gitignore を作成する",
+      "fix_kind": "generative"
     },
     {
       "id": "readme-exists",
@@ -23,7 +24,8 @@
       "applies_to": ["all"],
       "check": { "type": "file_exists", "path": "README.md" },
       "why": "目的・構成・使い方の正本。CLAUDE.md からも参照される前提",
-      "fix": "目的・構成・使い方を含む README.md を作成する"
+      "fix": "目的・構成・使い方を含む README.md を作成する",
+      "fix_kind": "generative"
     },
     {
       "id": "claude-md-exists",
@@ -32,7 +34,8 @@
       "applies_to": ["all"],
       "check": { "type": "file_exists", "path": "CLAUDE.md" },
       "why": "プロジェクト固有規約の正本は各リポの CLAUDE.md (グローバル CLAUDE.md の建付け)",
-      "fix": "リポ固有の文脈 (コマンド・構成・非自明な注意) だけを書いた CLAUDE.md を作成する"
+      "fix": "リポ固有の文脈 (コマンド・構成・非自明な注意) だけを書いた CLAUDE.md を作成する",
+      "fix_kind": "generative"
     },
     {
       "id": "gitignore-covers-env",
@@ -41,7 +44,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "gitignore_covers_env" },
       "why": "秘密情報の置き場は gitignore 済みの .env などに限る (グローバル CLAUDE.md)",
-      "fix": ".gitignore に .env / .env.* を追記する"
+      "fix": ".gitignore に .env / .env.* を追記する",
+      "fix_kind": "deterministic"
     },
     {
       "id": "ci-workflow-exists",
@@ -50,7 +54,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "ci_workflow_exists" },
       "why": "決定論的に強制できる仕組み (CI) を文書ルールより優先する",
-      "fix": "リポの検証コマンドを回す .github/workflows/ci.yml を追加する"
+      "fix": "リポの検証コマンドを回す .github/workflows/ci.yml を追加する",
+      "fix_kind": "generative"
     },
     {
       "id": "license-exists",
@@ -60,7 +65,8 @@
       "when": { "visibility": "public" },
       "check": { "type": "builtin", "name": "license_exists" },
       "why": "public リポは利用条件の明示が必要 (ライセンス不明のコードは誰も使えない)",
-      "fix": "LICENSE を追加する (個人 OSS は MIT が既定)"
+      "fix": "LICENSE を追加する (個人 OSS は MIT が既定)",
+      "fix_kind": "deterministic"
     },
     {
       "id": "contributing-exists",
@@ -70,7 +76,8 @@
       "when": { "visibility": "public" },
       "check": { "type": "file_exists", "path": "CONTRIBUTING.md" },
       "why": "public リポの外部協力者向けの入口。個人リポでは CLAUDE.md が兼ねる場合もある",
-      "fix": "開発フロー・検証コマンド・PR の出し方を書いた CONTRIBUTING.md を追加する"
+      "fix": "開発フロー・検証コマンド・PR の出し方を書いた CONTRIBUTING.md を追加する",
+      "fix_kind": "generative"
     },
     {
       "id": "adr-exists",
@@ -79,7 +86,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "adr_exists" },
       "why": "設計判断の記録 (メモリリセット耐性の中核)。既に過半のリポで docs/decisions/ を採用済み。ディレクトリだけ作って空のまま放置されると記録の実体が無い",
-      "fix": "docs/decisions/ を作り、状態 / 文脈 / 決定 / 影響の 4 節で ADR を書き始める"
+      "fix": "docs/decisions/ を作り、状態 / 文脈 / 決定 / 影響の 4 節で ADR を書き始める",
+      "fix_kind": "generative"
     },
     {
       "id": "adr-covers-decisions",
@@ -91,7 +99,8 @@
         "prompt": "docs/decisions/ の ADR 一覧と直近 30 コミット (git log --oneline -30) を突き合わせ、(1) 設計判断を伴う変更 (feat / refactor / 依存や CI の方針変更) で ADR が残っていないものが無いか、(2) 既存 ADR の決定内容が現在の実装と乖離していないか、(3) 各 ADR が 状態 / 文脈 / 決定 / 影響 の 4 節を保っているか を判定する。ADR が 0 件なら adr-exists 側の指摘に委ねてこの項目は skip とする"
       },
       "why": "ADR はディレクトリの存在ではなく「重要な意思決定がそこに残り続けているか」で価値が決まる。存在チェックでは書かれなくなった劣化を検出できない",
-      "fix": "漏れている決定を ADR に追記し、実装と乖離した ADR は状態を 廃止 / 置換 に更新する"
+      "fix": "漏れている決定を ADR に追記し、実装と乖離した ADR は状態を 廃止 / 置換 に更新する",
+      "fix_kind": "generative"
     },
     {
       "id": "changelog-exists",
@@ -100,7 +109,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "changelog_exists" },
       "why": "リリースするリポでは変更履歴が利用者への契約になる (タグが無いリポは対象外)",
-      "fix": "CHANGELOG.md を追加する (リリース workflow から自動生成してもよい)"
+      "fix": "CHANGELOG.md を追加する (リリース workflow から自動生成してもよい)",
+      "fix_kind": "deterministic"
     },
     {
       "id": "test-dir-exists",
@@ -109,7 +119,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "test_dir_exists" },
       "why": "テストは実装 PR に含める規約 (グローバル CLAUDE.md) の受け皿",
-      "fix": "kind の慣習に沿ったテストディレクトリ (Tests/ ・tests/ ・spec/ など) を作る"
+      "fix": "kind の慣習に沿ったテストディレクトリ (Tests/ ・tests/ ・spec/ など) を作る",
+      "fix_kind": "deterministic"
     },
     {
       "id": "tests-run-in-ci",
@@ -118,7 +129,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "tests_run_in_ci" },
       "why": "テストが CI で回っていないと落ちたまま気付かれない (setup リポ issue #36 の実例)",
-      "fix": "workflow にテスト実行ステップを追加し、ruleset の required_status_checks に登録する"
+      "fix": "workflow にテスト実行ステップを追加し、ruleset の required_status_checks に登録する",
+      "fix_kind": "generative"
     },
     {
       "id": "pr-title-lint",
@@ -127,7 +139,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "pr_title_lint_configured" },
       "why": "squash merge では PR タイトルがそのままコミット履歴になるため、Conventional Commits の崩れが履歴全体に残る",
-      "fix": "PR タイトルを検査する workflow を追加する (claude-plugins の scripts/check-pr-title.sh が手本)"
+      "fix": "PR タイトルを検査する workflow を追加する (claude-plugins の scripts/check-pr-title.sh が手本)",
+      "fix_kind": "generative"
     },
     {
       "id": "scheduled-freshness",
@@ -136,7 +149,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "scheduled_workflow_exists" },
       "why": "参照先・依存・リンクのドリフトは PR CI では捉えられず、定期実行でしか拾えない",
-      "fix": "schedule トリガの workflow を追加し、検知結果を Issue に起票する (claude-plugins の freshness.yml が手本)"
+      "fix": "schedule トリガの workflow を追加し、検知結果を Issue に起票する (claude-plugins の freshness.yml が手本)",
+      "fix_kind": "generative"
     },
     {
       "id": "no-stale-branches",
@@ -145,7 +159,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "no_stale_branches" },
       "why": "GitHub Flow: main が唯一の長命ブランチ。30 日以上動いていないリモートブランチは作業の取り残し",
-      "fix": "マージ済みなら git push origin --delete <branch>、未完なら Draft PR にして意図を残す (削除は提示のみ)"
+      "fix": "マージ済みなら git push origin --delete <branch>、未完なら Draft PR にして意図を残す (削除は提示のみ)",
+      "fix_kind": "destructive"
     },
     {
       "id": "no-committed-secrets",
@@ -154,7 +169,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "no_committed_secrets" },
       "why": "秘密情報の置き場は gitignore 済みの .env などに限る。追跡されている時点で漏洩リスク",
-      "fix": "git rm --cached で追跡を外し .gitignore に追加する。漏れた値は必ずローテートする (履歴の書き換えは不可逆なので実行前に要判断)"
+      "fix": "git rm --cached で追跡を外し .gitignore に追加する。漏れた値は必ずローテートする (履歴の書き換えは不可逆なので実行前に要判断)",
+      "fix_kind": "destructive"
     },
     {
       "id": "dependabot-config",
@@ -163,7 +179,8 @@
       "applies_to": ["all"],
       "check": { "type": "file_exists", "path": ".github/dependabot.yml" },
       "why": "依存とワークフローの陳腐化防止。主要リポの半数が採用済み",
-      "fix": "エコシステムに応じた .github/dependabot.yml を追加する (cooldown 7 日: claude-plugins ADR 0005 参照)"
+      "fix": "エコシステムに応じた .github/dependabot.yml を追加する (cooldown 7 日: claude-plugins ADR 0005 参照)",
+      "fix_kind": "deterministic"
     },
     {
       "id": "issue-template-exists",
@@ -172,7 +189,8 @@
       "applies_to": ["all"],
       "check": { "type": "glob_exists", "path": ".github/ISSUE_TEMPLATE/*" },
       "why": "気付き・改善案を作業を止めず Issue へ残す文化の受け皿",
-      "fix": "改善提案などの最小テンプレートを .github/ISSUE_TEMPLATE/ に追加する"
+      "fix": "改善提案などの最小テンプレートを .github/ISSUE_TEMPLATE/ に追加する",
+      "fix_kind": "deterministic"
     },
     {
       "id": "pr-template-exists",
@@ -181,7 +199,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "pr_template_exists" },
       "why": "PR 本文 (目的・変更点・確認方法) を丁寧に書く規約の受け皿",
-      "fix": ".github/pull_request_template.md を追加する"
+      "fix": ".github/pull_request_template.md を追加する",
+      "fix_kind": "deterministic"
     },
     {
       "id": "work-log-externalized",
@@ -193,7 +212,8 @@
         "prompt": "進行中の作業がセッションの記憶に依存していないかを判定する。(1) 直近 30 日にコミットがあるのに open Issue が 0 件でないか (gh issue list --state open)、(2) 進行中の Issue / PR に調査の中間所見や検証ログのコメントが積まれているか、(3) 中長期の計画 (ロードマップ・マイルストーン・docs/ 配下の計画文書) が置かれ更新されているか。記憶ゼロの状態でこれらを読むだけで再開できるかを基準にする。直近 30 日にコミットが無い (動いていない) リポは skip とする"
       },
       "why": "セッションの記憶は常にリセットされる前提。恒久的な置き場に記録が無いと、状況・残タスク・中間所見・検証ログが失われて再開できない (グローバル CLAUDE.md の中核規約)",
-      "fix": "残タスクと課題を Issue に起票し、進行中の調査結果は該当 Issue / PR にコメントで追記する。中長期の計画は docs/ かマイルストーンに置く"
+      "fix": "残タスクと課題を Issue に起票し、進行中の調査結果は該当 Issue / PR にコメントで追記する。中長期の計画は docs/ かマイルストーンに置く",
+      "fix_kind": "generative"
     },
     {
       "id": "editorconfig-rejected",
@@ -202,7 +222,8 @@
       "applies_to": ["all"],
       "check": { "type": "file_absent", "path": ".editorconfig" },
       "why": "全リポで不採用 (2026-08 調査)。フォーマットは各言語のツールに任せる",
-      "fix": "削除を検討する (採用へ転じる場合はこの項目を正本から外す)"
+      "fix": "削除を検討する (採用へ転じる場合はこの項目を正本から外す)",
+      "fix_kind": "destructive"
     },
     {
       "id": "gh-squash-only",
@@ -216,7 +237,8 @@
         "expect": "true"
       },
       "why": "Squash merge 前提 (グローバル CLAUDE.md)",
-      "fix": "gh api -X PATCH repos/{repo} -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false"
+      "fix": "gh api -X PATCH repos/{repo} -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-squash-title-pr",
@@ -230,7 +252,8 @@
         "expect": "PR_TITLE"
       },
       "why": "PR タイトルがそのまま squash コミットの要約になる規約 (Conventional Commits を PR タイトルに書く)",
-      "fix": "gh api -X PATCH repos/{repo} -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY"
+      "fix": "gh api -X PATCH repos/{repo} -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-squash-body-pr",
@@ -244,7 +267,8 @@
         "expect": "PR_BODY"
       },
       "why": "PR 本文 (目的・変更点・確認方法) を squash コミット本文として履歴に残す",
-      "fix": "gh api -X PATCH repos/{repo} -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY"
+      "fix": "gh api -X PATCH repos/{repo} -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-delete-branch-on-merge",
@@ -258,7 +282,8 @@
         "expect": "true"
       },
       "why": "merge 後のブランチ掃除とセットの運用。git fetch -p が消すのは remote-tracking 参照だけなので、ローカルブランチは upstream:track == [gone] を手がかりに掃除する (env-doctor の env-git-fetch-prune / env-git-gone-alias)",
-      "fix": "gh api -X PATCH repos/{repo} -F delete_branch_on_merge=true"
+      "fix": "gh api -X PATCH repos/{repo} -F delete_branch_on_merge=true",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-default-branch-main",
@@ -272,7 +297,8 @@
         "expect": "main"
       },
       "why": "GitHub Flow: main が唯一の長命ブランチ",
-      "fix": "gh api -X POST \"repos/{repo}/branches/<現 default>/rename\" -f new_name=main"
+      "fix": "gh api -X POST \"repos/{repo}/branches/<現 default>/rename\" -f new_name=main",
+      "fix_kind": "destructive"
     },
     {
       "id": "gh-issues-enabled",
@@ -286,7 +312,8 @@
         "expect": "true"
       },
       "why": "気付きを Issue へ起票する文化の前提",
-      "fix": "gh repo edit {repo} --enable-issues"
+      "fix": "gh repo edit {repo} --enable-issues",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-description-set",
@@ -300,7 +327,8 @@
         "expect": "true"
       },
       "why": "リポ一覧で目的が分かる状態を保つ",
-      "fix": "gh repo edit {repo} --description \"<1 行の説明>\""
+      "fix": "gh repo edit {repo} --description \"<1 行の説明>\"",
+      "fix_kind": "generative"
     },
     {
       "id": "gh-wiki-disabled",
@@ -314,7 +342,8 @@
         "expect": "false"
       },
       "why": "ドキュメントはリポ内 (docs/・ADR) が正本。wiki に分散させない",
-      "fix": "gh repo edit {repo} --enable-wiki=false"
+      "fix": "gh repo edit {repo} --enable-wiki=false",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-auto-merge-enabled",
@@ -328,7 +357,8 @@
         "expect": "true"
       },
       "why": "CI green を待つ auto-merge 運用 (Dependabot 自動マージ等) の前提",
-      "fix": "gh api -X PATCH repos/{repo} -F allow_auto_merge=true"
+      "fix": "gh api -X PATCH repos/{repo} -F allow_auto_merge=true",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-allow-update-branch",
@@ -342,7 +372,8 @@
         "expect": "true"
       },
       "why": "PR を base 最新へワンクリックで追従させる",
-      "fix": "gh api -X PATCH repos/{repo} -F allow_update_branch=true"
+      "fix": "gh api -X PATCH repos/{repo} -F allow_update_branch=true",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-main-protected",
@@ -351,7 +382,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_branch_protected" },
       "why": "main への force push・削除を機械的に禁止する (不可逆操作の仕組み化)",
-      "fix": "enforcement=active で ~DEFAULT_BRANCH を対象に deletion + non_fast_forward ルールを持つ ruleset を作成する (gh api -X POST repos/{repo}/rulesets --input -)"
+      "fix": "enforcement=active で ~DEFAULT_BRANCH を対象に deletion + non_fast_forward ルールを持つ ruleset を作成する (gh api -X POST repos/{repo}/rulesets --input -)",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-pr-required",
@@ -360,7 +392,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_pr_required" },
       "why": "main へは PR 経由 (approve 0 で可)。手入れされたリポ (metaphor / claude-plugins / skopos) が全て採用している",
-      "fix": "ruleset に pull_request ルール (required_approving_review_count: 0) を追加する"
+      "fix": "ruleset に pull_request ルール (required_approving_review_count: 0) を追加する",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-required-checks",
@@ -369,7 +402,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "required_checks_configured" },
       "why": "CI green をマージ条件にする (auto-merge の判定にも使われる)。手入れされたリポが全て採用している",
-      "fix": "ruleset に required_status_checks を追加し CI の必須ジョブ名を登録する"
+      "fix": "ruleset に required_status_checks を追加し CI の必須ジョブ名を登録する",
+      "fix_kind": "generative"
     },
     {
       "id": "gh-signatures-required",
@@ -378,7 +412,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_signatures_required" },
       "why": "コミットの出所を保証する。ローカルは全コミット署名の運用なので、その最終ゲートをリポジトリ側に置く",
-      "fix": "ruleset に required_signatures を追加する (ローカルの署名設定が前提)"
+      "fix": "ruleset に required_signatures を追加する (ローカルの署名設定が前提)",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-linear-history",
@@ -387,7 +422,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_linear_history" },
       "why": "squash merge 前提なら履歴は直線になるはずで、崩れていれば運用が漏れている証拠になる",
-      "fix": "ruleset に required_linear_history を追加する"
+      "fix": "ruleset に required_linear_history を追加する",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-tag-protection",
@@ -396,7 +432,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "tag_protection" },
       "why": "公開済みタグの改変・削除は利用者のビルドを壊す不可逆操作 (タグが無いリポは対象外)",
-      "fix": "target: tag / include: refs/tags/v* で deletion + non_fast_forward + update の ruleset を作る"
+      "fix": "target: tag / include: refs/tags/v* で deletion + non_fast_forward + update の ruleset を作る",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-vulnerability-alerts",
@@ -405,7 +442,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "vulnerability_alerts_enabled" },
       "why": "依存脆弱性の検知は全リポ必須",
-      "fix": "gh api -X PUT repos/{repo}/vulnerability-alerts"
+      "fix": "gh api -X PUT repos/{repo}/vulnerability-alerts",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-automated-security-fixes",
@@ -414,7 +452,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "automated_security_fixes_enabled" },
       "why": "脆弱性修正 PR の自動作成 (自動マージは各リポの CI ゲートに委ねる)",
-      "fix": "gh api -X PUT repos/{repo}/automated-security-fixes"
+      "fix": "gh api -X PUT repos/{repo}/automated-security-fixes",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-secret-scanning",
@@ -429,7 +468,8 @@
         "expect": "enabled"
       },
       "why": "public リポの秘密情報混入の検知",
-      "fix": "gh api -X PATCH repos/{repo} -f \"security_and_analysis[secret_scanning][status]=enabled\""
+      "fix": "gh api -X PATCH repos/{repo} -f \"security_and_analysis[secret_scanning][status]=enabled\"",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-secret-scanning-push-protection",
@@ -444,7 +484,8 @@
         "expect": "enabled"
       },
       "why": "秘密情報を push 前にブロックする (検知より予防)",
-      "fix": "gh api -X PATCH repos/{repo} -f \"security_and_analysis[secret_scanning_push_protection][status]=enabled\""
+      "fix": "gh api -X PATCH repos/{repo} -f \"security_and_analysis[secret_scanning_push_protection][status]=enabled\"",
+      "fix_kind": "deterministic"
     },
     {
       "id": "gh-actions-permissions-read",
@@ -453,7 +494,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "actions_default_permissions_read" },
       "why": "workflow の既定トークンは read-only (最小権限。書き込みは workflow 側で個別宣言)",
-      "fix": "gh api -X PUT repos/{repo}/actions/permissions/workflow -f default_workflow_permissions=read"
+      "fix": "gh api -X PUT repos/{repo}/actions/permissions/workflow -f default_workflow_permissions=read",
+      "fix_kind": "deterministic"
     },
     {
       "id": "claude-commands-dir-absent",
@@ -462,7 +504,8 @@
       "applies_to": ["all"],
       "check": { "type": "file_absent", "path": ".claude/commands" },
       "why": "commands/ は公式非推奨。スラッシュコマンドは skills/<name>/SKILL.md で作る (claude-plugins ADR 0004)",
-      "fix": ".claude/skills/<name>/SKILL.md へ移行して .claude/commands/ を削除する"
+      "fix": ".claude/skills/<name>/SKILL.md へ移行して .claude/commands/ を削除する",
+      "fix_kind": "destructive"
     },
     {
       "id": "claude-settings-local-not-committed",
@@ -471,7 +514,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "settings_local_not_committed" },
       "why": "settings.local.json はマシンローカル専用。コミットすると他マシンの挙動を汚す",
-      "fix": "git rm --cached .claude/settings.local.json で追跡を外す"
+      "fix": "git rm --cached .claude/settings.local.json で追跡を外す",
+      "fix_kind": "destructive"
     },
     {
       "id": "claude-md-quality",
@@ -513,7 +557,8 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "worktrees_clean" },
       "why": "使い終わった worktree の残骸。~/.claude の symlink が worktree を指してしまう事故の温床でもある",
-      "fix": "git worktree remove <path> で掃除する (削除は提示のみ)"
+      "fix": "git worktree remove <path> で掃除する (削除は提示のみ)",
+      "fix_kind": "destructive"
     },
     {
       "id": "claude-mcp-config-sane",
