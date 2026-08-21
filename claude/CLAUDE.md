@@ -29,8 +29,8 @@
 - コードの識別子は英語。コメント・ドキュメント・コミット要約は日本語でよい
 - GitHub Flow: main が唯一の長命ブランチ。作業は main から `<type>/<短い説明>` ブランチを切り、小さく作って早めに PR (WIP なら Draft)
 - **着手した Issue には `status: in progress` を付け、PR が merge されたら / 中断したら外す** (ラベルが無いリポでは `gh label create` で作る)。複数のセッションが同じリポで並行するので、着手は push を待たずに GitHub 側から見える必要がある。次のタスクを選ぶときはこのラベルが付いた Issue と、in-flight PR が触っているファイル群を避ける — 収集から着手までの手順は repo-standards プラグインの next-task スキルが持つ
-- コミットは Conventional Commits: `<type>(<scope>): <要約>`。type は feat / fix / docs / refactor / test / chore / ci。1 コミット 1 関心
-- Squash merge 前提。PR タイトルもコミットと同形式に書く (マージコミットのメッセージになる)
+- コミットは Conventional Commits: `<type>(<scope>): <要約>`。type は feat / fix / docs / refactor / test / chore / ci / perf / build (`style` と `revert` は使わない — 整形のみは chore、revert は打ち消す側の type を名乗る)。1 コミット 1 関心
+- Squash merge 前提。PR タイトルもコミットと同形式に書く (マージコミットのメッセージになる)。**Issue を閉じる `Closes #N` は PR 本文に書く** — squash ではコミットメッセージが PR タイトル + 本文へ置き換わるので、コミット側に書いた名乗りは GitHub へ届かず Issue が開いたまま残る
 - コミットログと PR 本文 (目的・変更点・確認方法) を丁寧に書くこと。それが書けていて CI が green なら、push / merge は指示を待たず進めてよい (force push・main への直接 push は上記の「押し通す」に当たるので事前確認)
 - **マージを起点にリポジトリが自動で走らせる後続処理はマージに含まれる** (リリース・タグ・パッケージ公開・デプロイなど)。「公開だから」を理由に確認を挟まず、規約どおりの PR ならマージまで一続きで進めて結果を報告する。自動化の有無と bump 規則はリポジトリの規約・ワークフロー定義から読み取る。人が明示的に起こす公開操作 (手動の `workflow_dispatch`・手動タグ・外部への告知) は開発ループの帰結ではないので事前確認
 - merge 後は main に戻って pull する。**ローカルブランチの掃除は Stop hook が `git gone-clean` で自動的に行う**ので、自分で `git branch -D <名前>` を打たない (追跡先が畳まれる前に打つと safety guard が ask を返し、人手の確認を要求してしまう)。その場で消したいときは `git gone-clean` / `git stale-clean` を使う — 状態を変えるコマンドなので allow には置かないが、safety guard が「gone なブランチだけを消す」と読めるため確認は出ない
