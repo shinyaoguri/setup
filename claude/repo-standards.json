@@ -381,8 +381,8 @@
       "level": "required",
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_branch_protected" },
-      "why": "main への force push・削除を機械的に禁止する (不可逆操作の仕組み化)",
-      "fix": "enforcement=active で ~DEFAULT_BRANCH を対象に deletion + non_fast_forward ルールを持つ ruleset を作成する (gh api -X POST repos/{repo}/rulesets --input -)",
+      "why": "main への force push・削除を機械的に禁止する (不可逆操作の仕組み化)。保護は ruleset に一本化する — classic branch protection と併用すると同じ制約が二箇所に散り、どちらが効いているか読めなくなる",
+      "fix": "enforcement=active で ~DEFAULT_BRANCH を対象に deletion + non_fast_forward ルールを持つ ruleset を作成する (gh api -X POST repos/{repo}/rulesets --input -)。classic branch protection で運用しているリポは、同じ制約の ruleset を作って classic 側から降ろす (保護が一時的に緩む操作なので人の判断で行う)",
       "fix_kind": "deterministic"
     },
     {
@@ -392,7 +392,7 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_pr_required" },
       "why": "main へは PR 経由 (approve 0 で可)。手入れされたリポ (metaphor / claude-plugins / skopos) が全て採用している",
-      "fix": "ruleset に pull_request ルール (required_approving_review_count: 0) を追加する",
+      "fix": "ruleset に pull_request ルール (required_approving_review_count: 0) を追加する。classic 側で満たしている場合も ruleset へ移す",
       "fix_kind": "deterministic"
     },
     {
@@ -402,7 +402,7 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "required_checks_configured" },
       "why": "CI green をマージ条件にする (auto-merge の判定にも使われる)。手入れされたリポが全て採用している",
-      "fix": "ruleset に required_status_checks を追加し CI の必須ジョブ名を登録する",
+      "fix": "ruleset に required_status_checks を追加し CI の必須ジョブ名を登録する。classic 側で満たしている場合も ruleset へ移す",
       "fix_kind": "generative"
     },
     {
@@ -412,7 +412,7 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_signatures_required" },
       "why": "コミットの出所を保証する。ローカルは全コミット署名の運用なので、その最終ゲートをリポジトリ側に置く",
-      "fix": "ruleset に required_signatures を追加する (ローカルの署名設定が前提)",
+      "fix": "ruleset に required_signatures を追加する (ローカルの署名設定が前提)。classic 側で満たしている場合も ruleset へ移す",
       "fix_kind": "deterministic"
     },
     {
@@ -422,7 +422,7 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "main_linear_history" },
       "why": "squash merge 前提なら履歴は直線になるはずで、崩れていれば運用が漏れている証拠になる",
-      "fix": "ruleset に required_linear_history を追加する",
+      "fix": "ruleset に required_linear_history を追加する。classic 側で満たしている場合も ruleset へ移す",
       "fix_kind": "deterministic"
     },
     {
@@ -432,7 +432,7 @@
       "applies_to": ["all"],
       "check": { "type": "builtin", "name": "tag_protection" },
       "why": "公開済みタグの改変・削除は利用者のビルドを壊す不可逆操作 (タグが無いリポは対象外)",
-      "fix": "target: tag / include: refs/tags/v* で deletion + non_fast_forward + update の ruleset を作る",
+      "fix": "target: tag / include: refs/tags/v* で deletion + non_fast_forward + update の ruleset を作る (classic の tag protection rules ではなく ruleset で持つ)",
       "fix_kind": "deterministic"
     },
     {
