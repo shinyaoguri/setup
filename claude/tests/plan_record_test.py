@@ -17,19 +17,39 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / "plan-record.sh"
 
-# 引数から用件だけを見分ける最小の gh。number を返す問い合わせと、コメント本文を
-# 返す問い合わせの二つしか使われない
+# 引数から用件だけを見分ける最小の gh。番号を返す問い合わせと、コメント本文を返す
+# 問い合わせの二つしか使われない。前者は state による絞り込みまで見るので、末尾の
+# -q に来る jq クエリを本物と同じように適用する
 FAKE_GH = """#!/bin/sh
 kind=$1
+query=.
+prev=
+for arg in "$@"; do
+  [ "$prev" = "-q" ] && query=$arg
+  prev=$arg
+done
 case "$*" in
   *comments*) printf '%s\\n' "${FAKE_GH_COMMENTS:-}"; exit 0 ;;
 esac
+json=
 case "$kind" in
-  pr)    [ -n "${FAKE_GH_PR:-}" ]    || exit 1; printf '%s\\n' "$FAKE_GH_PR" ;;
-  issue) [ -n "${FAKE_GH_ISSUE:-}" ] || exit 1; printf '%s\\n' "$FAKE_GH_ISSUE" ;;
-  *) exit 1 ;;
+  # FAKE_GH_PR は「open な PR がその番号」の近道。state を変えたいときは
+  # FAKE_GH_PR_JSON へ {"number":n,"state":"MERGED"} のように直接置く
+  pr)
+    json=${FAKE_GH_PR_JSON:-}
+    [ -n "$json" ] || [ -z "${FAKE_GH_PR:-}" ] || json='{"number":'$FAKE_GH_PR',"state":"OPEN"}'
+    ;;
+  issue)
+    json=${FAKE_GH_ISSUE_JSON:-}
+    [ -n "$json" ] || [ -z "${FAKE_GH_ISSUE:-}" ] || json='{"number":'$FAKE_GH_ISSUE'}'
+    ;;
 esac
+[ -n "$json" ] || exit 1
+printf '%s' "$json" | jq -r "$query"
 """
+
+MERGED_PR = '{"number":108,"state":"MERGED"}'
+CLOSED_PR = '{"number":108,"state":"CLOSED"}'
 
 
 class PlanRecordTestCase(unittest.TestCase):
@@ -295,6 +315,58 @@ class PlanRecordTestCase(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("無効化されている", result.stderr)
 
+    # --- 投稿先の解決 -------------------------------------------------------
+
+    def test_capture_posts_to_a_merged_pull_request(self):
+        # マージすると PR は MERGED になる。ここで見失うと、規約どおり PR へ
+        # 投稿を済ませたセッションほど閉じた Issue へ催促される
+        result = self.capture(
+            "Closes #77 のための計画。\n", FAKE_GH_PR_JSON=MERGED_PR, FAKE_GH_ISSUE="77"
+        )
+        self.assertIn("gh pr comment 108", result.stderr)
+        self.assertNotIn("issue comment", result.stderr)
+
+    def test_capture_skips_an_abandoned_pull_request(self):
+        # 放棄された PR (CLOSED) は器として死んでいるので、名乗った Issue へ回す
+        result = self.capture(
+            "Closes #77 のための計画。\n", FAKE_GH_PR_JSON=CLOSED_PR, FAKE_GH_ISSUE="77"
+        )
+        self.assertIn("gh issue comment 77", result.stderr)
+
+    def test_guard_clears_a_record_posted_to_a_merged_pull_request(self):
+        self.capture("計画。\n", FAKE_GH_PR_JSON=MERGED_PR)
+        record_id = self.records()[0].read_text().split("plan-record: ")[1].split(" ")[0]
+
+        result = self.guard(
+            FAKE_GH_PR_JSON=MERGED_PR,
+            FAKE_GH_COMMENTS=f"<!-- plan-record: {record_id} -->",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.records(), [])
+
+    def test_capture_ignores_a_hex_suffix_in_the_branch_name(self):
+        # claude/<説明>-<6 桁 hex>。936 は無関係な Issue として実在しうるので、
+        # 実在確認を通り抜けてプランが撃ち込まれる
+        self.git("checkout", "-q", "-b", "claude/batch-issue-cleanup-c936e5")
+        result = self.capture("名乗りの無い計画。\n", FAKE_GH_ISSUE="936")
+        self.assertIn("まだありません", result.stderr)
+        self.assertNotIn("936", result.stderr)
+
+    def test_capture_ignores_digits_glued_to_letters_in_the_branch_name(self):
+        # worktree の自動生成名。0127 は英字に挟まれたハッシュの断片
+        self.git("checkout", "-q", "-b", "worktree-bridge-cse_0127aTN6krq7fqrr56rh6gbc")
+        result = self.capture("名乗りの無い計画。\n", FAKE_GH_ISSUE="127")
+        self.assertIn("まだありません", result.stderr)
+        self.assertNotIn("127", result.stderr)
+
+    def test_capture_still_reads_a_delimited_number_from_the_branch_name(self):
+        # 区切りに接した数字は従来どおり拾う (推定の親切さを落とさない)
+        for branch in ("issues-123", "fix/123-foo", "claude/fix-123-c936e5"):
+            with self.subTest(branch=branch):
+                self.git("checkout", "-q", "-b", branch)
+                result = self.capture("名乗りの無い計画。\n", FAKE_GH_ISSUE="123")
+                self.assertIn("gh issue comment 123", result.stderr)
+
     # --- guard --------------------------------------------------------------
 
     def test_guard_blocks_stop_while_the_plan_is_unposted(self):
@@ -332,6 +404,13 @@ class PlanRecordTestCase(unittest.TestCase):
         # 4 回目は諦めて人間の判断へ返す (無限に終われないセッションを作らない)
         self.assertEqual(self.guard(FAKE_GH_PR="42").returncode, 0)
         self.assertEqual(self.records(), [])
+
+    def test_guard_shows_how_to_escape_a_wrong_target(self):
+        # 投稿先の推定が外れたとき、差し戻しを読むだけで抜けられる必要がある
+        self.capture("計画。\n", FAKE_GH_PR="42")
+        result = self.guard(FAKE_GH_PR="42")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("投稿先が違う", result.stderr)
 
     def test_guard_can_be_disabled(self):
         self.capture("計画。\n", FAKE_GH_PR="42")
