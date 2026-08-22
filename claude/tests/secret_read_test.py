@@ -13,10 +13,12 @@ preflight のテストと同じ型)。検証したいのは「どの参照をキ
     python3 claude/tests/secret_read_test.py
 """
 
+import base64
 import os
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -63,9 +65,21 @@ exit 0
 """
 
 # 偽 op。呼ばれた回数を数えられるようログを残す。
+#
+# FAKE_OP_HANG は「1Password がロックされていて、承認ダイアログを出したまま返らない」の
+# 再現。本物に寄せるための条件が 3 つある:
+#
+#   1. SIGALRM では死なない — op は Go 製で、alarm(2) 頼みのタイムアウトは効かない。
+#      ここを素の `sleep` にすると本物では通らない実装が緑になってしまう (実際になった)
+#   2. SIGTERM / SIGKILL では死ぬ — 諦める側はここまでやる必要がある
+#   3. 子プロセスを持たない — 親だけ殺しても子が stdout を掴んだままだとコマンド置換が
+#      返らない。exec で置き換えて、殺す相手を 1 つに保つ
 FAKE_OP = r"""#!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "$FAKE_OP_LOG"
+if [ -n "${FAKE_OP_HANG:-}" ]; then
+  exec perl -e '$SIG{ALRM} = "IGNORE"; sleep shift' "$FAKE_OP_HANG"
+fi
 if [ -n "${FAKE_OP_FAIL:-}" ]; then
   echo "[ERROR] could not read secret: item not found" >&2
   exit 1
@@ -103,7 +117,15 @@ class SecretReadTestCase(unittest.TestCase):
     def set_op_value(self, value):
         self.value_file.write_text(value + "\n")
 
-    def run_script(self, *args, with_op=True, op_fails=False):
+    def run_script(
+        self,
+        *args,
+        with_op=True,
+        op_fails=False,
+        op_hangs=None,
+        ttl=None,
+        refresh_timeout=None,
+    ):
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}:/usr/bin:/bin"
         env["SECRET_CACHE_ALLOWLIST"] = str(self.allowlist)
@@ -112,6 +134,12 @@ class SecretReadTestCase(unittest.TestCase):
         env["FAKE_OP_VALUE_FILE"] = str(self.value_file)
         if op_fails:
             env["FAKE_OP_FAIL"] = "1"
+        if op_hangs is not None:
+            env["FAKE_OP_HANG"] = str(op_hangs)
+        if ttl is not None:
+            env["SECRET_CACHE_TTL"] = str(ttl)
+        if refresh_timeout is not None:
+            env["SECRET_CACHE_REFRESH_TIMEOUT"] = str(refresh_timeout)
         if not with_op:
             # op を PATH から外す = 1Password が使えない状況の再現
             (self.bin / "op").unlink()
@@ -127,6 +155,28 @@ class SecretReadTestCase(unittest.TestCase):
 
     def cached_entries(self):
         return list(self.keychain.iterdir())
+
+    # --- キャッシュの中身を直接いじるためのヘルパー ---
+    #
+    # 寿命の検証で実時間を待つとテストが遅く不安定になるので、Keychain 側の最終取得時刻を
+    # 過去へずらして「古くなった状態」を作る。偽 security と同じ規則でファイル名を決める。
+
+    def keychain_path(self, ref):
+        digest = subprocess.run(
+            ["shasum"], input=ref, capture_output=True, text=True
+        ).stdout.split()[0]
+        return self.keychain / digest
+
+    def age_cache(self, ref, seconds):
+        """キャッシュの最終取得時刻を seconds 秒だけ過去へずらす。"""
+        path = self.keychain_path(ref)
+        epoch, _, encoded = path.read_text().partition(":")
+        path.write_text(f"{int(epoch) - seconds}:{encoded}")
+
+    def write_legacy_cache(self, ref, value):
+        """時刻を持たない旧形式 (base64 のみ) のキャッシュを置く。"""
+        encoded = base64.b64encode(value.encode()).decode()
+        self.keychain_path(ref).write_text(encoded)
 
     # --- キャッシュしてよい参照 ---
 
@@ -189,6 +239,123 @@ class SecretReadTestCase(unittest.TestCase):
         self.allowlist.write_text(f"  {GYAZO_REF}  \n")
         self.run_script(GYAZO_REF)
         self.assertEqual(len(self.cached_entries()), 1)
+
+    # --- キャッシュの寿命 ---
+    #
+    # 正本は 1Password 側なので、古くなったキャッシュは黙って正本を裏切る。ローテートに
+    # 自動で追いつくこと、そのために可用性 (ロック中でも読める) を犠牲にしないことの 2 つを
+    # 対で見る。
+
+    def test_寿命を過ぎたら_op_から取り直して新しい値を返す(self):
+        self.run_script(GYAZO_REF, ttl=100)
+        self.set_op_value("rotated-token")
+        self.age_cache(GYAZO_REF, 200)
+
+        result = self.run_script(GYAZO_REF, ttl=100)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "rotated-token\n")
+
+    def test_取り直したら次の呼び出しでは_op_を呼ばない(self):
+        """取り直しで時刻が進むこと。進まなければ毎回 op を叩きに行ってしまう。"""
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+        self.run_script(GYAZO_REF, ttl=100)
+        calls_after_refresh = len(self.op_calls())
+
+        self.run_script(GYAZO_REF, ttl=100)
+        self.assertEqual(len(self.op_calls()), calls_after_refresh)
+
+    def test_取り直しに失敗しても古い値で動き続ける(self):
+        """本命の性質。1Password が閉じていても呼び出し側は止まらない。"""
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+
+        result = self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+
+    def test_取り直しに失敗した直後は_op_を呼び直さない(self):
+        """再試行の抑制。これが無いとロック中は呼び出しのたびにタイムアウトを待つ。"""
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        calls_after_failure = len(self.op_calls())
+
+        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.assertEqual(len(self.op_calls()), calls_after_failure)
+
+    def test_取り直しに失敗しても値は壊さない(self):
+        """時刻だけ進めるつもりで値まで飛ばしていないこと。"""
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+
+        result = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+
+    def test_op_が返ってこなくても待たされずキャッシュを返す(self):
+        """ロック中の op read は承認待ちで返らない。待たないことがこの設計の核心。
+
+        値だけを見ても通ってしまう (待った末に諦めても同じ値が出る) ので、経過時間まで
+        見る。閾値は op を 30 秒黙らせた設定と明確に切り分けられるところに置く。
+        """
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+
+        started = time.monotonic()
+        result = self.run_script(GYAZO_REF, ttl=100, refresh_timeout=1, op_hangs=30)
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+        self.assertLess(elapsed, 15, "タイムアウトが効かず op の応答を待っている")
+
+    def test_TTL_0_なら取り直さない(self):
+        self.run_script(GYAZO_REF, ttl=0)
+        self.set_op_value("rotated-token")
+        self.age_cache(GYAZO_REF, 10**6)
+        calls_before = len(self.op_calls())
+
+        result = self.run_script(GYAZO_REF, ttl=0)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+        self.assertEqual(len(self.op_calls()), calls_before)
+
+    def test_寿命内なら_op_を呼ばない(self):
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 50)
+        calls_before = len(self.op_calls())
+
+        self.run_script(GYAZO_REF, ttl=100)
+        self.assertEqual(len(self.op_calls()), calls_before)
+
+    def test_時刻を持たない古いキャッシュは取り直して移行する(self):
+        """既にキャッシュ済みの項目を作り直させないための後方互換。"""
+        self.write_legacy_cache(GYAZO_REF, "legacy-token")
+        self.set_op_value("rotated-token")
+
+        result = self.run_script(GYAZO_REF, ttl=100)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "rotated-token\n")
+        self.assertIn(":", self.keychain_path(GYAZO_REF).read_text(), "新形式へ移っていない")
+
+    def test_時刻を持たない古いキャッシュも_op_が無ければそのまま読める(self):
+        self.write_legacy_cache(GYAZO_REF, "legacy-token")
+        result = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "legacy-token\n")
+
+    def test_許可リストに無い参照は寿命の影響を受けない(self):
+        """キャッシュしない参照は毎回 op を読む。TTL が何であれ変わらない。"""
+        self.run_script(SSH_REF, ttl=10**6)
+        self.run_script(SSH_REF, ttl=10**6)
+        self.assertEqual(len(self.op_calls()), 2)
+        self.assertEqual(self.cached_entries(), [])
+
+    def test_TTL_が壊れていても既定で動き続ける(self):
+        result = self.run_script(GYAZO_REF, ttl="いつまでも")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+        self.assertIn("SECRET_CACHE_TTL", result.stderr)
 
     # --- 入れ替えと後始末 ---
 
@@ -259,6 +426,19 @@ class SecretReadTestCase(unittest.TestCase):
     def test_check_は未キャッシュを見分ける(self):
         result = self.run_script("--check")
         self.assertIn("未キャッシュ", result.stdout)
+
+    def test_check_は鮮度を出すが値は出さない(self):
+        self.run_script(GYAZO_REF)
+        self.age_cache(GYAZO_REF, 7200)
+        result = self.run_script("--check")
+        self.assertIn("2 時間前", result.stdout)
+        self.assertNotIn("gyazo-token-abc", result.stdout, "--check が値を漏らしている")
+
+    def test_check_は時刻を持たない古いキャッシュを見分ける(self):
+        self.write_legacy_cache(GYAZO_REF, "legacy-token")
+        result = self.run_script("--check")
+        self.assertIn("取得時刻が不明", result.stdout)
+        self.assertNotIn("legacy-token", result.stdout, "--check が値を漏らしている")
 
     def test_check_は許可リストの不正な行を指摘する(self):
         self.allowlist.write_text("not-a-reference\n")
