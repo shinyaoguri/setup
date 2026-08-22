@@ -106,6 +106,29 @@ class SettingsTestCase(unittest.TestCase):
     def test_allow_rules_unique(self):
         self.assertEqual(len(self.allow), len(set(self.allow)), "allow が重複している")
 
+    def test_op_read_is_not_allowed_directly(self):
+        """1Password の秘密は secret-read 経由で読む (op read を素通しにしない)。
+
+        `op read` は 1Password がロックされていると承認ダイアログを出したまま返らない
+        (実測で 2 分以上ハングした)。無人セッション (hook・scheduled task・バックグラウンド)
+        は承認に応えられないので、そこで黙って止まる。`secret-read` は許可した参照だけを
+        Keychain にキャッシュするのでロックに左右されず、正本のローテートにも追随する。
+
+        allow に `op read` があると、その違いを意識しないまま直接呼べてしまい、規約は
+        CLAUDE.md に書いてあるだけになる。**ここで外しておけば、直接呼んだときだけ承認が
+        求められる** — 文書ルールが実行時の判定に降りる。
+
+        `secret-read` が内部で呼ぶ `op read` はシェルスクリプトの中なので、この判定は
+        通らない (影響を受けない)。
+        """
+        for rule in self.allow:
+            with self.subTest(rule=rule):
+                self.assertNotRegex(
+                    rule,
+                    r"^Bash\(\s*op\s+read",
+                    "op read は allow に置かない (secret-read を使う)",
+                )
+
 
 class AdditionalDirectoriesTestCase(unittest.TestCase):
     """`permissions.additionalDirectories` のテスト。
