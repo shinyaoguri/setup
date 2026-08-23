@@ -216,6 +216,32 @@
       "fix_kind": "generative"
     },
     {
+      "id": "pr-visual-evidence",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": "見た目の変更に視覚的な証跡が残っているかを判定する。まず (0) このリポが画面・描画・生成画像を持つか (GUI アプリ・web フロントエンド・描画ライブラリ・可視化・テーマ) を見て、持たないなら skip とする。持つなら (1) 直近 10 件のマージ済み PR (gh pr list --state merged --limit 10 --json number,title,body) のうち見た目が変わるものに、本文かコメントで画像が示されているか (静止画。動きが変わるならアニメーション WebP も)、(2) 証跡を機械で強制する仕組みがあるか — 見た目に効くパスを触った PR に画像が無ければ落とす CI ジョブか、E2E で撮って Gyazo へ上げ PR へ貼るジョブのどちらか、を見る。画像がリポジトリへコミットされず外部 URL で貼られていることも確かめる (既にコミット済みの生成物を raw URL で参照するのは可)"
+      },
+      "why": "squash merge ではブランチが消え PR 本文が唯一の記録として残る。見た目の変化は diff から想像できず、マージ後に証跡を足すこともできない (metaphor #631 / #843 で確立した形)",
+      "fix": "見た目が変わる PR に before/after を貼る運用を CLAUDE.md へ書き、見た目に効くパスを触った PR を CI で検査する。判定の骨子と撮影・貼り方は gyazo-capture スキル (対象パスは実績で決める / 逃げ道は no-visual-change ラベル / 必須ジョブの中に置く)",
+      "fix_kind": "generative"
+    },
+    {
+      "id": "docs-images-external",
+      "layer": "repo",
+      "level": "recommended",
+      "applies_to": ["all"],
+      "check": {
+        "type": "llm",
+        "prompt": "ドキュメント本文の画像が外部 URL で参照されているかを判定する。Markdown (README・docs/ 配下) の画像記法を集め、(1) 相対パスでリポジトリ内の画像を指すものがあるか、(2) あるならその置き場がリポジトリ内であることの理由が書かれているか (例: 実行結果画像を回帰検出の資産と兼ねる、配布物やアプリのアセット) を見る。本文に画像が 1 枚も無いリポ、および画像がテスト資産・アプリ内アセット・サイトの静的ファイルとしてのみ存在し本文から参照されていないリポは skip とする"
+      },
+      "why": "画像をコミットするとリポジトリの容量を圧迫し、撮り直すたびに履歴へ積み上がる。ただしリポジトリ内が正しい置き場になる設計判断もある (metaphor の Examples 実行結果画像) ので、一律禁止ではなく理由の明示を求める",
+      "fix": "本文の画像を Gyazo へ上げて外部 URL へ差し替える (手順は gyazo-capture スキル)。リポジトリ内に置き続けるなら、その判断と理由を CLAUDE.md か ADR に書く",
+      "fix_kind": "generative"
+    },
+    {
       "id": "editorconfig-rejected",
       "layer": "repo",
       "level": "rejected",
