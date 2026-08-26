@@ -166,6 +166,7 @@
   "language": "japanese",
   "tui": "fullscreen",
   "theme": "auto",
+  "inputNeededNotifEnabled": false,
   "agentPushNotifEnabled": true,
   "autoMode": {
     "allow": [
@@ -189,6 +190,5 @@
       "Internal sharing / snippet hosting: Gyazo (gyazo.com) is the sanctioned destination for visual evidence of GUI work — screenshots and animated GIFs are uploaded there and linked from issues and pull requests instead of being committed to a repository. The trust is limited to screen captures of the developer's own local work in progress; source from a private repository, credentials, personal data, and any content whose confidentiality is not the developer's own to waive are not to be uploaded there. Other public paste and gist services remain outside the trust boundary",
       "Secrets management: no vault or cloud secret manager. Real secrets, personal data, and production data live only in gitignored files such as .env. Anything that leaves that boundary — commits, generated artifacts, logs, issues, pull requests, external services — carries only dummy values, environment variable names, or references such as a path or an ID"
     ]
-  },
-  "inputNeededNotifEnabled": false
+  }
 }
