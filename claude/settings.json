@@ -5,14 +5,6 @@
     "sessionUrl": false
   },
   "permissions": {
-    "defaultMode": "auto",
-    "ask": [
-      "Bash(gh repo delete:*)",
-      "Bash(gh release delete:*)",
-      "Bash(gh api -X DELETE:*)",
-      "Bash(gh api --method DELETE:*)",
-      "Bash(git push --delete:*)"
-    ],
     "allow": [
       "Bash(jq:*)",
       "Bash(git status:*)",
@@ -35,6 +27,14 @@
       "Bash(gh pr diff:*)",
       "Bash(secret-read:*)"
     ],
+    "ask": [
+      "Bash(gh repo delete:*)",
+      "Bash(gh release delete:*)",
+      "Bash(gh api -X DELETE:*)",
+      "Bash(gh api --method DELETE:*)",
+      "Bash(git push --delete:*)"
+    ],
+    "defaultMode": "auto",
     "additionalDirectories": [
       "~/Repos",
       "~/.setup",
@@ -139,8 +139,6 @@
     "swift-lsp@claude-plugins-official": true,
     "cosense-cli@cosense-cli": true,
     "cloudflare@cloudflare": true,
-    "metaphor-sketch@shinyaoguri": true,
-    "metaphor-contrib@shinyaoguri": true,
     "repo-standards@shinyaoguri": true
   },
   "extraKnownMarketplaces": {
@@ -165,17 +163,14 @@
       "autoUpdate": true
     }
   },
+  "language": "japanese",
+  "tui": "fullscreen",
+  "theme": "auto",
+  "agentPushNotifEnabled": true,
   "autoMode": {
     "allow": [
       "$defaults",
       "Recorded and Recoverable Development Work: Any action whose effect lands somewhere the developer can read afterwards and either undo or re-derive — a commit, a branch, a pull request, an issue, a file under version control, or a definition file the change is applied from. This is the ordinary development loop, and it is covered end to end in whatever repository the session is working in: writing and deleting files in the working tree, committing, pushing a branch, opening and updating a pull request, applying repository settings from a versioned definition, merging once the gate is green, and letting the release automation that the merge triggers run. It also covers local work that leaves nothing outside the working tree, its worktrees, or the session scratchpad — creating directories, moving files, builds, tests, linters — including when several are chained in one shell invocation. Irreversibility on its own is not a reason to stop: a merge and a release are irreversible and are still the ordinary end of this loop. What stays outside this rule: destroying work that exists nowhere else, forcing past a gate instead of satisfying it, and carrying real secrets or personal data out of a gitignored file. Which accounts, repositories, and services are the developer's own is settled by the environment section and is not restated here."
-    ],
-    "environment": [
-      "$defaults",
-      "Organization: individual developer (github.com/shinyaoguri), no company or team infrastructure. Primary use of Claude Code: software development on personal repositories",
-      "Source control: github.com/shinyaoguri and the repositories under that account. Pushing, opening pull requests, and filing issues there are routine operations. This trust does not extend to any other GitHub account or organization, and it does not change what may be placed in a repository: a public repository under this account is still a public destination",
-      "Internal sharing / snippet hosting: Gyazo (gyazo.com) is the sanctioned destination for visual evidence of GUI work — screenshots and animated GIFs are uploaded there and linked from issues and pull requests instead of being committed to a repository. The trust is limited to screen captures of the developer's own local work in progress; source from a private repository, credentials, personal data, and any content whose confidentiality is not the developer's own to waive are not to be uploaded there. Other public paste and gist services remain outside the trust boundary",
-      "Secrets management: no vault or cloud secret manager. Real secrets, personal data, and production data live only in gitignored files such as .env. Anything that leaves that boundary — commits, generated artifacts, logs, issues, pull requests, external services — carries only dummy values, environment variable names, or references such as a path or an ID"
     ],
     "soft_deny": [
       "$defaults",
@@ -186,10 +181,14 @@
     "hard_deny": [
       "$defaults",
       "Auto-Mode Self-Authorization: Widening this machine's own auto mode authorization, by any mechanism and in any settings file carrying an `autoMode` section (~/.claude/settings.json and settings.local.json, a repository's .claude/settings*.json, and the source of truth at github.com/shinyaoguri/setup path claude/settings.json) — whether through Edit or Write, a shell rewrite (`jq`, `sed`, a heredoc redirect, a script), or restoring an earlier revision (`git checkout <rev> -- <settings file>`). Widening means any of: adding an entry to `autoMode.allow`; deleting an entry from `autoMode.soft_deny` or `autoMode.hard_deny`, or rewriting one so it covers less; dropping the literal \"$defaults\" from any `autoMode` array, which silently discards that section's built-in rules; and adding to or weakening an `autoMode.environment` slot — declaring a new trusted domain, bucket, registry, service, or repository, or calling a public repository private — because trusting more infrastructure widens authorization by another door. This is the one change an agent must never make on its own behalf, whatever authorization it believes it has: it is the act of granting itself permission. Block unconditionally. The developer makes it outside auto mode, as a reviewable commit. Tightening is not this rule: adding a `soft_deny` or `hard_deny` entry, restoring \"$defaults\", or narrowing an `environment` slot."
+    ],
+    "environment": [
+      "$defaults",
+      "Organization: individual developer (github.com/shinyaoguri), no company or team infrastructure. Primary use of Claude Code: software development on personal repositories",
+      "Source control: github.com/shinyaoguri and the repositories under that account. Pushing, opening pull requests, and filing issues there are routine operations. This trust does not extend to any other GitHub account or organization, and it does not change what may be placed in a repository: a public repository under this account is still a public destination",
+      "Internal sharing / snippet hosting: Gyazo (gyazo.com) is the sanctioned destination for visual evidence of GUI work — screenshots and animated GIFs are uploaded there and linked from issues and pull requests instead of being committed to a repository. The trust is limited to screen captures of the developer's own local work in progress; source from a private repository, credentials, personal data, and any content whose confidentiality is not the developer's own to waive are not to be uploaded there. Other public paste and gist services remain outside the trust boundary",
+      "Secrets management: no vault or cloud secret manager. Real secrets, personal data, and production data live only in gitignored files such as .env. Anything that leaves that boundary — commits, generated artifacts, logs, issues, pull requests, external services — carries only dummy values, environment variable names, or references such as a path or an ID"
     ]
   },
-  "language": "japanese",
-  "tui": "fullscreen",
-  "theme": "auto",
-  "agentPushNotifEnabled": true
+  "inputNeededNotifEnabled": false
 }
