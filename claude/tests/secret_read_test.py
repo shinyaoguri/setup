@@ -49,7 +49,9 @@ case "$cmd" in
     read -r first || exit 1
     read -r second || exit 1
     [ "$first" = "$second" ] || exit 1
-    printf '%s' "$first" > "$key"
+    # 本物は stdin から読むパスワードを 128 文字で黙って切る (実測)。ここを無制限に
+    # すると、切り詰めで壊れる値があっても検査が緑のままになる
+    printf '%s' "${first:0:128}" > "$key"
     ;;
   find-generic-password)
     [ -f "$key" ] || exit 44
@@ -216,6 +218,22 @@ class SecretReadTestCase(unittest.TestCase):
         second = self.run_script(GYAZO_REF, with_op=False)
         self.assertEqual(first.stdout, secret + "\n")
         self.assertEqual(second.stdout, secret + "\n", "キャッシュ往復で値が変わった")
+
+    def test_長い複数行の値も壊さず往復する(self):
+        # 上のケースは値が短く、base64 が 1 行に収まってしまうので、折り返しの事故を
+        # 素通しする。秘密鍵のような長い値では base64 が 76 文字ごとに折り返され、
+        # security(1) は 1 行目だけをパスワードとして読むため、黙って切り詰められる。
+        # 実際に GitHub App の秘密鍵 (1678 バイト) がヘッダ行だけになった
+        body = "\n".join("MIIEpQIBAAKCAQEAuSODvgDARc6Vjq0xKiX3B1kF3erBJ5V+OwY0R" for _ in range(26))
+        secret = f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----"
+        self.set_op_value(secret)
+        self.run_script(GYAZO_REF)
+        cached = self.run_script(GYAZO_REF, with_op=False)
+        self.assertEqual(
+            cached.stdout,
+            secret + "\n",
+            f"キャッシュ往復で値が変わった ({len(cached.stdout)} バイトになった)",
+        )
 
     # --- キャッシュしてはいけない参照 ---
 
