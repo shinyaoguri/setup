@@ -109,6 +109,12 @@
             "command": "~/.claude/gh-comment-guard.sh",
             "timeout": 10,
             "statusMessage": "コメントの署名を確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/term-guard.sh",
+            "timeout": 15,
+            "statusMessage": "公開面の禁止語を確認中"
           }
         ]
       },

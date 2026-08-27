@@ -39,6 +39,13 @@
 # 規約 (claude/CLAUDE.md) の仕事で、ここは付け忘れを差し戻すだけ — PreToolUse はツール入力を
 # 書き換えられないため。テストは claude/tests/gh_comment_guard_test.py
 #
+# term-guard.sh は世代交代したリポジトリの公開面 (push されるコミット・gh の投稿本文) に
+# 旧世界の語が出ていくのを止める PreToolUse フック。「どのリポで・どの語を禁じるか」という
+# ルール自体が新旧の対応関係を明かす機微情報なので、機構 (このリポ・汎用) とルール
+# (ローカル管理外の ~/.claude/term-guard.d/*.rules。正本は各プロジェクトの private リポ) を
+# 分離する。ルールが 1 件も無いマシンでは無音。呼び出し口は settings.json の hooks、
+# テストは claude/tests/term_guard_test.py (issue #121)
+#
 # repo-standards.json はリポジトリ標準チェックリストの正本。消費者は claude-plugins の
 # repo-standards プラグイン (~/.claude/repo-standards.json 経由で読む)。
 # テストは claude/tests/repo_standards_test.py
@@ -55,6 +62,7 @@
       - automode-guard.py
       - plan-record.sh
       - gh-comment-guard.sh
+      - term-guard.sh
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
