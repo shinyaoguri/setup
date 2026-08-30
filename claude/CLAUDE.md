@@ -44,4 +44,4 @@
 - 1 PR = 1 関心事。本題以外のバグ・改善に気付いたら直接修正せず、`gh issue list --search` で重複を軽く見てから `gh issue create` で起票
 - 仕様・設計 docs は叩き台として扱い、曖昧点・軽微な矛盾は同一 PR で docs も改訂して根拠を残す。確定要件・設計判断級の変更は事前にユーザーへ確認する
 - テストは実装 PR に含める: バグ修正は失敗する再現テストが先 / 正常系に加えて失敗系・境界値を最低一つ / 新しいテストは検証対象の振る舞いを一時的に壊して赤くなるのを見てから仕上げる (壊しても緑のままのテストは書き直す)
-- スキルは用途で置き場を分ける: 複数プロジェクトで使う汎用スキルは自作 marketplace (shinyaoguri/claude-plugins) のプラグインとして配布し、特定プロジェクト固有のものは各リポジトリの `.claude/skills/` へ。第三者配布スキルもコピーせず plugin marketplace 経由で入れる。いずれも settings.json で宣言し (extraKnownMarketplaces / enabledPlugins)、`~/.claude/skills/` には実体も symlink も置かない
+- スキルは用途で置き場を分ける: 複数プロジェクトで使う汎用スキルは自作 marketplace (shinyaoguri/claude-plugins) のプラグインとして配布し、特定プロジェクト固有のものは各リポジトリの `.claude/skills/` へ。第三者配布スキルもコピーせず plugin marketplace 経由で入れる。**宣言 (extraKnownMarketplaces / enabledPlugins) の置き場は「どこで発火する必要があるか」で決める** — 特定のリポジトリでしか使わないものはそのリポジトリの `.claude/settings.json` へ、どのリポジトリのものでもないものだけここへ (claude-plugins の ADR-0021)。**リポジトリが宣言してよいのは道具までで、そのリポジトリの規約を判定する支援を宣言させない** — 入れている人にだけ規約が効く状態になる。`~/.claude/skills/` には実体も symlink も置かない
