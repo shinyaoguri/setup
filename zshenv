@@ -20,6 +20,21 @@ export PATH
 # Keychain をキャッシュに使う。手順は gyazo-capture スキル、線引きは secret-cache-allowlist
 export GYAZO_TOKEN_REF="op://Automation/Gyazo API/credential"
 
+# mokume のエージェントが push と PR 作成に使う GitHub App の秘密鍵を、**読むコマンド**
+# として置く (値は持たせない)。mokume の scripts/gh-app-token.sh が eval して PEM を得る。
+# 参照だけでなくコマンドの形なのは、あちらが受け取る口が MOKUME_APP_PRIVATE_KEY_CMD
+# だから (mokume の AGENTS.md「エージェントの identity」)。
+#
+# **こちらが持つのは、あちらが持てないからである。** mokume は「秘密鍵の中身も在処も
+# リポジトリに書かない」を規約にしていて、鍵の渡し方だけが手で揃える設定として外に
+# 残る。その置き場がここになる。
+#
+# zshrc ではなくここに置くのは GYAZO_TOKEN_REF と同じ理由 — 無人セッション (hook・
+# scheduled task) が非対話で zshrc を読まず、空のまま「鍵が無い」で止まるため。
+# 承認が要る PR は App identity でしか作れないので (mokume の ADR-0007)、ここが空だと
+# エージェントは PR を作れない。
+export MOKUME_APP_PRIVATE_KEY_CMD='secret-read "op://Automation/mokume-agent/mokume-agent.2026-08-26.private-key.pem"'
+
 # SSH agent は Secretive (Secure Enclave)。ssh-keygen -Y sign は SSH_AUTH_SOCK から
 # agent を引くので、コミット署名にもこの変数が要る。zshrc に置くと非対話シェルが
 # 読まないため、無人セッションでだけ署名が落ちる (GYAZO_TOKEN_REF と同じ轍)。
