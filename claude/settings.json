@@ -123,12 +123,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/worktree-path-guard.sh",
-            "timeout": 10,
-            "statusMessage": "編集先の worktree を確認中"
-          },
-          {
-            "type": "command",
             "command": "~/.claude/automode-guard.py",
             "timeout": 10,
             "statusMessage": "権限設定の変更を確認中"
@@ -143,7 +137,8 @@
   },
   "enabledPlugins": {
     "swift-lsp@claude-plugins-official": true,
-    "repo-standards@shinyaoguri": true
+    "repo-standards@shinyaoguri": true,
+    "eli5@claude-community": true
   },
   "extraKnownMarketplaces": {
     "shinyaoguri": {
@@ -152,6 +147,12 @@
         "repo": "shinyaoguri/claude-plugins"
       },
       "autoUpdate": true
+    },
+    "claude-community": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/anthropics/claude-plugins-community.git"
+      }
     }
   },
   "language": "japanese",

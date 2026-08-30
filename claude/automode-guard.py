@@ -19,7 +19,7 @@
     実体も同じ判定になる。パスの列挙は環境が変わるたびに漏れる
 
 deny ではなく ask なのは、`autoMode` の変更が正当な作業でもあるから (この節を足した
-setup#86 がまさにそれ)。worktree-path-guard.sh が deny なのは「パスを直せばその場で
+setup#86 がまさにそれ)。gh-comment-guard.sh が deny なのは「署名を足せばその場で
 続行できる = 人を呼ぶ必要がない」からで、ここは人を呼ぶことそのものが目的になる。
 
 契約: stdin に PreToolUse の JSON。素通しは無出力 + 終了コード 0。

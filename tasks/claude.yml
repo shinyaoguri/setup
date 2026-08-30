@@ -21,9 +21,14 @@
 # 管理しない (管理するのは書き出す側のスクリプトと、それを呼ぶ settings.json)。
 #
 # git-safety-guard.sh は取り返しのつかない git 操作と秘密ファイルのコミットを止める
-# PreToolUse フック。worktree-path-guard.sh は同じリポジトリの別 worktree への書き込み
-# (パスの取り違え) を止める PreToolUse フック。呼び出し口はいずれも settings.json の
-# hooks、テストは claude/tests/*_test.py (python3 で直接実行)
+# PreToolUse フック。リポジトリの外 (clone する前・~/ 直下・git 管理外のディレクトリ) でも
+# 守る必要があるので、ここに残る側である。呼び出し口は settings.json の hooks、
+# テストは claude/tests/*_test.py (python3 で直接実行)
+#
+# worktree-path-guard.sh はここには無い。同じリポジトリの別 worktree への書き込みを
+# 止めるフックで、守る場面がリポジトリの中にしか無いため mokume 側へ移した
+# (mokume-metal/mokume#499・claude-plugins の ADR-0021)。他のリポジトリへは
+# 必要が示されてから配る
 #
 # plan-record.sh は着手時のプランを GitHub (PR / Issue のコメント) 側に残すためのフック。
 # プランは ~/.claude/plans/ にも溜まるが、そこはローカルのマシンにしか無く、ランダムな
@@ -58,7 +63,6 @@
       - runcat-metrics.py
       - git-safety-guard.sh
       - provisioning-preflight.sh
-      - worktree-path-guard.sh
       - automode-guard.py
       - plan-record.sh
       - gh-comment-guard.sh
