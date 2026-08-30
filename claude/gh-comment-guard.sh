@@ -24,11 +24,20 @@
 #
 # ask ではなく deny なのは、署名を足せばその場で続行できるから (人を呼ぶ必要がない)。
 #
+# 環境変数: CLAUDE_GH_COMMENT_GUARD=0 で無効化する。署名の作法はリポジトリごとに違い
+# (投稿ラッパーを持ち、素の gh を先に deny するリポジトリがある)、そこでは同種の機構が
+# 二重に動く。向きは「リポ側が担保して個人側を黙らせる」で固定してあるので、黙る口は
+# こちら側が持つ。前例は plan-record.sh の CLAUDE_PLAN_RECORD=0。
+#
 # 契約: stdin に PreToolUse の JSON。素通しは無出力 + 終了コード 0。
 # 呼び出し口は settings.json の hooks.PreToolUse、テストは
 # claude/tests/gh_comment_guard_test.py (python3 で直接実行)。
 
 set -uo pipefail
+
+# 自前で署名を担保しているリポジトリは、ここを黙らせて自分の機構だけを効かせる。
+# 既定は有効で、0 以外は「無効化の意思表示ではない」と読む
+[ "${CLAUDE_GH_COMMENT_GUARD:-1}" = "0" ] && exit 0
 
 # 本文末尾に足す署名。CLAUDE.md の規約と同じ文字列を持つ (変えるときは両方)。
 # 検知は SIGNATURE_KEY の固定文字列で行うので、リンク先が変わっても効き続ける

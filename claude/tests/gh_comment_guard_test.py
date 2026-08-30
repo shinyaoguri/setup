@@ -9,6 +9,7 @@
 """
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -35,13 +36,18 @@ class HookTestCase(unittest.TestCase):
         path.write_text(text)
         return path
 
-    def run_hook(self, command):
+    def run_hook(self, command, env=None):
+        # 無効化スイッチはテストが明示したときだけ効かせる。呼び出し元のセッションが
+        # 立てている値をそのまま渡すと、フックを黙らせたリポジトリで流したときに
+        # 全件が素通しになり、判定を何も見ていない緑ができる
+        base = {k: v for k, v in os.environ.items() if k != "CLAUDE_GH_COMMENT_GUARD"}
         return subprocess.run(
             [str(SCRIPT)],
             input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
             capture_output=True,
             text=True,
             timeout=30,
+            env={**base, **(env or {})},
         )
 
     def assert_allowed(self, command):
@@ -133,6 +139,31 @@ class HookTestCase(unittest.TestCase):
             f'# {SIGNATURE}'
         )
         self.assert_allowed(command)
+
+    # --- 無効化スイッチ ----------------------------------------------------
+
+    def test_disabled_by_env_lets_unsigned_body_through(self):
+        # 署名を自前の機構で担保しているリポジトリが、二重に動くこちらを黙らせる口。
+        # 向きは「リポ側が担保して個人側を黙らせる」で固定してある
+        # (前例は CLAUDE_PLAN_RECORD=0)
+        result = self.run_hook(
+            'gh issue comment 606 --body "署名なし"',
+            env={"CLAUDE_GH_COMMENT_GUARD": "0"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "", "無効化したのに止めた")
+
+    def test_other_values_keep_the_guard_on(self):
+        # 既定は有効。0 以外は「無効化の意思表示ではない」と読む
+        for value in ("1", "", "false", "no"):
+            with self.subTest(value=value):
+                result = self.run_hook(
+                    'gh issue comment 606 --body "署名なし"',
+                    env={"CLAUDE_GH_COMMENT_GUARD": value},
+                )
+                self.assertNotEqual(
+                    result.stdout.strip(), "", f"{value!r} で黙ってしまった"
+                )
 
     # --- 規約との一致 ------------------------------------------------------
 
