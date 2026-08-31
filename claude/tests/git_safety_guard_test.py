@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hookenv import clean_env
+
 SCRIPT = Path(__file__).resolve().parent.parent / "git-safety-guard.sh"
 
 
@@ -43,6 +45,7 @@ class HookTestCase(unittest.TestCase):
             text=True,
             cwd=self.repo,
             timeout=30,
+            env=clean_env(),
         )
 
     def assert_allowed(self, result):

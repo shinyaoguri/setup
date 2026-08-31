@@ -9,12 +9,13 @@
 """
 
 import json
-import os
 import stat
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 SCRIPT = Path(__file__).resolve().parent.parent / "provisioning-preflight.sh"
 
@@ -58,7 +59,7 @@ class HookTestCase(unittest.TestCase):
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
 
     def run_hook(self, command):
-        env = dict(os.environ)
+        env = clean_env()
         env["PATH"] = f"{self.bin}:{env['PATH']}"
         env["PROVISIONING_PREFLIGHT_LIMIT"] = "2"   # 時間切れの検証を待たずに済ませる
         return subprocess.run(
