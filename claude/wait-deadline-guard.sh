@@ -24,8 +24,12 @@
 #
 # 期限として認めるのは 2 つだけ。曖昧な数え上げ (自前のカウンタ変数など) は読み取ろうと
 # しない — 認める形を狭く固定するほうが、差し戻しの文面がそのまま打ち直せる形になる。
-#   - timeout <秒> …            外から殺す。バックグラウンドでも確実に終わる
-#   - $SECONDS を条件に混ぜる   ループ自身が抜ける
+#   - $SECONDS を条件に混ぜる   ループ自身が抜ける。**macOS の既定はこちら**
+#   - timeout <秒> …            外から殺す。coreutils を入れた環境と CI 用
+#
+# **勧める順が $SECONDS なのは、macOS に timeout(1) が無いからである。** GNU coreutils
+# の道具で、brew install coreutils を入れても名前は gtimeout になる。文面が先に
+# timeout を出していた版は、そのまま打ち直すと command not found になった (実測)。
 #
 # run_in_background かどうかは見ない。フォアグラウンドは harness の上限で必ず終わるので
 # 実害は薄いが、**ツール入力のどのキーに載るかへ依存しない**ほうが「黙って効かなくなる」
@@ -74,8 +78,9 @@ has "$SLEEP" || exit 0
 
 # --- 期限があるか ----------------------------------------------------------
 
-# timeout(1)。`timeout 900 bash -c …` / `timeout --signal=KILL 30 …` のどちらも拾う
-readonly TIMEOUT_CMD="${EDGE}timeout[[:space:]]+(-|[0-9])"
+# timeout(1)。`timeout 900 bash -c …` / `timeout --signal=KILL 30 …` のどちらも拾う。
+# macOS の GNU coreutils は gtimeout の名前で入るので、そちらも認める
+readonly TIMEOUT_CMD="${EDGE}g?timeout[[:space:]]+(-|[0-9])"
 # $SECONDS をループの条件に混ぜる形。$SECONDS / ${SECONDS} / (( SECONDS < … )) を拾う
 readonly SECONDS_BOUND='(\$\{?SECONDS\}?|\(\([^)]*SECONDS)'
 
@@ -96,11 +101,11 @@ status=IN_PROGRESS・conclusion=SUCCESS のまま残った check run を `status
 
 次のどちらかの形で打ち直してください。
 
-  # 外から殺す (推奨。バックグラウンドでも確実に終わる)
-  timeout 900 bash -c 'until <条件>; do sleep 20; done'
-
-  # ループ自身が抜ける
+  # ループ自身が抜ける (推奨。macOS に timeout(1) は無い)
   end=$((SECONDS + 900)); until <条件> || [ "$SECONDS" -ge "$end" ]; do sleep 20; done
+
+  # 外から殺す (timeout(1) がある環境のみ。GNU coreutils で、macOS では gtimeout)
+  timeout 900 bash -c 'until <条件>; do sleep 20; done'
 
 あわせて、停止条件が**終端状態を全部**見ているかを確かめてください。成功の印だけを
 待つ条件は、失敗・中断・仕様外の状態のときに黙って回り続けます。

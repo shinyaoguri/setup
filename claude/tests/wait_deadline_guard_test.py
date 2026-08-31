@@ -82,6 +82,10 @@ class HookTestCase(unittest.TestCase):
     def test_timeout_で包んであれば素通し(self):
         self.assert_allowed("timeout 900 bash -c 'until test -f done; do sleep 20; done'")
 
+    def test_gtimeout_でも素通し(self):
+        # macOS に timeout(1) は無い。GNU coreutils を入れると gtimeout の名前で入る
+        self.assert_allowed("gtimeout 900 bash -c 'until test -f done; do sleep 20; done'")
+
     def test_timeout_のオプション付きでも素通し(self):
         self.assert_allowed(
             "timeout --signal=KILL 60 bash -c 'while true; do sleep 1; done'"
@@ -119,7 +123,17 @@ class HookTestCase(unittest.TestCase):
     def test_理由に打ち直せる形が両方載る(self):
         reason = self.assert_denied(INCIDENT)
         self.assertIn("timeout 900 bash -c", reason, "timeout の形が理由文に無い")
-        self.assertIn("SECONDS", reason, "SECONDS の形が理由文に無い")
+        self.assertIn("SECONDS + 900", reason, "SECONDS の形が理由文に無い")
+
+    def test_理由が_SECONDS_の形を先に出す(self):
+        # macOS に timeout(1) は無いので、先に出た形をそのまま打つと command not found
+        # になる。推奨の順序そのものが、この環境で動くかどうかを決める
+        reason = self.assert_denied(INCIDENT)
+        self.assertLess(
+            reason.index("SECONDS + 900"),
+            reason.index("timeout 900"),
+            "macOS で動かない timeout の形が先に出ている",
+        )
 
     def test_理由が終端状態を全部見るよう促す(self):
         reason = self.assert_denied(INCIDENT)
