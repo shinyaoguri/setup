@@ -9,11 +9,12 @@
 """
 
 import json
-import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 SCRIPT = Path(__file__).resolve().parent.parent / "plan-record.sh"
 
@@ -78,10 +79,8 @@ class PlanRecordTestCase(unittest.TestCase):
         subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True)
 
     def env(self, **overrides):
-        env = dict(os.environ)
+        env = clean_env(**overrides)
         env["PATH"] = f"{self.bindir}:{env['PATH']}"
-        for key, value in overrides.items():
-            env[key] = value
         return env
 
     def run_hook(self, mode, payload=None, stdin="", **env):
@@ -137,7 +136,7 @@ class PlanRecordTestCase(unittest.TestCase):
         )
         out = subprocess.run(
             [str(SCRIPT), "sanitize", "/Users/so/Repos/proj/.claude/worktrees/wt"],
-            input=body, capture_output=True, text=True, check=True,
+            input=body, capture_output=True, text=True, check=True, env=self.env(),
         ).stdout
         self.assertIn("触るのは Sources/App.swift", out)
         self.assertIn("~/notes.md", out)
@@ -150,7 +149,7 @@ class PlanRecordTestCase(unittest.TestCase):
         out = subprocess.run(
             [str(SCRIPT), "sanitize", root],
             input=f"{root}/Sources/App.swift を直す\n",
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=self.env(),
         )
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("Sources/App.swift を直す", out.stdout)
@@ -164,7 +163,8 @@ class PlanRecordTestCase(unittest.TestCase):
             "参照は $API_KEY と <your-token> のまま\n"
         )
         out = subprocess.run(
-            [str(SCRIPT), "scan"], input=body, capture_output=True, text=True, check=True
+            [str(SCRIPT), "scan"], input=body, capture_output=True, text=True,
+            check=True, env=self.env(),
         ).stdout
         self.assertIn("BLOCK", out)
         self.assertIn("行 1", out)
@@ -175,7 +175,8 @@ class PlanRecordTestCase(unittest.TestCase):
     def test_scan_warns_without_blocking(self):
         body = "連絡は alice@example.com。参照は op://Vault/item/credential\n"
         out = subprocess.run(
-            [str(SCRIPT), "scan"], input=body, capture_output=True, text=True, check=True
+            [str(SCRIPT), "scan"], input=body, capture_output=True, text=True,
+            check=True, env=self.env(),
         ).stdout
         self.assertIn("WARN", out)
         self.assertNotIn("BLOCK", out)
@@ -184,7 +185,7 @@ class PlanRecordTestCase(unittest.TestCase):
         out = subprocess.run(
             [str(SCRIPT), "scan"],
             input="Assisted-by: Claude <noreply@anthropic.com>\n",
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=self.env(),
         ).stdout
         self.assertEqual(out.strip(), "")
 

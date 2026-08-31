@@ -9,11 +9,12 @@
 """
 
 import json
-import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 SCRIPT = Path(__file__).resolve().parent.parent / "term-guard.sh"
 
@@ -45,9 +46,10 @@ class HookTestCase(unittest.TestCase):
             "tool_input": {"command": command},
             "cwd": str(cwd if cwd is not None else self.root),
         }
-        env = dict(os.environ)
-        env["TERM_GUARD_RULES_DIR"] = str(
-            rules_dir if rules_dir is not None else self.rules_dir
+        env = clean_env(
+            TERM_GUARD_RULES_DIR=str(
+                rules_dir if rules_dir is not None else self.rules_dir
+            )
         )
         return subprocess.run(
             [str(SCRIPT)],
@@ -80,13 +82,12 @@ class HookTestCase(unittest.TestCase):
             cwd=cwd or self.newrepo,
             check=True,
             capture_output=True,
-            env={
-                **os.environ,
-                "GIT_AUTHOR_NAME": "t",
-                "GIT_AUTHOR_EMAIL": "t@example.com",
-                "GIT_COMMITTER_NAME": "t",
-                "GIT_COMMITTER_EMAIL": "t@example.com",
-            },
+            env=clean_env(
+                GIT_AUTHOR_NAME="t",
+                GIT_AUTHOR_EMAIL="t@example.com",
+                GIT_COMMITTER_NAME="t",
+                GIT_COMMITTER_EMAIL="t@example.com",
+            ),
         )
 
     def make_repo(self, cwd=None):

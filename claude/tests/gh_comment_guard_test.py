@@ -9,11 +9,12 @@
 """
 
 import json
-import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 SCRIPT = Path(__file__).resolve().parent.parent / "gh-comment-guard.sh"
 CLAUDE_MD = Path(__file__).resolve().parent.parent / "CLAUDE.md"
@@ -37,17 +38,13 @@ class HookTestCase(unittest.TestCase):
         return path
 
     def run_hook(self, command, env=None):
-        # 無効化スイッチはテストが明示したときだけ効かせる。呼び出し元のセッションが
-        # 立てている値をそのまま渡すと、フックを黙らせたリポジトリで流したときに
-        # 全件が素通しになり、判定を何も見ていない緑ができる
-        base = {k: v for k, v in os.environ.items() if k != "CLAUDE_GH_COMMENT_GUARD"}
         return subprocess.run(
             [str(SCRIPT)],
             input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
             capture_output=True,
             text=True,
             timeout=30,
-            env={**base, **(env or {})},
+            env=clean_env(**(env or {})),
         )
 
     def assert_allowed(self, command):

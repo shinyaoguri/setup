@@ -14,13 +14,14 @@ preflight のテストと同じ型)。検証したいのは「どの参照をキ
 """
 
 import base64
-import os
 import stat
 import subprocess
 import tempfile
 import time
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 SCRIPT = Path(__file__).resolve().parent.parent.parent / "bin" / "secret-read"
 
@@ -128,7 +129,7 @@ class SecretReadTestCase(unittest.TestCase):
         ttl=None,
         refresh_timeout=None,
     ):
-        env = dict(os.environ)
+        env = clean_env()
         env["PATH"] = f"{self.bin}:/usr/bin:/bin"
         env["SECRET_CACHE_ALLOWLIST"] = str(self.allowlist)
         env["FAKE_KEYCHAIN"] = str(self.keychain)

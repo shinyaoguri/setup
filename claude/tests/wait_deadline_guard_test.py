@@ -8,10 +8,11 @@
 """
 
 import json
-import os
 import subprocess
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 SCRIPT = Path(__file__).resolve().parent.parent / "wait-deadline-guard.sh"
 
@@ -25,17 +26,13 @@ INCIDENT = (
 
 class HookTestCase(unittest.TestCase):
     def run_hook(self, command, env=None):
-        # 無効化スイッチはテストが明示したときだけ効かせる。呼び出し元のセッションが
-        # 立てている値をそのまま渡すと、フックを黙らせた環境で流したときに全件が
-        # 素通しになり、判定を何も見ていない緑ができる
-        base = {k: v for k, v in os.environ.items() if k != "CLAUDE_WAIT_DEADLINE_GUARD"}
         return subprocess.run(
             [str(SCRIPT)],
             input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
             capture_output=True,
             text=True,
             timeout=30,
-            env={**base, **(env or {})},
+            env=clean_env(**(env or {})),
         )
 
     def assert_allowed(self, command):
@@ -162,6 +159,7 @@ class HookTestCase(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=30,
+            env=clean_env(),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "")

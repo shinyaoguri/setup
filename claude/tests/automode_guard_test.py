@@ -18,6 +18,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hookenv import clean_env
+
 SCRIPT = Path(__file__).resolve().parent.parent / "automode-guard.py"
 
 
@@ -65,6 +67,7 @@ class HookTestCase(unittest.TestCase):
             text=True,
             cwd=str(self.root),
             timeout=30,
+            env=clean_env(),
         )
 
     def edit(self, old, new, path=None, **extra):
@@ -220,7 +223,8 @@ class HookTestCase(unittest.TestCase):
 
     def test_malformed_payload_is_ignored(self):
         result = subprocess.run(
-            [str(SCRIPT)], input="not json", capture_output=True, text=True, timeout=30
+            [str(SCRIPT)], input="not json", capture_output=True, text=True,
+            timeout=30, env=clean_env(),
         )
         self.assert_allowed(result)
 
