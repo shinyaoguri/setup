@@ -115,6 +115,12 @@
             "command": "~/.claude/term-guard.sh",
             "timeout": 15,
             "statusMessage": "公開面の禁止語を確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/wait-deadline-guard.sh",
+            "timeout": 10,
+            "statusMessage": "待ちに期限があるか確認中"
           }
         ]
       },

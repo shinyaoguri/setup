@@ -51,6 +51,14 @@
 # 分離する。ルールが 1 件も無いマシンでは無音。呼び出し口は settings.json の hooks、
 # テストは claude/tests/term_guard_test.py (issue #121)
 #
+# wait-deadline-guard.sh は外の状態を待つポーリングループ (while / until + sleep) に
+# 期限が付いているかを見る PreToolUse フック。フォアグラウンドの Bash は harness が
+# 上限で殺すが、run_in_background には上限が無く、停止条件が永久に真にならないと
+# セッションが終わるまで残る (issue #136 で 1 時間 7 分)。待ち先が返す値は待つ側の
+# 管轄外なので停止条件の書き方では塞げず、見るのは「越えたら殺す期限があるか」だけ。
+# 認める形は timeout(1) と $SECONDS の 2 つ。テストは
+# claude/tests/wait_deadline_guard_test.py
+#
 # repo-standards.json はリポジトリ標準チェックリストの正本。消費者は claude-plugins の
 # repo-standards プラグイン (~/.claude/repo-standards.json 経由で読む)。
 # テストは claude/tests/repo_standards_test.py
@@ -67,6 +75,7 @@
       - plan-record.sh
       - gh-comment-guard.sh
       - term-guard.sh
+      - wait-deadline-guard.sh
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
