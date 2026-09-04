@@ -66,6 +66,9 @@ expand_aliases() {
 scan=$(expand_aliases)
 has() { printf '%s' "$scan" | grep -qE "$1"; }
 
+# 前後の空白を落とす。判定はコマンド文字列を語に分けて読むので、どの入口でも最初に通す。
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+
 # --- 可逆性の判定 -----------------------------------------------------------
 # いずれも「可逆と確認できたときだけ真」。リポジトリの外・判定材料が足りないときは
 # 偽を返し、呼び出し側で ask に落とす。
@@ -260,7 +263,7 @@ fi
 # 落とす — 判定が permissions へ戻るだけで、危険側には倒れない。
 is_reversible_branch_cleanup() {
   local trimmed
-  trimmed=$(printf '%s' "$command" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  trimmed=$(trim "$command")
   printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
 
   # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)
@@ -293,7 +296,7 @@ is_reversible_branch_cleanup() {
 #     (checkout_target_is_branch のコメント)
 checkout_form_is_switch_only() {
   local trimmed count first
-  trimmed=$(printf '%s' "$command" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  trimmed=$(trim "$command")
   printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+checkout([[:space:]]|$)' || return 1
   printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
 
