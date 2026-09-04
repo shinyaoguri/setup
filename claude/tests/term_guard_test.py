@@ -168,6 +168,104 @@ class GhTestCase(HookTestCase):
         self.assert_allowed('gh issue comment 1 -R somewhere/oldworld --body "oldname"',
                             cwd=self.newrepo)
 
+    # --- 照合対象は「実際に外へ出るもの」だけ (issue #128) -----------------
+
+    def test_scratchpad_path_in_chained_command_is_allowed(self):
+        # 本文を書き出す先のパスに語が入っているだけでは止めない。公開されるのは
+        # 本文で、リダイレクト先のパス表記ではない
+        body = self.root / "oldname-dir" / "body.md"
+        self.assert_allowed(
+            f"cat > {body} <<'EOF'\n"
+            "## 経緯\n\nきれいな本文だけが入っている。\n"
+            "EOF\n"
+            'gh issue create --repo neworld-org/app --title "きれいな題" '
+            f"--body-file {body}"
+        )
+
+    def test_heredoc_body_is_denied_before_the_file_exists(self):
+        # 同じ形で本文に語があるときは止める。この時点でファイルはまだ無く
+        # (--body-file の中身は読めない)、heredoc 本文だけが手掛かり
+        body = self.root / "clean-dir" / "body.md"
+        self.assert_denied(
+            f"cat > {body} <<'EOF'\n"
+            "oldname から持ってきた記録。\n"
+            "EOF\n"
+            f"gh issue create --repo neworld-org/app --title t --body-file {body}"
+        )
+
+    def test_cd_argument_is_not_matched(self):
+        # 連結された別コマンド (cd) の引数は公開面ではない
+        self.assert_allowed(
+            f"cd {self.root}/oldname-x && "
+            'gh issue create -R neworld-org/app --title "きれいな題" --body "きれいな本文"'
+        )
+
+    def test_redirect_target_is_not_matched(self):
+        self.assert_allowed(
+            "gh issue create -R neworld-org/app --title t --body clean "
+            f"> {self.root}/oldname-out.txt"
+        )
+
+    def test_pipe_inside_quoted_body_is_matched(self):
+        # markdown テーブルの | でセグメントを切ると表の行が照合から落ちる (漏れ)
+        self.assert_denied(
+            'gh issue create -R neworld-org/app --title t --body "| 症状 | 状況 |\n'
+            "| --- | --- |\n"
+            '| oldname 由来 | 残 |"'
+        )
+
+    def test_and_inside_quoted_body_is_matched(self):
+        self.assert_denied('gh issue comment 1 -R neworld-org/app --body "A && oldname"')
+
+    def test_label_argument_is_matched(self):
+        # 本文以外の引数も gh へ渡る = 公開面。照合対象から外さない
+        self.assert_denied("gh issue edit 1 -R neworld-org/app --add-label oldname")
+
+    def test_repo_quoted_in_body_is_not_the_target(self):
+        # 本文に引用した --repo は宛先の材料にしない (宛先は gh のオプションと remote だけ)
+        self.assert_allowed(
+            'gh issue create --title t --body "$(cat <<\'EOF\'\n'
+            "再現: gh issue create --repo neworld-org/app --body …\n"
+            "oldname を含む本文\n"
+            "EOF\n"
+            ')" -R somewhere/else'
+        )
+
+    def test_here_string_body_is_matched(self):
+        # ヒア文字列は stdin へ渡る本文。リダイレクト先のパスと違って公開される
+        self.assert_denied(
+            'gh issue comment 1 -R neworld-org/app --body-file - <<< "oldname を参照"'
+        )
+
+    def test_here_string_written_to_a_file_is_matched(self):
+        # 本文を作る側のセグメントに現れる形でも、中身は本文なので照合する
+        body = self.root / "clean-dir" / "body.md"
+        self.assert_denied(
+            f'cat <<< "oldname を参照" > {body} && '
+            f"gh issue create -R neworld-org/app --title t --body-file {body}"
+        )
+
+    def test_trailing_comment_is_not_matched(self):
+        # シェルの行末コメントは gh へ渡らない = 公開面ではない
+        self.assert_allowed(
+            "gh issue create -R neworld-org/app --title t --body clean  # oldname のメモ"
+        )
+
+    def test_hash_inside_a_word_is_matched(self):
+        # 語の途中の # はコメントの開始ではない (シェルも本文の一部として渡す)
+        self.assert_denied(
+            "gh issue create -R neworld-org/app --title t --body ref#oldname"
+        )
+
+    def test_hit_location_names_heredoc(self):
+        reason = self.assert_denied(
+            'gh issue create -R neworld-org/app --title t --body "$(cat <<\'EOF\'\n'
+            "oldname を参照\n"
+            "EOF\n"
+            ')"'
+        )
+        self.assertIn("heredoc", reason, "heredoc 本文で止めたことが示されない")
+
 
 class PushTestCase(HookTestCase):
     """git push の照合 (push 範囲のコミット + 連結された commit の差分)。"""
