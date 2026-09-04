@@ -10,6 +10,7 @@ git add したうえで走らせる。
 """
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -109,11 +110,20 @@ class DestructiveCommandTest(HookTestCase):
     def test_clean_force_asks(self):
         self.assert_decision(self.run_hook("git clean -fd"), "ask")
 
-    def test_checkout_discard_asks(self):
-        self.assert_decision(self.run_hook("git checkout -- src/main.py"), "ask")
+    def test_checkout_discard_asks_when_nothing_can_be_backed_up(self):
+        """コミットがまだ 1 つも無いリポジトリでは退避を作れないので、従来どおり止まる。
+
+        退避を作れた取り消しの扱いは DiscardBackupTest が持つ。
+        """
+        self.stage("src/main.py")
+        reason = self.assert_decision(
+            self.run_hook("git checkout -- src/main.py"), "ask"
+        )
+        self.assertIn("退避を作れなかった", reason)
         self.assert_decision(self.run_hook("git checkout ."), "ask")
 
-    def test_restore_worktree_asks(self):
+    def test_restore_worktree_asks_when_nothing_can_be_backed_up(self):
+        self.stage("src/main.py")
         self.assert_decision(self.run_hook("git restore src/main.py"), "ask")
 
     def test_restore_staged_only_passes(self):
@@ -542,6 +552,138 @@ class SafeBranchSwitchTest(HookTestCase):
             result = self.run_hook("git checkout main", cwd=outside)
             self.assert_allowed(result)
             self.assertEqual(result.stderr, "", "リポジトリ外で git の fatal が漏れている")
+
+
+class DiscardBackupTest(HookTestCase):
+    """作業ツリーの取り消しは、捨てられるものを退避してから通す。
+
+    1 と 2 の判定 (リポジトリの状態を見て可逆と確認する) はここには効かない —
+    捨てられるものがそこに在ることこそが不可逆の理由だからで、状態を見ている限り
+    永久に ask のまま残る。可逆性を判定するのではなく可逆にしてから通す (setup#142)。
+    """
+
+    BACKUP_NS = "refs/claude/discarded"
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / "f.txt").write_text("original\n")
+        self.git("add", "f.txt")
+        self.commit("track")
+
+    def modify(self, content="modified\n"):
+        """追跡ファイルに未コミットの変更がある状態にする (捨てられるものを作る)。"""
+        (self.repo / "f.txt").write_text(content)
+
+    def backups(self):
+        listing = self.git("for-each-ref", "--format=%(refname)", self.BACKUP_NS)
+        return [line for line in listing.stdout.splitlines() if line]
+
+    # --- 退避してから通す ---------------------------------------------------
+
+    def test_discard_is_auto_approved_and_the_content_survives(self):
+        """捨てた内容が退避から取り戻せることまで確かめる (これが機構の目的)。"""
+        self.modify()
+        reason = self.assert_auto_approved(self.run_hook("git checkout -- f.txt"))
+        self.assertIn("退避済み", reason)
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, refs)
+        self.assertIn(refs[0], reason, "復元先が理由に書かれていない")
+        self.assertEqual(self.git("show", f"{refs[0]}:f.txt").stdout, "modified\n")
+
+    def test_checkout_dot_is_auto_approved(self):
+        self.modify()
+        self.assert_auto_approved(self.run_hook("git checkout ."))
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_restore_is_auto_approved(self):
+        self.modify()
+        self.assert_auto_approved(self.run_hook("git restore f.txt"))
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_nothing_to_discard_needs_no_backup(self):
+        """捨てられる変更が無ければ取り消しは何も変えない。退避も要らない。"""
+        reason = self.assert_auto_approved(self.run_hook("git checkout -- f.txt"))
+        self.assertIn("捨てられる変更が無い", reason)
+        self.assertEqual(self.backups(), [])
+
+    def test_read_only_command_after_the_discard_is_auto_approved(self):
+        """今回踏んだ形。後続が状態を変えないと確認できるなら allow に載せる。"""
+        self.modify()
+        self.assert_auto_approved(self.run_hook("git checkout -- f.txt; echo reverted"))
+        self.assert_auto_approved(self.run_hook("git restore f.txt && git status"))
+
+    # --- 通さない形 ---------------------------------------------------------
+
+    def test_another_command_after_the_discard_is_not_auto_approved(self):
+        """allow はコマンド全体に効くので、読めない後続が付いたら allow は返さない。
+
+        素通しに落ちるだけで判定は permissions と分類器へ戻る (危険側には倒れない)。
+        退避は作ってあるので、そちらで通っても捨てた内容は取り戻せる。
+        """
+        self.modify()
+        self.assert_allowed(self.run_hook("git checkout -- f.txt && rm -rf build"))
+        self.assertEqual(len(self.backups()), 1, "素通しでも退避は作る")
+
+    def test_redirection_is_not_auto_approved(self):
+        self.modify()
+        self.assert_allowed(self.run_hook("git checkout -- f.txt > out.txt"))
+
+    def test_command_substitution_asks(self):
+        """展開してみないと対象が確定しないものは、何を捨てるのか読めない (判定不能は安全側)。"""
+        self.modify()
+        self.assert_decision(self.run_hook("git checkout -- $(cat list.txt)"), "ask")
+
+    def test_revision_form_asks_but_points_at_the_backup(self):
+        """`git checkout <rev> -- <path>` は退避を作っても通さない。
+
+        いまの内容を捨てるだけでは済まず別の版を持ち込む形で、autoMode.hard_deny の
+        "Auto-Mode Self-Authorization" が名指しする経路でもある。ただし退避は作るので、
+        承認された先で捨てられても取り戻せる — 確認の理由に復元先を書く。
+        """
+        self.modify()
+        reason = self.assert_decision(
+            self.run_hook("git checkout HEAD -- f.txt"), "ask"
+        )
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, refs)
+        self.assertIn(refs[0], reason, "確認に復元先が書かれていない")
+
+    def test_forced_form_asks(self):
+        self.modify()
+        self.assert_decision(self.run_hook("git checkout -f -- f.txt"), "ask")
+
+    def test_staged_only_restore_passes(self):
+        """ステージから外すだけなら作業ツリーは失われない。退避も作らない。"""
+        self.modify()
+        self.assert_allowed(self.run_hook("git restore --staged f.txt"))
+        self.assertEqual(self.backups(), [])
+
+    def test_outside_a_repository_asks(self):
+        with tempfile.TemporaryDirectory() as outside:
+            result = self.run_hook("git checkout -- f.txt", cwd=outside)
+            self.assert_decision(result, "ask")
+            self.assertEqual(result.stderr, "", "リポジトリ外で git の fatal が漏れている")
+
+    # --- 退避の後始末 -------------------------------------------------------
+
+    def test_old_backups_are_pruned(self):
+        """放っておくと ref が際限なく増えるので、退避を作った直後に古いものを落とす。"""
+        stale = f"{self.BACKUP_NS}/20200101-000000-1"
+        old_date = "2020-01-01T00:00:00 +0000"
+        sha = subprocess.run(
+            ["git", "commit-tree", "-m", "old", "HEAD^{tree}"],
+            cwd=self.repo, check=True, capture_output=True, text=True,
+            env=dict(os.environ, GIT_COMMITTER_DATE=old_date, GIT_AUTHOR_DATE=old_date),
+        ).stdout.strip()
+        self.git("update-ref", stale, sha)
+
+        self.modify()
+        self.assert_auto_approved(self.run_hook("git checkout -- f.txt"))
+
+        refs = self.backups()
+        self.assertNotIn(stale, refs, "期限切れの退避が残っている")
+        self.assertEqual(len(refs), 1, "いま作った退避まで消えている")
 
 
 class SafeCommandTest(HookTestCase):

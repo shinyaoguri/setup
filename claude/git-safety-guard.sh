@@ -6,10 +6,11 @@
 # git reset --hard HEAD~1 を実行し、作業ツリーの変更ごと巻き戻した事故があった)。
 # 決定論的に効く場所へ移した形。
 #
-# 三つを見る:
+# 四つを見る:
 #   1. 作業ツリーや履歴を捨てる操作 → ask (ユーザーに判断を返す)
 #   2. 可逆と確認できたブランチ操作 (掃除・切り替え) → allow (確認を挟まず通す)
-#   3. 秘密情報らしきファイルのコミット → deny (代替を添えて止める)
+#   3. 退避を作って可逆にした作業ツリーの取り消し → allow (同上)
+#   4. 秘密情報らしきファイルのコミット → deny (代替を添えて止める)
 #
 # ただし 1 は「取り返しがつかない」から止めるのであって、**その場で可逆と確認できた
 # ものまで止めない**。確認は構文 (コマンド文字列のパターン) ではなくリポジトリの状態で
@@ -23,6 +24,12 @@
 # ここで allow を返して打ち切る。ブランチ切り替え (checkout) も同じ理由でここに居る —
 # `checkout` は 1 語で「可逆な切り替え」と「作業ツリーの破棄」の両方を指すので、
 # 前方一致の allow 規則では前者だけを表現できない (setup#140)。
+#
+# 3 はその先。作業ツリーの取り消しは、その場の状態をいくら見ても可逆にならない —
+# **捨てられるものがそこに在ること**こそが不可逆の理由なので、1 と 2 の判定方式では
+# 永久に ask のまま残る。しかし人間に返しても「そのファイルの未コミット変更が何だったか」
+# は判断できず、確認が判断ではなく反射になる。そこで発想を裏返し、可逆性を判定するのでは
+# なく**可逆にしてから通す** — 捨てられる内容を先に object DB へ退避する (setup#142)。
 #
 # 契約: stdin に PreToolUse の JSON。素通しは無出力 + 終了コード 0。
 # 呼び出し口は settings.json の hooks.PreToolUse、テストは
@@ -226,16 +233,149 @@ checkout_target_is_branch() {
   git show-ref --verify --quiet "refs/remotes/origin/$1" 2>/dev/null
 }
 
+# --- 捨てられるものの退避 ---------------------------------------------------
+# 退避を置く名前空間。refs/heads でも refs/tags でもないので、fetch / push にも
+# ブランチの一覧にも現れない。
+readonly BACKUP_NS='refs/claude/discarded'
+readonly BACKUP_TTL=$((30 * 24 * 3600))
+
+# 捨てられるものを消えない場所へ置き、その参照を stdout に返す。
+#
+# `git stash create` はコミットオブジェクトを作るだけで**スタックには積まない**。
+# グローバル CLAUDE.md が禁じているのは worktree 間で共有されるスタックの push / pop の
+# ほうなので、並行する他のセッションと干渉しない。参照されないコミットは gc に
+# 落とされるため、作ったコミットは BACKUP_NS の下に固定する。
+#
+# 追跡外のファイルは stash に含まれないが、checkout / restore はそれを消さない
+# (上書きになる場合は git 自身が断る) ので守る必要が無い。追跡外を消す `git clean` を
+# この手で通せないのはここが理由で、あちらは対象に載せていない。
+#
+# 捨てられる変更が無いときは空を返して成功する (取り消しが no-op で、退避が要らない)。
+# git リポジトリの外と、コミットがまだ 1 つも無いリポジトリでは失敗する。
+backup_worktree() {
+  git rev-parse --git-dir >/dev/null 2>&1 || return 1
+  [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] || return 0
+
+  local sha ref
+  sha=$(git stash create "claude: 破棄の前に退避" 2>/dev/null) || return 1
+  [ -n "$sha" ] || return 1
+  ref="${BACKUP_NS}/$(date +%Y%m%d-%H%M%S)-$$"
+  git update-ref "$ref" "$sha" 2>/dev/null || return 1
+  prune_backups
+  printf '%s' "$ref"
+}
+
+# 役目を終えた退避を落とす。放っておくと ref が際限なく増えるので、退避を作った直後に
+# だけ掃除する (取り消しは頻度が低く、毎回の Bash で回すほどのものではない)。
+prune_backups() {
+  local now ref stamp
+  now=$(date +%s)
+  git for-each-ref --format='%(refname) %(committerdate:unix)' "$BACKUP_NS" 2>/dev/null |
+    while read -r ref stamp; do
+      [ -n "$stamp" ] || continue
+      [ "$((now - stamp))" -gt "$BACKUP_TTL" ] && git update-ref -d "$ref" 2>/dev/null
+    done
+  return 0
+}
+
+# コマンドを区切りで割り、1 セグメント 1 行で返す。引用符は解釈しないので引用の中の
+# 区切りでも割れるが、割りすぎる方向にしか外れない — 後続の検査が厳しくなるだけで、
+# 判定は安全側に倒れる。
+command_segments() {
+  trim "$command" | awk '{ gsub(/&&|\|\||[;&|]/, "\n"); print }'
+}
+
+# 先頭のコマンドが「リビジョンを伴わない作業ツリーの取り消し」か。通す形は 3 つに固定する:
+#
+#   git checkout -- <path>...
+#   git checkout .
+#   git restore [--] <path>...
+#
+# ここに無い形を載せない理由:
+#   - `git checkout <rev> -- <path>` は「いまの内容を捨てる」だけでは済まず、別の版を
+#     持ち込む。autoMode.hard_deny の "Auto-Mode Self-Authorization" がまさにこの形
+#     (設定ファイルを過去の版へ戻す) を名指ししており、automode-guard.py は
+#     Edit|Write matcher なので Bash 経由のそれを見ていない
+#   - `-f` / `-p` / `--ours` / `--theirs` / `--worktree` は強制上書き・部分破棄で、
+#     退避を作っても「何が起きるか」が変わる。パスは checkout_name_is_plain を通すので、
+#     先頭が `-` の語が 1 つでも混ざればここで落ちる
+#   - `--` も `.` も無い checkout はブランチの切り替えで、判定は
+#     checkout_form_is_switch_only が持つ (こちらの対象ではない)
+discard_form_is_plain_revert() {
+  local -a words=()
+  local count start i
+  read -r -a words <<<"$(command_segments | head -1)"
+  count=${#words[@]}
+  [ "${words[0]:-}" = "git" ] || return 1
+
+  case "${words[1]:-}" in
+    checkout)
+      if [ "${words[2]:-}" = "--" ]; then
+        start=3
+      elif [ "$count" -eq 3 ] && [ "${words[2]:-}" = "." ]; then
+        start=2
+      else
+        return 1
+      fi
+      ;;
+    restore)
+      start=2
+      [ "${words[2]:-}" = "--" ] && start=3
+      ;;
+    *) return 1 ;;
+  esac
+
+  [ "$count" -gt "$start" ] || return 1
+  for ((i = start; i < count; i++)); do
+    checkout_name_is_plain "${words[$i]}" || return 1
+  done
+  return 0
+}
+
+# 取り消しの後ろに続くものが、状態を変えないと確認できる形だけか。allow はコマンド
+# 文字列**全体**に効くので、後続も読めたときにしか返せない。ここに載らない形は素通しへ
+# 落とすだけで、判定が permissions と分類器へ戻る (危険側には倒れない)。
+readonly READ_ONLY_SEGMENT='^(echo([[:space:]]|$)|true$|pwd$|git[[:space:]]+(status|diff|log)([[:space:]]|$))'
+
+tail_is_read_only() {
+  local segment
+  # 語に分けて読めない形 (リダイレクト・コマンド置換・サブシェル) はここで落とす
+  printf '%s' "$command" | grep -q '[<>()$`]' && return 1
+
+  while IFS= read -r segment; do
+    segment=$(trim "$segment")
+    [ -n "$segment" ] || continue
+    printf '%s' "$segment" | grep -qE "$READ_ONLY_SEGMENT" || return 1
+  done < <(command_segments | tail -n +2)
+  return 0
+}
+
 # --- 1. 作業ツリー・履歴を捨てる操作 ---------------------------------------
 danger=""
 has "${GIT}reset${ARG}--hard" && ! reset_hard_discards_nothing &&
   danger="git reset --hard は、まだコミットしていない変更を復元できない形で捨てる"
 has "${GIT}clean${ARG}(--force|-[a-zA-Z]*f)" &&
-  danger="git clean -f は追跡していないファイルを削除する (ゴミ箱には入らない)"
-has "${GIT}checkout${ARG}(--([[:space:]]|$)|\.([[:space:]]|$))" &&
-  danger="git checkout での作業ツリーの取り消しは、その変更を復元できない"
-has "${GIT}restore([[:space:]]|$)" && ! has '\-\-staged' &&
-  danger="git restore は作業ツリーの変更を復元できない形で捨てる"
+  danger="git clean -f は追跡していないファイルを削除する (ゴミ箱には入らない。追跡外のファイルは退避できないので、ここは確認が要る)"
+
+# 作業ツリーの取り消しは、捨てられるものを先に退避できたなら不可逆ではなくなる。
+# 退避を作れた形だけ danger を立てず、下のセクション 3 で allow へ渡す。
+#
+# 退避は**形が対象外でも作る**。ask を返した先で承認されれば捨てられるものは同じで、
+# 取り戻せる場所に置いておく意味は変わらない。むしろ ask の理由に復元先を書けるので、
+# 「何が失われるか分からないまま押す」確認ではなくなる。
+backup_ref=""
+backed_up=false
+if has "${GIT}checkout${ARG}(--([[:space:]]|$)|\.([[:space:]]|$))" ||
+  { has "${GIT}restore([[:space:]]|$)" && ! has '\-\-staged'; }; then
+  if ! backup_ref=$(backup_worktree); then
+    danger="git checkout / git restore での作業ツリーの取り消しは、その変更を復元できない (捨てる前の退避を作れなかった — git リポジトリの外か、コミットがまだ 1 つも無い)"
+  elif discard_form_is_plain_revert; then
+    backed_up=true
+  else
+    danger="リビジョン・オプション・展開しないと確定しない対象を伴う取り消しは、何がどう捨てられるかをここで確定できない (別の版を持ち込む・強制上書き・部分的に捨てる)${backup_ref:+。いまの作業ツリーは $backup_ref に退避したので、実行しても git checkout $backup_ref -- <path> で戻せる}"
+  fi
+fi
+
 has "${GIT}branch${ARG}-D([[:space:]]|$)" &&
   ! branch_delete_targets_are_gone && ! alias_deletes_only_gone_branches &&
   danger="git branch -D はマージ済みかを問わずブランチを消す (マージ後の掃除なら先に git fetch -p を通す。追跡先が畳まれれば確認なしで通る)"
@@ -340,7 +480,18 @@ if checkout_form_is_switch_only && worktree_has_nothing_to_lose; then
   decide allow "失うものが無いと確認できたブランチ切り替え (いまブランチの上に居るので離れても参照から外れるコミットが無く、追跡ファイルに未コミットの変更も無い。対象は実在するブランチか -b で作る新しいブランチで、パスの破棄・-f・-B・-- <path> はこの判定に載らない)。確認は不要。"
 fi
 
-# --- 3. 秘密情報らしきファイルのコミット -----------------------------------
+# --- 3. 退避を作って可逆にした作業ツリーの取り消し ---------------------------
+# ここに来るのは、上で退避を作れた形だけ (backed_up)。捨てられる内容は取り戻せる場所に
+# 在るので、確認を返す理由が無い。後ろに何か続く場合は、それも読み取り専用だと
+# 確認できたときにだけ allow を返す。
+if [ "$backed_up" = true ] && tail_is_read_only; then
+  if [ -n "$backup_ref" ]; then
+    decide allow "捨てられる変更は $backup_ref に退避済み (git stash create のコミットを ref に固定してある)。復元は git checkout $backup_ref -- <path>、中身を見るだけなら git show $backup_ref:<path>。取り戻せるので確認は不要。"
+  fi
+  decide allow "この取り消しで捨てられる変更が無い (追跡ファイルに未コミットの変更が無く、作業ツリーは何も変わらない)。確認は不要。"
+fi
+
+# --- 4. 秘密情報らしきファイルのコミット -----------------------------------
 # .env.example のような雛形は対象外。gitignore が効いていれば下の検査には現れないので、
 # ここに出てくる時点で「入れてはいけないものが漏れている」状態。
 readonly SECRET_PATTERN='(^|/)\.env($|\.[^/]*$)|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|\.(pem|p12|pfx|jks|keystore)$|(^|/)[^/]*_rsa$'
