@@ -8,7 +8,7 @@
 #
 # 三つを見る:
 #   1. 作業ツリーや履歴を捨てる操作 → ask (ユーザーに判断を返す)
-#   2. 可逆と確認できたブランチ掃除 → allow (確認を挟まず通す)
+#   2. 可逆と確認できたブランチ操作 (掃除・切り替え) → allow (確認を挟まず通す)
 #   3. 秘密情報らしきファイルのコミット → deny (代替を添えて止める)
 #
 # ただし 1 は「取り返しがつかない」から止めるのであって、**その場で可逆と確認できた
@@ -20,7 +20,9 @@
 # settings.json の permissions へ戻る。allow に載せてよいのは読み取り専用のコマンド
 # だけ (claude/tests/settings_test.py が CI で強制) なのでブランチ削除の許可規則は
 # 置けず、可逆と確認できた掃除まで結局ユーザーを呼んでいた。確認できたものは
-# ここで allow を返して打ち切る。
+# ここで allow を返して打ち切る。ブランチ切り替え (checkout) も同じ理由でここに居る —
+# `checkout` は 1 語で「可逆な切り替え」と「作業ツリーの破棄」の両方を指すので、
+# 前方一致の allow 規則では前者だけを表現できない (setup#140)。
 #
 # 契約: stdin に PreToolUse の JSON。素通しは無出力 + 終了コード 0。
 # 呼び出し口は settings.json の hooks.PreToolUse、テストは
@@ -179,6 +181,48 @@ reset_hard_discards_nothing() {
   return 0
 }
 
+# ブランチを離れても失うものが無い状態か。checkout を allow に載せる前提条件。
+#
+# (a) いまブランチの上に居る (detached HEAD ではない) → 離れても参照から外れる
+#     コミットが無い。detached のまま積んだコミットは切り替えた時点で reflog 頼みになる
+# (b) 追跡ファイルに未コミットの変更が無い → checkout が捨てられるものが無い
+#
+# 追跡外のファイルは (b) から外す (`--untracked-files=no`)。checkout はそれを消さず、
+# 上書きになる場合は git 自身が断るので失われない。全 clean を要求すると、ビルド生成物が
+# 居る実リポジトリでは一度も発火せず、機構として意味を持たなくなる。
+worktree_has_nothing_to_lose() {
+  git rev-parse --git-dir >/dev/null 2>&1 || return 1
+  git symbolic-ref --quiet HEAD >/dev/null 2>&1 || return 1
+  [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] || return 1
+  return 0
+}
+
+# 名前としてそのまま扱える形か。先頭 `-` (オプション) と、引用符・変数・コマンド置換が
+# 残るもの (名前を確定できない) を弾く。判定不能は安全側。
+checkout_name_is_plain() {
+  case "$1" in
+    ''|-*|*'$'*|*'"'*|*"'"*|*'`'*|*\\*) return 1 ;;
+  esac
+  return 0
+}
+
+# `git checkout <name>` の <name> が、パスではなくブランチだと確認できるか。
+#
+# ここが判定の要になる。ブランチが実在すれば git はそちらを採るが、実在しなければ
+# **`--` が無くても黙って作業ツリーを index の内容へ戻す** (`Updated 1 path from the
+# index` を出して終了コード 0)。つまり ref の実在を確かめない限り、切り替えのつもりの
+# 許可が破棄の許可になる。
+#
+# 参照は `show-ref --verify` で見る。`rev-parse` はリビジョン構文を解釈するので、
+# `main@{1}` のような入力が別のコミットに解決されうる。
+checkout_target_is_branch() {
+  git show-ref --verify --quiet "refs/heads/$1" 2>/dev/null && return 0
+  # DWIM: リモート追跡だけがある名前は、同名のローカルブランチが作られて切り替わる。
+  # 同名のファイルがあると git は曖昧だと断るので、その形は判定から外す
+  [ -e "$1" ] && return 1
+  git show-ref --verify --quiet "refs/remotes/origin/$1" 2>/dev/null
+}
+
 # --- 1. 作業ツリー・履歴を捨てる操作 ---------------------------------------
 danger=""
 has "${GIT}reset${ARG}--hard" && ! reset_hard_discards_nothing &&
@@ -208,7 +252,7 @@ if [ -n "$danger" ]; then
 そのうえで必要なら、何を捨てるのかを伝えてユーザーの判断を仰ぐ。"
 fi
 
-# --- 2. 可逆と確認できたブランチ掃除 ---------------------------------------
+# --- 2. 可逆と確認できたブランチ操作 ---------------------------------------
 # ここに来る時点で 1 の検査は通っている (危険と読めた -D は上で ask 済み)。
 #
 # allow はコマンド文字列**全体**に効くので、対象は「ブランチ削除しかしていない」と
@@ -233,8 +277,64 @@ is_reversible_branch_cleanup() {
   return 1
 }
 
+# コマンド全体が「ブランチの切り替え」1 つだけか (状態は見ない。呼び出し側で
+# worktree_has_nothing_to_lose と組にする)。
+#
+# 通す形は 3 つに固定し、ここに無いものはすべて素通しへ落とす。狭く固定するのは、
+# `checkout` が 1 語で別物を指し、取りこぼしがそのまま「破棄の許可」になるため:
+#
+#   - `git checkout <rev> -- <path>` は autoMode.hard_deny の
+#     "Auto-Mode Self-Authorization" が名指しする自己権限拡大の経路。automode-guard.py は
+#     Edit|Write matcher なので Bash 経由のそれを見ておらず、止めているのは分類器だけ。
+#     ここで allow を返すとその層ごと飛び越える
+#   - `-f` / `--force` は未コミットの変更を踏み潰し、`-B` は既存ブランチの tip を捨て、
+#     `-p` / `--ours` / `--theirs` は部分的に捨てる
+#   - 引数がブランチでなければ `--` が無くても作業ツリーの破棄になる
+#     (checkout_target_is_branch のコメント)
+checkout_form_is_switch_only() {
+  local trimmed count first
+  trimmed=$(printf '%s' "$command" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+checkout([[:space:]]|$)' || return 1
+  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+
+  # ヒアストリングの語分割はグロブを展開しない (`set -- $trimmed` と違い、
+  # コマンドに残った `*` が手元のファイル名へ化けない)
+  local -a words=()
+  read -r -a words <<<"$trimmed"
+  count=${#words[@]}
+  first=${words[2]:-}
+
+  # git checkout -            直前に居たブランチへ戻る
+  if [ "$count" -eq 3 ] && [ "$first" = "-" ]; then
+    git rev-parse --verify --quiet '@{-1}' >/dev/null 2>&1
+    return
+  fi
+
+  # git checkout <branch>     実在するブランチへの切り替えだけ
+  if [ "$count" -eq 3 ]; then
+    checkout_name_is_plain "$first" || return 1
+    checkout_target_is_branch "$first"
+    return
+  fi
+
+  # git checkout -b <name> [<start>]   作れば済むので、失うものは無い
+  if [ "$first" = "-b" ] && { [ "$count" -eq 4 ] || [ "$count" -eq 5 ]; }; then
+    checkout_name_is_plain "${words[3]:-}" || return 1
+    [ "$count" -eq 4 ] && return 0
+    checkout_name_is_plain "${words[4]:-}" || return 1
+    git rev-parse --verify --quiet "${words[4]}^{commit}" >/dev/null 2>&1
+    return
+  fi
+
+  return 1
+}
+
 if is_reversible_branch_cleanup; then
   decide allow "消えて困るものが無いと確認できたブランチ削除 (-d は git がマージ済みかを確かめて未マージなら断る / -D と掃除エイリアスの対象は追跡先が [gone] か、push 前で内容が既定ブランチに入っているブランチだけで、コミットは remote から取り戻せる)。確認は不要。"
+fi
+
+if checkout_form_is_switch_only && worktree_has_nothing_to_lose; then
+  decide allow "失うものが無いと確認できたブランチ切り替え (いまブランチの上に居るので離れても参照から外れるコミットが無く、追跡ファイルに未コミットの変更も無い。対象は実在するブランチか -b で作る新しいブランチで、パスの破棄・-f・-B・-- <path> はこの判定に載らない)。確認は不要。"
 fi
 
 # --- 3. 秘密情報らしきファイルのコミット -----------------------------------

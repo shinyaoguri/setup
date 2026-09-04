@@ -37,13 +37,19 @@ class HookTestCase(unittest.TestCase):
             ["git", "add", "-f", *names], cwd=self.repo, check=True
         )
 
-    def run_hook(self, command):
+    def git(self, *args):
+        """テスト用リポジトリで git を打つ。"""
+        return subprocess.run(
+            ["git", *args], cwd=self.repo, check=True, capture_output=True, text=True
+        )
+
+    def run_hook(self, command, cwd=None):
         return subprocess.run(
             [str(SCRIPT)],
             input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
             capture_output=True,
             text=True,
-            cwd=self.repo,
+            cwd=cwd or self.repo,
             timeout=30,
             env=clean_env(),
         )
@@ -56,6 +62,34 @@ class HookTestCase(unittest.TestCase):
     def assert_auto_approved(self, result):
         """allow で打ち切る判定。素通しと違い、確認プロンプトそのものが出ない。"""
         return self.assert_decision(result, "allow")
+
+    def commit(self, message="c"):
+        subprocess.run(
+            ["git", "commit", "-q", "--allow-empty", "-m", message],
+            cwd=self.repo, check=True,
+        )
+
+    def with_remote(self):
+        """origin を持つ作業リポジトリにする (push 済みの main を作る)。
+
+        origin は**作業リポジトリの外**に置く。中に作ると追跡外ディレクトリとして
+        git status に現れ、「作業ツリーが clean か」の判定が狂う。
+        """
+        remote_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(remote_dir.cleanup)
+        self.origin = Path(remote_dir.name) / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(self.origin)], check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(self.origin)], cwd=self.repo, check=True
+        )
+        self.commit("init")
+        subprocess.run(
+            ["git", "push", "-q", "-u", "origin", "HEAD:main"], cwd=self.repo, check=True
+        )
+        subprocess.run(
+            ["git", "branch", "-q", "--set-upstream-to=origin/main"],
+            cwd=self.repo, check=True,
+        )
 
     def assert_decision(self, result, expected):
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -119,34 +153,6 @@ class ReversibleOperationTest(HookTestCase):
         "| grep -F '[gone] ' | cut -d' ' -f2"
     )
     CLEAN_ALIAS = '!git gone | while read -r branch; do git branch -D "$branch"; done'
-
-    def commit(self, message="c"):
-        subprocess.run(
-            ["git", "commit", "-q", "--allow-empty", "-m", message],
-            cwd=self.repo, check=True,
-        )
-
-    def with_remote(self):
-        """origin を持つ作業リポジトリにする (push 済みの main を作る)。
-
-        origin は**作業リポジトリの外**に置く。中に作ると追跡外ディレクトリとして
-        git status に現れ、「作業ツリーが clean か」の判定が狂う。
-        """
-        remote_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(remote_dir.cleanup)
-        self.origin = Path(remote_dir.name) / "origin.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(self.origin)], check=True)
-        subprocess.run(
-            ["git", "remote", "add", "origin", str(self.origin)], cwd=self.repo, check=True
-        )
-        self.commit("init")
-        subprocess.run(
-            ["git", "push", "-q", "-u", "origin", "HEAD:main"], cwd=self.repo, check=True
-        )
-        subprocess.run(
-            ["git", "branch", "-q", "--set-upstream-to=origin/main"],
-            cwd=self.repo, check=True,
-        )
 
     def make_gone_branch(self, name):
         """push 済みのブランチを作り、リモート側を消して [gone] 状態にする。"""
@@ -379,6 +385,163 @@ class ReversibleOperationTest(HookTestCase):
         self.with_remote()
         self.commit("not pushed yet")
         self.assert_decision(self.run_hook("git reset --hard HEAD~1"), "ask")
+
+
+class SafeBranchSwitchTest(HookTestCase):
+    """失うものが無いと確認できたブランチ切り替えは、ユーザーを呼ばない。
+
+    `checkout` は 1 語で「可逆な切り替え」と「作業ツリーの破棄」の両方を指す。
+    permissions.allow は前方一致でしかなく前者だけを表現できないので、確認なしで
+    通すにはここで allow を返すしかない (setup#140)。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.with_remote()
+        # 既定ブランチ名は init.defaultBranch 次第なので、テストの中では固定する
+        self.git("branch", "-M", "main")
+        self.git("branch", "feature")
+        (self.repo / "notes.txt").write_text("hi\n")
+        self.git("add", "notes.txt")
+        self.commit("notes")
+
+    # --- 通す形 -----------------------------------------------------------
+
+    def test_switching_to_an_existing_branch_is_auto_approved(self):
+        reason = self.assert_auto_approved(self.run_hook("git checkout feature"))
+        self.assertIn("確認は不要", reason)
+
+    def test_switching_back_is_auto_approved(self):
+        """`git checkout -` は直前に居たブランチへ戻るだけ。"""
+        self.git("checkout", "-q", "feature")
+        self.assert_auto_approved(self.run_hook("git checkout -"))
+
+    def test_switching_back_without_history_is_not_auto_approved(self):
+        """`@{-1}` が無ければ何処へ行くか確かめられない。"""
+        self.assert_allowed(self.run_hook("git checkout -"))
+
+    def test_creating_a_branch_is_auto_approved(self):
+        self.assert_auto_approved(self.run_hook("git checkout -b feat/new"))
+
+    def test_creating_a_branch_at_a_start_point_is_auto_approved(self):
+        self.assert_auto_approved(self.run_hook("git checkout -b feat/new origin/main"))
+
+    def test_creating_a_branch_at_an_unknown_start_point_is_not_auto_approved(self):
+        """開始点が解決できなければ、それがブランチなのかパスなのか分からない。"""
+        self.assert_allowed(self.run_hook("git checkout -b feat/new notes.txt"))
+
+    def test_switching_to_a_remote_only_branch_is_auto_approved(self):
+        """リモート追跡だけがある名前は DWIM でローカルブランチが作られる (可逆)。"""
+        self.git("push", "-q", "origin", "HEAD:refs/heads/remote-only")
+        self.git("fetch", "-q")
+        self.assert_auto_approved(self.run_hook("git checkout remote-only"))
+
+    def test_remote_only_name_shadowed_by_a_file_is_not_auto_approved(self):
+        """同名のファイルがあると DWIM は成立しない (git 自身が曖昧だと断る)。
+
+        「ローカルに無い名前 = リモート追跡から作られる」とだけ読むと、実際には
+        起きない切り替えを許可したことになる。
+        """
+        self.git("push", "-q", "origin", "HEAD:refs/heads/remote-only")
+        self.git("fetch", "-q")
+        (self.repo / "remote-only").write_text("not a branch\n")
+        self.assert_allowed(self.run_hook("git checkout remote-only"))
+
+    def test_untracked_files_do_not_block(self):
+        """追跡外のファイルは checkout では失われない (上書きになれば git が断る)。
+
+        ここを全 clean にすると、ビルド生成物が居る実リポジトリでは一度も発火しない。
+        """
+        (self.repo / "build.log").write_text("noise\n")
+        self.assert_auto_approved(self.run_hook("git checkout feature"))
+
+    # --- 通してはいけない形 -------------------------------------------------
+
+    def test_path_argument_is_not_auto_approved(self):
+        """ブランチでない引数は、`--` が無くても作業ツリーの破棄になる。
+
+        git は「ブランチが無ければパス」と解釈し、`Updated 1 path from the index` を
+        出して終了コード 0 で返す。ref の実在を確かめない allow は破棄の許可になる。
+        """
+        self.assert_allowed(self.run_hook("git checkout notes.txt"))
+
+    def test_unknown_name_is_not_auto_approved(self):
+        self.assert_allowed(self.run_hook("git checkout nosuchbranch"))
+
+    def test_revision_syntax_is_not_auto_approved(self):
+        """`main@{1}` は reflog の別のコミット。ブランチ名ではない。
+
+        参照の確認に `rev-parse` を使うとこれが解決してしまうので `show-ref --verify`
+        で見ている。
+        """
+        self.assert_allowed(self.run_hook("git checkout main@{1}"))
+
+    def test_force_is_not_auto_approved(self):
+        """-f は未コミットの変更を踏み潰して切り替える。"""
+        self.assert_allowed(self.run_hook("git checkout -f feature"))
+        self.assert_allowed(self.run_hook("git checkout --force feature"))
+
+    def test_branch_reset_is_not_auto_approved(self):
+        """-B は既存ブランチの tip を捨てて作り直す。"""
+        self.assert_allowed(self.run_hook("git checkout -B feature"))
+
+    def test_option_in_place_of_a_branch_name_is_not_auto_approved(self):
+        """`-b` の後ろにオプションが来る形は、何が作られるのか読めていない。
+
+        開始点 (`main`) だけを見て通すと、名前の位置に居るものを確かめないまま
+        allow を返すことになる。
+        """
+        self.assert_allowed(self.run_hook("git checkout -b -f main"))
+
+    def test_patch_is_not_auto_approved(self):
+        self.assert_allowed(self.run_hook("git checkout -p"))
+
+    def test_merge_side_is_not_auto_approved(self):
+        self.assert_allowed(self.run_hook("git checkout --ours notes.txt"))
+
+    def test_checkout_from_a_revision_into_a_path_asks(self):
+        """`git checkout <rev> -- <path>` は autoMode.hard_deny が名指しする経路。
+
+        automode-guard.py は Edit|Write matcher なので Bash 経由のこれを見ていない。
+        ここで allow を返すと、止めているのが分類器だけの層を飛び越えてしまう。
+        """
+        self.assert_decision(
+            self.run_hook("git checkout HEAD~1 -- claude/settings.json"), "ask"
+        )
+
+    def test_another_command_is_not_auto_approved(self):
+        """allow はコマンド全体に効くので、切り替え以外が混ざったら allow は返さない。"""
+        self.assert_allowed(self.run_hook("git checkout feature && rm -rf build"))
+
+    def test_variable_target_is_not_auto_approved(self):
+        """展開してみないと名前が確定しないものは判定できない。"""
+        self.assert_allowed(self.run_hook("git checkout $BRANCH"))
+
+    def test_extra_option_is_not_auto_approved(self):
+        """通す形は 3 つに固定してある。増やすなら判定を書き足す側で。"""
+        self.assert_allowed(self.run_hook("git checkout -q feature"))
+
+    # --- 状態の前提 ---------------------------------------------------------
+
+    def test_dirty_tracked_file_is_not_auto_approved(self):
+        (self.repo / "notes.txt").write_text("in progress\n")
+        self.assert_allowed(self.run_hook("git checkout feature"))
+
+    def test_staged_change_is_not_auto_approved(self):
+        (self.repo / "notes.txt").write_text("staged\n")
+        self.git("add", "notes.txt")
+        self.assert_allowed(self.run_hook("git checkout feature"))
+
+    def test_detached_head_is_not_auto_approved(self):
+        """detached のまま積んだコミットは、離れた時点で reflog 頼みになる。"""
+        self.git("checkout", "-q", "--detach", "HEAD")
+        self.assert_allowed(self.run_hook("git checkout main"))
+
+    def test_outside_a_repository_is_not_auto_approved(self):
+        with tempfile.TemporaryDirectory() as outside:
+            result = self.run_hook("git checkout main", cwd=outside)
+            self.assert_allowed(result)
+            self.assertEqual(result.stderr, "", "リポジトリ外で git の fatal が漏れている")
 
 
 class SafeCommandTest(HookTestCase):
