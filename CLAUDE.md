@@ -62,8 +62,23 @@ python3 claude/tests/runcat_metrics_test.py
   ブランチ掃除と切り替えがその形。素通し = 無出力では permissions へ判定が戻り、結局確認プロンプトが出る)。
   **状態を見ても可逆にならないものは、可逆にしてから通す** — 作業ツリーの取り消しは
   「捨てられるものがそこに在ること」自体が不可逆の理由なので、状態を見ている限り永久に
-  確認へ落ちる。同じフックが `git stash create` で object DB へ退避し
-  `refs/claude/discarded/*` に固定してから allow を返す (setup#142)
+  確認へ落ちる。同じフックが object DB へ退避し `refs/claude/discarded/*` に固定してから
+  allow を返す (setup#142)
+- **判定軸は「不可逆か」ではなく「退避を作れたか」** (setup#148)。2 週間の実測で `ask` は
+  178 回・人が止めたのは 0 回で、確認が判断ではなく反射になっていた。上の「止まる 5 つ」が
+  挙げるのは*どこにも残っていないものを壊すとき*なので、退避を作った後は止める理由が無い。
+  いま退避を作るのは 3 つ — 作業ツリーの未コミット変更 / `git branch -D` の前のブランチ
+  先端 / `git reset --hard` の前の HEAD。**退避を作れたら、コマンド全体が読めれば `allow`、
+  読めなければ素通し** (判定は分類器へ戻る)。「判定不能は安全側」は**退避を作れなかった
+  ときの規律**であって、作れたものには当てない
+- 退避は 30 日残る。**`git discarded` で一覧・復元する** — 一覧できなければ「多少のリスクを
+  許容する」が「気付けないリスク」になる。復元は種類で違う (作業ツリーは
+  `git checkout <ref> -- <path>`・ブランチは `git branch <名前> <ref>`・HEAD は
+  `git reset --hard <ref>`)
+- **退避があっても通さないものが 2 つある。** `git clean -f` は追跡外ファイルを object DB へ
+  入れられず `-x` では無視対象まで対象に入って費用が非有界になるので `ask` のまま。
+  `git checkout <rev> -- <settings.json>` は `autoMode.hard_deny` の自己権限拡大に当たるので、
+  退避を作ったうえで `ask` にする (対象は git にパスを展開させて見るので `-- .` でも拾う)
 - `claude/repo-standards.json` はリポジトリ標準チェックリストの正本。消費者は
   shinyaoguri/claude-plugins の repo-standards プラグイン (`/repo-audit` 等が
   `~/.claude/repo-standards.json` 経由で読む)。項目の増減はテストが守るが、
