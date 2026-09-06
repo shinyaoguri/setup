@@ -7,15 +7,22 @@
 # 決定論的に効く場所へ移した形。
 #
 # 四つを見る:
-#   1. 作業ツリーや履歴を捨てる操作 → ask (ユーザーに判断を返す)
+#   1. 捨てる操作のうち、**退避を作れなかった**もの → ask (ユーザーに判断を返す)
 #   2. 可逆と確認できたブランチ操作 (掃除・切り替え) → allow (確認を挟まず通す)
-#   3. 退避を作って可逆にした作業ツリーの取り消し → allow (同上)
+#   3. 退避を作って可逆にした操作 → allow (同上)
 #   4. 秘密情報らしきファイルのコミット → deny (代替を添えて止める)
 #
-# ただし 1 は「取り返しがつかない」から止めるのであって、**その場で可逆と確認できた
-# ものまで止めない**。確認は構文 (コマンド文字列のパターン) ではなくリポジトリの状態で
-# 行い、確認できなかったものだけ ask に残す (判定不能は安全側)。これが無いと、
-# マージ済みブランチの掃除のような日常操作まで毎回ユーザーを呼ぶことになる。
+# **判定軸は「不可逆か」ではなく「退避を作れたか」である** (setup#148)。2 週間の実測で
+# ask は 178 回・人が止めたのは 0 回で、確認が判断ではなく反射になっていた。CLAUDE.md が
+# 止まる理由として挙げるのは「どこにも残っていないものを壊すとき」なので、退避を作った
+# 後の操作を止める理由が無い。だから順序はこうなる:
+#
+#   退避を作れた  → コマンド全体が読めれば allow、読めなければ素通し (分類器へ戻す)
+#   作れなかった  → ask (理由に「何を退避できなかったか」を書く)
+#
+# **「判定不能は安全側」は、退避を作れなかったときの規律に狭める。** 退避が在るのに
+# ask を返しても、押す人へ足せる情報が無い (捨てられる中身は本人にも分からない)。
+# 唯一の例外は 3 のエージェント設定ファイルの巻き戻しで、あれは退避があっても通さない。
 #
 # 2 はその続き。素通し (無出力) は「このフックは異議なし」でしかなく、判定は
 # settings.json の permissions へ戻る。allow に載せてよいのは読み取り専用のコマンド
@@ -30,6 +37,17 @@
 # 永久に ask のまま残る。しかし人間に返しても「そのファイルの未コミット変更が何だったか」
 # は判断できず、確認が判断ではなく反射になる。そこで発想を裏返し、可逆性を判定するのでは
 # なく**可逆にしてから通す** — 捨てられる内容を先に object DB へ退避する (setup#142)。
+#
+# setup#148 でこれを 3 つへ広げた。退避の作り手は pin_object に寄せてある:
+#
+#   作業ツリーの未コミット変更  git stash create のコミットを固定 (setup#142)
+#   ブランチの先端            git branch -D の前に refs/heads/<名前> を固定
+#   HEAD                     git reset --hard の前に固定
+#
+# 退避は refs/claude/discarded/* に 30 日残り、`git discarded` で一覧・復元できる
+# (tasks/git.yml)。**退避できないものは残っている** — 追跡外ファイルを消す
+# `git clean -f` は object DB へ入れられず、-x では .build のような無視対象まで
+# 入って費用が非有界になるため、ここは ask のままにしてある。
 #
 # 契約: stdin に PreToolUse の JSON。素通しは無出力 + 終了コード 0。
 # 呼び出し口は settings.json の hooks.PreToolUse、テストは
@@ -239,6 +257,51 @@ checkout_target_is_branch() {
 readonly BACKUP_NS='refs/claude/discarded'
 readonly BACKUP_TTL=$((30 * 24 * 3600))
 
+# 固定した ref に付ける連番。同じ秒に 2 つ以上作る (対象が複数のブランチ削除) ときに
+# 名前が衝突しないようにする。
+PIN_SEQ=0
+
+# コミットを消えない場所へ固定し、その ref を stdout に返す。**ref 名の綴りはここ
+# 1 箇所**に置く — 退避の作り手が 3 つに増えたので、名前の付け方が散ると
+# `git discarded` 側の読み取りと割れる。
+#
+# ラベルに `/` を入れてはいけない。ref はディレクトリを作るので、`branch-a` と
+# `branch-a/b` が同居できなくなる (呼び手が畳んでから渡す)。
+pin_object() { # $1=ラベル $2=リビジョン → ref 名
+  local sha ref
+  sha=$(git rev-parse --verify --quiet "$2^{commit}" 2>/dev/null) || return 1
+  [ -n "$sha" ] || return 1
+  PIN_SEQ=$((PIN_SEQ + 1))
+  ref="${BACKUP_NS}/$1-$(date +%Y%m%d-%H%M%S)-$$-$PIN_SEQ"
+  git update-ref "$ref" "$sha" 2>/dev/null || return 1
+  prune_backups
+  printf '%s' "$ref"
+}
+
+# 消そうとしているブランチの先端を固定する。**1 つでも解決できなければ全体を失敗**に
+# する — 一部だけ固定して通すと、固定できなかったほうが黙って失われる。
+backup_branch_tips() { # $1... = ブランチ名 → "<名前> <ref>" を 1 行 1 件
+  local name safe ref out=''
+  [ "$#" -gt 0 ] || return 1
+  for name in "$@"; do
+    git show-ref --verify --quiet "refs/heads/$name" 2>/dev/null || return 1
+    safe=$(printf '%s' "$name" | tr '/' '_')
+    ref=$(pin_object "branch-$safe" "refs/heads/$name") || return 1
+    out="$out$name $ref
+"
+  done
+  printf '%s' "$out"
+}
+
+# `git reset --hard` で失われるもの (未コミットの変更と、いまの HEAD) をまとめて固定する。
+# 両方作れたときだけ成功する。
+backup_reset_hard() { # → "<作業ツリーの ref または空>\n<HEAD の ref>"
+  local worktree_ref head_ref
+  worktree_ref=$(backup_worktree) || return 1
+  head_ref=$(pin_object head HEAD) || return 1
+  printf '%s\n%s' "$worktree_ref" "$head_ref"
+}
+
 # 捨てられるものを消えない場所へ置き、その参照を stdout に返す。
 #
 # `git stash create` はコミットオブジェクトを作るだけで**スタックには積まない**。
@@ -256,13 +319,10 @@ backup_worktree() {
   git rev-parse --git-dir >/dev/null 2>&1 || return 1
   [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] || return 0
 
-  local sha ref
+  local sha
   sha=$(git stash create "claude: 破棄の前に退避" 2>/dev/null) || return 1
   [ -n "$sha" ] || return 1
-  ref="${BACKUP_NS}/$(date +%Y%m%d-%H%M%S)-$$"
-  git update-ref "$ref" "$sha" 2>/dev/null || return 1
-  prune_backups
-  printf '%s' "$ref"
+  pin_object worktree "$sha"
 }
 
 # 役目を終えた退避を落とす。放っておくと ref が際限なく増えるので、退避を作った直後に
@@ -332,6 +392,108 @@ discard_form_is_plain_revert() {
   return 0
 }
 
+# リビジョンを伴う取り消しか。通す形は 3 つに固定する:
+#
+#   git checkout <rev> -- <path>...
+#   git restore --source=<rev> [--] <path>...
+#   git restore -s <rev> [--] <path>...
+#
+# 見つけたリビジョンとパスを REVISION_REV / REVISION_PATHS へ置く (次の関数が読む)。
+#
+# **`--` を必須にする。** 無いと `git checkout <rev> <path>` はブランチ切り替えとも
+# 読め、`checkout_target_is_branch` のコメントが言う取り違えがそのまま起きる。
+#
+# setup#142 がこの形を外したのは「別の版を持ち込むから」だったが、持ち込む版が
+# コミットである限り再導出できる (CLAUDE.md の「取り戻せる」に当たる)。危ないのは
+# autoMode.hard_deny が名指しする**設定ファイルの巻き戻し**だけなので、形ではなく
+# 対象パスで切る — それが次の関数である (setup#148)。
+REVISION_REV=''
+REVISION_PATHS=''
+
+discard_form_is_revision_revert() {
+  local -a words=()
+  local count start i rev=''
+  read -r -a words <<<"$(command_segments | head -1)"
+  count=${#words[@]}
+  [ "${words[0]:-}" = "git" ] || return 1
+
+  case "${words[1]:-}" in
+    checkout)
+      [ "${words[3]:-}" = "--" ] || return 1
+      rev="${words[2]:-}"
+      start=4
+      ;;
+    restore)
+      case "${words[2]:-}" in
+        --source=*) rev="${words[2]#--source=}"; start=3 ;;
+        -s|--source) rev="${words[3]:-}"; start=4 ;;
+        *) return 1 ;;
+      esac
+      [ "${words[$start]:-}" = "--" ] && start=$((start + 1))
+      ;;
+    *) return 1 ;;
+  esac
+
+  checkout_name_is_plain "$rev" || return 1
+  git rev-parse --verify --quiet "$rev^{commit}" >/dev/null 2>&1 || return 1
+  [ "$count" -gt "$start" ] || return 1
+
+  REVISION_PATHS=''
+  for ((i = start; i < count; i++)); do
+    checkout_name_is_plain "${words[$i]}" || return 1
+    REVISION_PATHS="$REVISION_PATHS${words[$i]}
+"
+  done
+  REVISION_REV="$rev"
+  return 0
+}
+
+# 巻き戻しの対象に、エージェントの権限設定が含まれるか。**退避があっても通さない
+# 唯一の形**で、autoMode.hard_deny の "Auto-Mode Self-Authorization" が
+# `git checkout <rev> -- <settings file>` をそのまま名指ししている。automode-guard.py は
+# Edit|Write matcher なので Bash 経由のこれを見ておらず、止めているのは分類器だけ。
+#
+# **ディレクトリや `.` を渡されても取りこぼさない** — パスを git に展開させ、
+# 「いま消えるもの」(index の側) と「持ち込むもの」(rev の側) の両方を見る。
+#
+# 綴りは 2 通り: リポジトリ内の `.claude/settings*.json` と、setup リポが実体を持つ
+# `claude/settings*.json`。~/.claude/ 配下は git 管理外なのでここには現れない。
+readonly AGENT_SETTINGS_PATTERN='(^|/)\.?claude/settings[^/]*\.json$'
+
+revision_revert_touches_agent_settings() { # REVISION_REV / REVISION_PATHS を読む
+  local listed
+  # shellcheck disable=SC2086  # パスは checkout_name_is_plain を通っており引用符を含まない
+  listed=$(
+    {
+      git ls-files -- $REVISION_PATHS 2>/dev/null
+      git ls-tree -r --name-only "$REVISION_REV" -- $REVISION_PATHS 2>/dev/null
+    } | grep -E "$AGENT_SETTINGS_PATTERN"
+  )
+  [ -n "$listed" ]
+}
+
+# コマンド全体が、この形 1 つだけでできているか。allow はコマンド文字列**全体**に
+# 効くので、退避を作れていても後続が読めなければ allow は返せない (素通しへ落とす)。
+command_is_only() { # $1=先頭に一致すべき正規表現
+  local trimmed
+  trimmed=$(trim "$command")
+  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+  printf '%s' "$trimmed" | grep -qE "$1"
+}
+
+# `-D` の対象がすべて、そのまま名前として扱える形か (固定する先を確定できるか)。
+branch_delete_targets_are_plain() {
+  local targets target
+  targets=$(branch_delete_targets)
+  [ -n "$targets" ] || return 1
+  for target in $targets; do
+    case "$target" in
+      -*|*'$'*|*'"'*|*"'"*|*'`'*) return 1 ;;
+    esac
+  done
+  return 0
+}
+
 # 取り消しの後ろに続くものが、状態を変えないと確認できる形だけか。allow はコマンド
 # 文字列**全体**に効くので、後続も読めたときにしか返せない。ここに載らない形は素通しへ
 # 落とすだけで、判定が permissions と分類器へ戻る (危険側には倒れない)。
@@ -350,19 +512,26 @@ tail_is_read_only() {
   return 0
 }
 
-# --- 1. 作業ツリー・履歴を捨てる操作 ---------------------------------------
+# --- 1. 捨てる操作のうち、退避を作れなかったもの ---------------------------
+# **退避は形が対象外でも作る。** ask を返した先で承認されれば捨てられるものは同じで、
+# 取り戻せる場所に置いておく意味は変わらない。作れたものは danger を立てずに下へ渡し、
+# コマンド全体が読めれば allow、読めなければ素通し (分類器へ戻す) になる。
 danger=""
-has "${GIT}reset${ARG}--hard" && ! reset_hard_discards_nothing &&
-  danger="git reset --hard は、まだコミットしていない変更を復元できない形で捨てる"
+
+# git reset --hard — 未コミットの変更と、いまの HEAD の両方を固定してから通す
+reset_refs=""
+if has "${GIT}reset${ARG}--hard" && ! reset_hard_discards_nothing; then
+  if ! reset_refs=$(backup_reset_hard); then
+    danger="git reset --hard は、まだコミットしていない変更と HEAD を復元できない形で捨てる (捨てる前の退避を作れなかった — git リポジトリの外か、コミットがまだ 1 つも無い)"
+  fi
+fi
+
+# git clean -f — **退避を作れない唯一の口**。追跡外のファイルは object DB へ入れられず、
+# -x を付けた形では .build のような無視対象まで対象に入って費用が非有界になる (setup#148)
 has "${GIT}clean${ARG}(--force|-[a-zA-Z]*f)" &&
   danger="git clean -f は追跡していないファイルを削除する (ゴミ箱には入らない。追跡外のファイルは退避できないので、ここは確認が要る)"
 
-# 作業ツリーの取り消しは、捨てられるものを先に退避できたなら不可逆ではなくなる。
-# 退避を作れた形だけ danger を立てず、下のセクション 3 で allow へ渡す。
-#
-# 退避は**形が対象外でも作る**。ask を返した先で承認されれば捨てられるものは同じで、
-# 取り戻せる場所に置いておく意味は変わらない。むしろ ask の理由に復元先を書けるので、
-# 「何が失われるか分からないまま押す」確認ではなくなる。
+# 作業ツリーの取り消し — 退避を作れた形だけ danger を立てず、下のセクション 3 へ渡す
 backup_ref=""
 backed_up=false
 if has "${GIT}checkout${ARG}(--([[:space:]]|$)|\.([[:space:]]|$))" ||
@@ -371,14 +540,30 @@ if has "${GIT}checkout${ARG}(--([[:space:]]|$)|\.([[:space:]]|$))" ||
     danger="git checkout / git restore での作業ツリーの取り消しは、その変更を復元できない (捨てる前の退避を作れなかった — git リポジトリの外か、コミットがまだ 1 つも無い)"
   elif discard_form_is_plain_revert; then
     backed_up=true
-  else
-    danger="リビジョン・オプション・展開しないと確定しない対象を伴う取り消しは、何がどう捨てられるかをここで確定できない (別の版を持ち込む・強制上書き・部分的に捨てる)${backup_ref:+。いまの作業ツリーは $backup_ref に退避したので、実行しても git checkout $backup_ref -- <path> で戻せる}"
+  elif discard_form_is_revision_revert; then
+    if revision_revert_touches_agent_settings; then
+      danger="エージェントの権限設定 (settings.json) を過去の版へ戻そうとしている。autoMode.hard_deny の \"Auto-Mode Self-Authorization\" が名指しする自己権限拡大の経路で、**退避があっても通さない唯一の形**である${backup_ref:+。いまの作業ツリーは $backup_ref に退避してある}"
+    else
+      backed_up=true
+    fi
   fi
+  # ここに載らない形 (強制上書き・部分破棄・展開しないと確定しない対象) は danger を
+  # 立てない。退避は作れているので ask を返しても押す人へ足せる情報が無く、判定は
+  # permissions と分類器へ戻る (setup#148)
 fi
 
-has "${GIT}branch${ARG}-D([[:space:]]|$)" &&
-  ! branch_delete_targets_are_gone && ! alias_deletes_only_gone_branches &&
-  danger="git branch -D はマージ済みかを問わずブランチを消す (マージ後の掃除なら先に git fetch -p を通す。追跡先が畳まれれば確認なしで通る)"
+# git branch -D — 「役目を終えた」と確認できなくても、先端を固定できれば失うものは無い
+branch_refs=""
+if has "${GIT}branch${ARG}-D([[:space:]]|$)" &&
+  ! branch_delete_targets_are_gone && ! alias_deletes_only_gone_branches; then
+  if branch_delete_targets_are_plain; then
+    # shellcheck disable=SC2046  # 名前は branch_delete_targets_are_plain を通っている
+    branch_refs=$(backup_branch_tips $(branch_delete_targets)) || branch_refs=""
+  fi
+  [ -n "$branch_refs" ] ||
+    danger="git branch -D はマージ済みかを問わずブランチを消す (消す前に先端を固定できなかった — 名前を確定できないか、そのブランチが実在しない)"
+fi
+
 has "${GIT}push${ARG}(--force|-f([[:space:]]|$))" &&
   danger="force push は remote の履歴を書き換える (他の作業や PR に影響する)"
 has "${GIT}stash${ARG}(drop|clear)" &&
@@ -476,6 +661,24 @@ if is_reversible_branch_cleanup; then
   decide allow "消えて困るものが無いと確認できたブランチ削除 (-d は git がマージ済みかを確かめて未マージなら断る / -D と掃除エイリアスの対象は追跡先が [gone] か、push 前で内容が既定ブランチに入っているブランチだけで、コミットは remote から取り戻せる)。確認は不要。"
 fi
 
+# 先端を固定したブランチ削除。上の is_reversible_branch_cleanup を先に置いてあるので、
+# 「役目を終えた」と確認できた対象はここへ来ない (固定も作らない)。
+if [ -n "$branch_refs" ] &&
+  command_is_only '^git[[:space:]]+branch[[:space:]]+-D([[:space:]]|$)'; then
+  decide allow "消えるブランチの先端を退避済み:
+$(printf '%s' "$branch_refs" | sed 's/^/  - /')
+
+復元は git branch <名前> <ref>、中身を見るだけなら git log <ref>。一覧は git discarded。取り戻せるので確認は不要。"
+fi
+
+# 退避を作った git reset --hard
+if [ -n "$reset_refs" ] && command_is_only '^git[[:space:]]+reset([[:space:]]|$)'; then
+  decide allow "捨てられるものを退避済み:
+$(printf '%s' "$reset_refs" | sed -e '/^$/d' -e 's/^/  - /')
+
+作業ツリーの復元は git checkout <ref> -- <path>、HEAD の復元は git reset --hard <ref>。一覧は git discarded。取り戻せるので確認は不要。"
+fi
+
 if checkout_form_is_switch_only && worktree_has_nothing_to_lose; then
   decide allow "失うものが無いと確認できたブランチ切り替え (いまブランチの上に居るので離れても参照から外れるコミットが無く、追跡ファイルに未コミットの変更も無い。対象は実在するブランチか -b で作る新しいブランチで、パスの破棄・-f・-B・-- <path> はこの判定に載らない)。確認は不要。"
 fi
@@ -486,7 +689,7 @@ fi
 # 確認できたときにだけ allow を返す。
 if [ "$backed_up" = true ] && tail_is_read_only; then
   if [ -n "$backup_ref" ]; then
-    decide allow "捨てられる変更は $backup_ref に退避済み (git stash create のコミットを ref に固定してある)。復元は git checkout $backup_ref -- <path>、中身を見るだけなら git show $backup_ref:<path>。取り戻せるので確認は不要。"
+    decide allow "捨てられる変更は $backup_ref に退避済み (git stash create のコミットを ref に固定してある)。復元は git checkout $backup_ref -- <path>、中身を見るだけなら git show $backup_ref:<path>。一覧は git discarded。取り戻せるので確認は不要。"
   fi
   decide allow "この取り消しで捨てられる変更が無い (追跡ファイルに未コミットの変更が無く、作業ツリーは何も変わらない)。確認は不要。"
 fi

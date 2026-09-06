@@ -22,6 +22,13 @@ SCRIPT = Path(__file__).resolve().parent.parent / "git-safety-guard.sh"
 
 
 class HookTestCase(unittest.TestCase):
+    BACKUP_NS = "refs/claude/discarded"
+
+    def backups(self):
+        """退避として固定された ref の一覧 (退避は作れたか、が判定軸なので広く要る)。"""
+        listing = self.git("for-each-ref", "--format=%(refname)", self.BACKUP_NS)
+        return [line for line in listing.stdout.splitlines() if line]
+
     def setUp(self):
         self.workdir = tempfile.TemporaryDirectory()
         self.repo = Path(self.workdir.name)
@@ -103,9 +110,13 @@ class HookTestCase(unittest.TestCase):
 class DestructiveCommandTest(HookTestCase):
     """作業ツリーや履歴を捨てる操作は、実行前にユーザーへ返す。"""
 
-    def test_reset_hard_asks(self):
+    def test_reset_hard_asks_when_nothing_can_be_backed_up(self):
+        """コミットがまだ 1 つも無いリポジトリでは HEAD を固定できないので止まる。
+
+        退避を作れた reset --hard の扱いは ResetBackupTest が持つ。
+        """
         reason = self.assert_decision(self.run_hook("git reset --hard HEAD~1"), "ask")
-        self.assertIn("復元できない", reason)
+        self.assertIn("退避を作れなかった", reason)
 
     def test_clean_force_asks(self):
         self.assert_decision(self.run_hook("git clean -fd"), "ask")
@@ -209,8 +220,13 @@ class ReversibleOperationTest(HookTestCase):
             self.run_hook("git branch -D feature/done && rm -rf build")
         )
 
-    def test_deleting_a_live_branch_asks(self):
-        """リモートが生きているブランチは、役目を終えたと言えない。"""
+    def test_deleting_a_live_branch_is_auto_approved_after_pinning(self):
+        """役目を終えたと言えなくても、先端を固定すれば失われるものは無い。
+
+        「消しても失うものが無い」の判定 (branch_is_spent) を通らない対象は、
+        先端を refs/claude/discarded へ固定してから通す。判定軸は「不可逆か」ではなく
+        「退避を作れたか」である (setup#148)。
+        """
         self.with_remote()
         subprocess.run(
             ["git", "checkout", "-q", "-b", "feature/wip"], cwd=self.repo, check=True
@@ -220,7 +236,14 @@ class ReversibleOperationTest(HookTestCase):
             ["git", "push", "-q", "-u", "origin", "feature/wip"], cwd=self.repo, check=True
         )
         subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
-        self.assert_decision(self.run_hook("git branch -D feature/wip"), "ask")
+        tip = self.git("rev-parse", "feature/wip").stdout.strip()
+
+        reason = self.assert_auto_approved(self.run_hook("git branch -D feature/wip"))
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, refs)
+        self.assertIn(refs[0], reason, "復元先が理由に書かれていない")
+        self.assertEqual(self.git("rev-parse", refs[0]).stdout.strip(), tip)
 
     def test_deleting_a_contained_local_only_branch_is_auto_approved(self):
         """push 前でも、tip が origin/main にあるならコミットは remote から取り戻せる。
@@ -232,18 +255,23 @@ class ReversibleOperationTest(HookTestCase):
         subprocess.run(["git", "branch", "feature/local"], cwd=self.repo, check=True)
         self.assert_auto_approved(self.run_hook("git branch -D feature/local"))
 
-    def test_deleting_a_local_only_branch_with_own_commits_asks(self):
-        """push もしておらず origin/main にも無いコミットは、消すと本当に失われる。"""
+    def test_deleting_a_local_only_branch_with_own_commits_is_pinned(self):
+        """push もしておらず origin/main にも無いコミットこそ、固定してから通す。"""
         self.with_remote()
         subprocess.run(
             ["git", "checkout", "-q", "-b", "feature/unpushed"], cwd=self.repo, check=True
         )
         self.commit("only here")
         subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
-        self.assert_decision(self.run_hook("git branch -D feature/unpushed"), "ask")
+        tip = self.git("rev-parse", "feature/unpushed").stdout.strip()
 
-    def test_mixed_targets_ask(self):
-        """1 つでも確認できない対象が混ざれば、全体を ask にする。"""
+        self.assert_auto_approved(self.run_hook("git branch -D feature/unpushed"))
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, refs)
+        self.assertEqual(self.git("rev-parse", refs[0]).stdout.strip(), tip)
+
+    def test_mixed_targets_are_all_pinned(self):
+        """対象が複数あるときは、全部の先端を固定してから通す。"""
         self.with_remote()
         self.make_gone_branch("feature/done")
         subprocess.run(
@@ -251,40 +279,50 @@ class ReversibleOperationTest(HookTestCase):
         )
         self.commit("only here")
         subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
-        self.assert_decision(
-            self.run_hook("git branch -D feature/done feature/unpushed"), "ask"
+        self.assert_auto_approved(
+            self.run_hook("git branch -D feature/done feature/unpushed")
         )
+        self.assertEqual(len(self.backups()), 2, self.backups())
 
-    def test_live_branch_without_own_commits_asks(self):
-        """push 済みのブランチは、内容が origin/main に入っていても ask のまま。
+    def test_slashes_in_branch_names_are_folded(self):
+        """ブランチ名の `/` はそのまま入れると ref がディレクトリに分かれる。
 
-        「内容が既定ブランチにある」は push 前のブランチにしか当てない指標。
-        push 済み = 共有済みで、まだ差分が無いだけの*作業中*のブランチと区別が
-        つかないため、これを当てると生きた PR のブランチまで黙って消せてしまう。
+        畳んでおくと `git discarded` の一覧が 1 階層に揃い、名前と ref の対応が読める。
         """
         self.with_remote()
-        subprocess.run(
-            ["git", "checkout", "-q", "-b", "feature/fresh"], cwd=self.repo, check=True
-        )
-        subprocess.run(
-            ["git", "push", "-q", "-u", "origin", "feature/fresh"],
-            cwd=self.repo, check=True,
-        )
-        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
-        self.assert_decision(self.run_hook("git branch -D feature/fresh"), "ask")
+        subprocess.run(["git", "branch", "feat/a"], cwd=self.repo, check=True)
+        self.commit("extra")
+        subprocess.run(["git", "branch", "feat/b"], cwd=self.repo, check=True)
 
-    def test_local_only_branch_without_remote_asks(self):
-        """リモートを持たないリポジトリでは、取り戻せる先が無い。"""
+        self.assert_auto_approved(self.run_hook("git branch -D feat/a feat/b"))
+        refs = self.backups()
+        self.assertEqual(len(refs), 2, refs)
+        for ref in refs:
+            leaf = ref[len(self.BACKUP_NS) + 1:]
+            self.assertNotIn("/", leaf, f"ref が階層に分かれている: {ref}")
+            self.assertIn("branch-feat_", leaf)
+
+    def test_local_only_branch_without_remote_is_pinned(self):
+        """リモートが無くても、object DB に固定すれば取り戻せる。"""
         subprocess.run(
             ["git", "commit", "-q", "--allow-empty", "-m", "init"],
             cwd=self.repo, check=True,
         )
         subprocess.run(["git", "branch", "feature/local"], cwd=self.repo, check=True)
-        self.assert_decision(self.run_hook("git branch -D feature/local"), "ask")
+        self.assert_auto_approved(self.run_hook("git branch -D feature/local"))
+        self.assertEqual(len(self.backups()), 1)
 
     def test_unknown_branch_asks(self):
+        """実在しないブランチは先端を固定できない (退避できないから聞く)。"""
         self.with_remote()
-        self.assert_decision(self.run_hook("git branch -D feature/nope"), "ask")
+        reason = self.assert_decision(self.run_hook("git branch -D feature/nope"), "ask")
+        self.assertIn("退避", reason)
+        self.assertEqual(self.backups(), [], "固定できていないのに ref だけ増えている")
+
+    def test_variable_target_asks(self):
+        """展開しないと名前が確定しないものは、何を固定すべきかも決まらない。"""
+        self.with_remote()
+        self.assert_decision(self.run_hook('git branch -D "$BRANCH"'), "ask")
 
     def test_redirection_after_the_branch_name_is_not_a_target(self):
         """`git branch -D x 2>&1 | tail -1` の後続はブランチ名ではない。
@@ -298,12 +336,12 @@ class ReversibleOperationTest(HookTestCase):
         self.make_gone_branch("feature/done")
         self.assert_allowed(self.run_hook("git branch -D feature/done 2>&1 | tail -1"))
 
-    def test_squash_merged_branch_asks_until_pruned(self):
-        """squash merge 済みでも、リモート追跡が生きている間は ask のまま。
+    def test_squash_merged_branch_is_pinned_before_pruning(self):
+        """squash merge 済みで追跡が生きている間は「役目を終えた」と言えない。
 
         「内容が main に入っているか」だけでは、まだ作業中のブランチ (main に無い
-        変更をまだ持っていないだけ) と区別できない。掃除は `git fetch -p` を通して
-        [gone] にしてから — それで確認なしに抜けられる。
+        変更をまだ持っていないだけ) と区別できない。**判定は変えずに、先端を固定して
+        から通す** — 消してよいと確認できたわけではないが、失われるものは無い。
         """
         self.with_remote()
         subprocess.run(
@@ -323,18 +361,22 @@ class ReversibleOperationTest(HookTestCase):
         )
         self.commit("squashed work")
         subprocess.run(["git", "push", "-q", "origin", "main"], cwd=self.repo, check=True)
-        self.assert_decision(self.run_hook("git branch -D feature/squashed"), "ask")
+        reason = self.assert_auto_approved(self.run_hook("git branch -D feature/squashed"))
+        self.assertIn("退避", reason)
+        self.assertEqual(len(self.backups()), 1)
 
-        # マージ後にリモート側が畳まれ、fetch -p が届けば確認は要らなくなる
+        # fetch -p が届けば「役目を終えた」側の判定で通る (固定は要らなくなる)
         subprocess.run(
             ["git", "-C", str(self.origin), "update-ref", "-d", "refs/heads/feature/squashed"],
             check=True,
         )
         subprocess.run(["git", "fetch", "-pq"], cwd=self.repo, check=True)
-        self.assert_auto_approved(self.run_hook("git branch -D feature/squashed"))
+        reason = self.assert_auto_approved(self.run_hook("git branch -D feature/squashed"))
+        self.assertIn("確認は不要", reason)
+        self.assertEqual(len(self.backups()), 1, "gone なら固定は増やさない")
 
-    def test_ask_reason_points_at_fetch_prune(self):
-        """確認を求めるときは、確認なしで通す道 (fetch -p) を示す。"""
+    def test_deletion_with_another_command_falls_through_but_still_pins(self):
+        """allow はコマンド全体に効くので返せない。**それでも先端は固定する。**"""
         self.with_remote()
         subprocess.run(
             ["git", "checkout", "-q", "-b", "feature/wip"], cwd=self.repo, check=True
@@ -344,8 +386,8 @@ class ReversibleOperationTest(HookTestCase):
             ["git", "push", "-q", "-u", "origin", "feature/wip"], cwd=self.repo, check=True
         )
         subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
-        reason = self.assert_decision(self.run_hook("git branch -D feature/wip"), "ask")
-        self.assertIn("fetch -p", reason)
+        self.assert_allowed(self.run_hook("git branch -D feature/wip && rm -rf build"))
+        self.assertEqual(len(self.backups()), 1, "素通しでも固定はする")
 
     # --- エイリアス経由 ---------------------------------------------------
 
@@ -384,17 +426,40 @@ class ReversibleOperationTest(HookTestCase):
         self.with_remote()
         self.assert_allowed(self.run_hook("git reset --hard HEAD"))
 
-    def test_reset_hard_with_local_changes_asks(self):
-        """未コミットの変更があれば、それは他のどこにも無い。"""
+    def test_reset_hard_with_local_changes_is_backed_up(self):
+        """未コミットの変更も HEAD も固定してから通す。"""
         self.with_remote()
         (self.repo / "work.txt").write_text("in progress\n")
-        self.assert_decision(self.run_hook("git reset --hard HEAD"), "ask")
+        self.git("add", "work.txt")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
 
-    def test_reset_hard_on_unpushed_commit_asks(self):
-        """リモートに無いコミットは reflog 頼みになる。"""
+        reason = self.assert_auto_approved(self.run_hook("git reset --hard HEAD"))
+        refs = self.backups()
+        self.assertEqual(len(refs), 2, refs)
+        for ref in refs:
+            self.assertIn(ref, reason, "復元先が理由に書かれていない")
+        heads = [r for r in refs if "/head-" in r]
+        self.assertEqual(len(heads), 1, refs)
+        self.assertEqual(self.git("rev-parse", heads[0]).stdout.strip(), head)
+
+    def test_reset_hard_on_unpushed_commit_is_backed_up(self):
+        """リモートに無いコミットこそ、HEAD を固定してから通す。"""
         self.with_remote()
         self.commit("not pushed yet")
-        self.assert_decision(self.run_hook("git reset --hard HEAD~1"), "ask")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assert_auto_approved(self.run_hook("git reset --hard HEAD~1"))
+        refs = [r for r in self.backups() if "/head-" in r]
+        self.assertEqual(len(refs), 1, self.backups())
+        self.assertEqual(self.git("rev-parse", refs[0]).stdout.strip(), head)
+
+    def test_reset_hard_with_another_command_falls_through_but_still_backs_up(self):
+        """読めない形でも退避は作る。allow は返せないので素通しへ落ちる。"""
+        self.with_remote()
+        self.commit("not pushed yet")
+        self.assert_allowed(
+            self.run_hook("git checkout main 2>&1 | tail -3; git reset --hard origin/main -q")
+        )
+        self.assertTrue(self.backups(), "素通しでも退避は作る")
 
 
 class SafeBranchSwitchTest(HookTestCase):
@@ -509,14 +574,20 @@ class SafeBranchSwitchTest(HookTestCase):
     def test_merge_side_is_not_auto_approved(self):
         self.assert_allowed(self.run_hook("git checkout --ours notes.txt"))
 
-    def test_checkout_from_a_revision_into_a_path_asks(self):
-        """`git checkout <rev> -- <path>` は autoMode.hard_deny が名指しする経路。
+    def test_checkout_from_a_revision_into_agent_settings_asks(self):
+        """設定ファイルの巻き戻しは autoMode.hard_deny が名指しする経路。
 
         automode-guard.py は Edit|Write matcher なので Bash 経由のこれを見ていない。
         ここで allow を返すと、止めているのが分類器だけの層を飛び越えてしまう。
+        setup リポの綴り (`claude/settings.json`) も対象に入る。
         """
+        settings = self.repo / "claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text("{}\n")
+        self.git("add", "claude/settings.json")
+        self.commit("settings")
         self.assert_decision(
-            self.run_hook("git checkout HEAD~1 -- claude/settings.json"), "ask"
+            self.run_hook("git checkout HEAD -- claude/settings.json"), "ask"
         )
 
     def test_another_command_is_not_auto_approved(self):
@@ -562,8 +633,6 @@ class DiscardBackupTest(HookTestCase):
     永久に ask のまま残る。可逆性を判定するのではなく可逆にしてから通す (setup#142)。
     """
 
-    BACKUP_NS = "refs/claude/discarded"
-
     def setUp(self):
         super().setUp()
         (self.repo / "f.txt").write_text("original\n")
@@ -573,10 +642,6 @@ class DiscardBackupTest(HookTestCase):
     def modify(self, content="modified\n"):
         """追跡ファイルに未コミットの変更がある状態にする (捨てられるものを作る)。"""
         (self.repo / "f.txt").write_text(content)
-
-    def backups(self):
-        listing = self.git("for-each-ref", "--format=%(refname)", self.BACKUP_NS)
-        return [line for line in listing.stdout.splitlines() if line]
 
     # --- 退避してから通す ---------------------------------------------------
 
@@ -629,29 +694,75 @@ class DiscardBackupTest(HookTestCase):
         self.modify()
         self.assert_allowed(self.run_hook("git checkout -- f.txt > out.txt"))
 
-    def test_command_substitution_asks(self):
-        """展開してみないと対象が確定しないものは、何を捨てるのか読めない (判定不能は安全側)。"""
-        self.modify()
-        self.assert_decision(self.run_hook("git checkout -- $(cat list.txt)"), "ask")
+    def test_command_substitution_falls_through_but_still_backs_up(self):
+        """対象が読めなくても、**捨てられるもの**は退避できている。
 
-    def test_revision_form_asks_but_points_at_the_backup(self):
-        """`git checkout <rev> -- <path>` は退避を作っても通さない。
-
-        いまの内容を捨てるだけでは済まず別の版を持ち込む形で、autoMode.hard_deny の
-        "Auto-Mode Self-Authorization" が名指しする経路でもある。ただし退避は作るので、
-        承認された先で捨てられても取り戻せる — 確認の理由に復元先を書く。
+        「判定不能は安全側」は退避を作れなかったときの規律であって、作れたものにまで
+        当てない — ask を返しても足せる情報が無いからである (setup#148)。判定は
+        permissions と分類器へ戻る。
         """
         self.modify()
-        reason = self.assert_decision(
-            self.run_hook("git checkout HEAD -- f.txt"), "ask"
-        )
+        self.assert_allowed(self.run_hook("git checkout -- $(cat list.txt)"))
+        self.assertEqual(len(self.backups()), 1, "素通しでも退避は作る")
+
+    def test_revision_form_is_auto_approved(self):
+        """`git checkout <rev> -- <path>` も、退避を作れば取り戻せる。
+
+        除外の理由だった「別の版を持ち込む」は、持ち込む版がコミットである限り
+        再導出できる。危ないのは対象がエージェント設定ファイルのときだけなので、
+        **形ではなく対象パスで切る** (setup#148)。
+        """
+        self.modify()
+        reason = self.assert_auto_approved(self.run_hook("git checkout HEAD -- f.txt"))
         refs = self.backups()
         self.assertEqual(len(refs), 1, refs)
-        self.assertIn(refs[0], reason, "確認に復元先が書かれていない")
+        self.assertIn(refs[0], reason, "復元先が理由に書かれていない")
+        self.assertEqual(self.git("show", f"{refs[0]}:f.txt").stdout, "modified\n")
 
-    def test_forced_form_asks(self):
+    def test_restore_source_form_is_auto_approved(self):
         self.modify()
-        self.assert_decision(self.run_hook("git checkout -f -- f.txt"), "ask")
+        self.assert_auto_approved(self.run_hook("git restore --source=HEAD -- f.txt"))
+        self.assert_auto_approved(self.run_hook("git restore -s HEAD f.txt"))
+
+    def test_revision_form_with_an_unknown_revision_is_not_auto_approved(self):
+        """実在しないリビジョンは、何を持ち込むのかここで確定できない。"""
+        self.modify()
+        self.assert_allowed(self.run_hook("git checkout nope~3 -- f.txt"))
+
+    def test_revision_form_touching_agent_settings_asks(self):
+        """設定ファイルの巻き戻しは autoMode.hard_deny が名指しする自己権限拡大。
+
+        automode-guard.py は Edit|Write matcher なので Bash 経由のこれを見ていない。
+        退避があっても通さない唯一の形である。
+        """
+        settings = self.repo / ".claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text("{}\n")
+        self.git("add", ".claude/settings.json")
+        self.commit("settings")
+        settings.write_text('{"permissions": {}}\n')
+
+        reason = self.assert_decision(
+            self.run_hook("git checkout HEAD -- .claude/settings.json"), "ask"
+        )
+        self.assertIn("設定", reason)
+
+    def test_revision_form_into_a_directory_holding_settings_asks(self):
+        """ディレクトリや `.` を渡されても、展開して中身を見るので取りこぼさない。"""
+        settings = self.repo / ".claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text("{}\n")
+        self.git("add", ".claude/settings.json")
+        self.commit("settings")
+        self.modify()
+        self.assert_decision(self.run_hook("git checkout HEAD -- ."), "ask")
+        self.assert_decision(self.run_hook("git checkout HEAD -- .claude"), "ask")
+
+    def test_forced_form_falls_through_but_still_backs_up(self):
+        """`-f` は読めない形なので allow は返せない。退避は作るので素通しへ落とす。"""
+        self.modify()
+        self.assert_allowed(self.run_hook("git checkout -f -- f.txt"))
+        self.assertEqual(len(self.backups()), 1, "素通しでも退避は作る")
 
     def test_staged_only_restore_passes(self):
         """ステージから外すだけなら作業ツリーは失われない。退避も作らない。"""
