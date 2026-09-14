@@ -76,6 +76,7 @@
       - gh-comment-guard.sh
       - term-guard.sh
       - wait-deadline-guard.sh
+      - signal-guard.py
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
