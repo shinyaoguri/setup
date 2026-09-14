@@ -83,3 +83,9 @@ python3 claude/tests/runcat_metrics_test.py
   shinyaoguri/claude-plugins の repo-standards プラグイン (`/repo-audit` 等が
   `~/.claude/repo-standards.json` 経由で読む)。項目の増減はテストが守るが、
   check type や builtin 名の変更はプラグイン側スクリプトとの契約が壊れないか確認する
+- **シグナルの送り先は名前ではなく親子関係で持ち主を決める** (`claude/signal-guard.py`・setup#150)。
+  Bash ツールのシェルもフックもそのセッションの `claude` プロセスの子なので、対象の一番近い
+  `claude` の祖先が自分と違えば別セッションのもので deny になる。`pkill` / `killall` /
+  `kill $P` のように送り先が静的に決まらない形も deny で、PID を出すコマンドを先に打って
+  数字で送り直させる。**`kill -0` も例外にしていない** — 効いているかを他セッションへ
+  本物のシグナルを打たずに確かめるためで、確かめるときは `kill -0 <他セッションの PID>` を使う

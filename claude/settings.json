@@ -121,6 +121,12 @@
             "command": "~/.claude/wait-deadline-guard.sh",
             "timeout": 10,
             "statusMessage": "待ちに期限があるか確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/signal-guard.py",
+            "timeout": 10,
+            "statusMessage": "シグナルの送り先の持ち主を確認中"
           }
         ]
       },
