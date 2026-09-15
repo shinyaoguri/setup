@@ -45,6 +45,19 @@ def source_zshenv(**overrides):
     return {"SSH_AUTH_SOCK": sock, "GYAZO_TOKEN_REF": ref, "PATH": path}
 
 
+def read_var(name):
+    """zshenv を source して 1 つの変数を取り出す (環境に既にある値は落としてから見る)。"""
+    env = {k: v for k, v in os.environ.items()}
+    env.pop(name, None)
+    return subprocess.run(
+        ["zsh", "-c", f'source "{ZSHENV}"; printf "%s" "${name}"'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
 class SshAuthSockTest(unittest.TestCase):
     """SSH_AUTH_SOCK の分岐。ここが崩れると無人セッションの署名が落ちる"""
 
@@ -74,6 +87,26 @@ class NonInteractiveEssentialsTest(unittest.TestCase):
         env = source_zshenv(GYAZO_TOKEN_REF=None)
         self.assertTrue(env["GYAZO_TOKEN_REF"].startswith("op://"))
 
+    def test_exports_the_gyazo_token_command_for_mokume(self):
+        # mokume の口はコマンドの形しか受け取らない (スキルは eval・example-shots は bash -c)。
+        # **無いと、失効したトークンと同じ 401 になる** — 空の access_token にも Gyazo は
+        # You are not authorized. を返すので、未設定が「トークンが死んだ」に見える (#159)
+        self.assertTrue(read_var("MOKUME_GYAZO_TOKEN_CMD"))
+
+    def test_the_gyazo_token_command_reads_the_reference_variable(self):
+        # 参照の literal を 2 つに増やさない。直書きすると、参照を変えたときに片方だけ古くなる
+        reference = read_var("GYAZO_TOKEN_REF")
+        command = read_var("MOKUME_GYAZO_TOKEN_CMD")
+        self.assertIn("$GYAZO_TOKEN_REF", command, "参照を直書きしている")
+        argument = subprocess.run(
+            ["bash", "-c", 'eval "set -- $CMD"; printf "%s" "$2"'],
+            env={"PATH": "/usr/bin:/bin", "CMD": command, "GYAZO_TOKEN_REF": reference},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        self.assertEqual(reference, argument)
+
     def test_puts_the_repository_bin_on_path(self):
         # secret-read は非対話シェルからも引ける必要がある
         env = source_zshenv()
@@ -88,17 +121,10 @@ class CommandWithoutPathTest(unittest.TestCase):
     コマンドが無い」になり、mokume のエージェントは 1Password の承認待ちへ落ちていた。
     """
 
-    def test_app_private_key_command_resolves_without_setup_bin_on_path(self):
-        env = {k: v for k, v in os.environ.items()}
-        env.pop("MOKUME_APP_PRIVATE_KEY_CMD", None)
-        cmd = subprocess.run(
-            ["zsh", "-c", f'source "{ZSHENV}"; printf "%s" "$MOKUME_APP_PRIVATE_KEY_CMD"'],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        # 使う側 (mokume の gh-app-token.sh) は bash で eval する。PATH は setup を知らない形にする
+    def assert_resolves_without_setup_bin_on_path(self, name):
+        cmd = read_var(name)
+        # 使う側 (mokume の gh-app-token.sh・gyazo-evidence スキル) は bash で eval する。
+        # PATH は setup を知らない形にする
         resolved = subprocess.run(
             ["bash", "-c", 'eval "set -- $CMD"; command -v "$1"'],
             env={"PATH": "/usr/bin:/bin", "CMD": cmd},
@@ -107,6 +133,12 @@ class CommandWithoutPathTest(unittest.TestCase):
         )
         self.assertEqual(0, resolved.returncode, f"解決できない: {cmd}")
         self.assertEqual(str(REPO / "bin" / "secret-read"), resolved.stdout.strip())
+
+    def test_app_private_key_command_resolves_without_setup_bin_on_path(self):
+        self.assert_resolves_without_setup_bin_on_path("MOKUME_APP_PRIVATE_KEY_CMD")
+
+    def test_gyazo_token_command_resolves_without_setup_bin_on_path(self):
+        self.assert_resolves_without_setup_bin_on_path("MOKUME_GYAZO_TOKEN_CMD")
 
 
 if __name__ == "__main__":

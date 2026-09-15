@@ -17,6 +17,9 @@ export PATH
 # Gyazo Upload API のトークンの「参照」だけを置く (値は持たせない)。
 # 使う側: secret-read "$GYAZO_TOKEN_REF" — 1Password がロックされていても読めるよう
 # Keychain をキャッシュに使う。手順は gyazo-capture スキル、線引きは secret-cache-allowlist
+#
+# **参照の literal はここ 1 つ。** 下の MOKUME_GYAZO_TOKEN_CMD もこの変数を読む形にして
+# あり、参照を書き換えるときに直す場所が 2 つに割れないようにしている。
 export GYAZO_TOKEN_REF="op://Automation/Gyazo API/credential"
 
 # mokume のエージェントが push と PR 作成に使う GitHub App の秘密鍵を、**読むコマンド**
@@ -39,6 +42,18 @@ export GYAZO_TOKEN_REF="op://Automation/Gyazo API/credential"
 # 実際に踏んだ。#154)。書き戻されるのは PATH だけで変数は残るので、裸の secret-read だと
 # 「変数はあるのにコマンドが無い」になり、エージェントは 1Password の承認待ちへ落ちる。
 export MOKUME_APP_PRIVATE_KEY_CMD="${(q)_setup_root}/bin/secret-read \"op://Automation/mokume-agent/mokume-agent.2026-08-26.private-key.pem\""
+
+# Gyazo のトークンも、mokume へは**読むコマンド**として渡す (受け取る口が
+# MOKUME_GYAZO_TOKEN_CMD で、`bash -c` / `eval` で実行される)。上の GYAZO_TOKEN_REF は
+# 参照の形なので、そのままでは mokume の口に嵌まらない — スキルと `make example-shots` は
+# コマンドしか受け取らない。
+#
+# **無いと、失効したトークンと同じ 401 になる。** 空の access_token にも Gyazo は
+# `You are not authorized.` を返すので、未設定は「トークンが死んだ」に見える (#159 で
+# 実際に誤診し、トークンを作り直させた)。
+#
+# 絶対パスで書く理由と、参照を直書きしない理由はそれぞれ上の 2 つと同じ。
+export MOKUME_GYAZO_TOKEN_CMD="${(q)_setup_root}/bin/secret-read \"\$GYAZO_TOKEN_REF\""
 unset _setup_root
 
 # SSH agent は Secretive (Secure Enclave)。ssh-keygen -Y sign は SSH_AUTH_SOCK から
