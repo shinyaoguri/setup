@@ -80,5 +80,34 @@ class NonInteractiveEssentialsTest(unittest.TestCase):
         self.assertIn(str(REPO / "bin"), env["PATH"].split(":"))
 
 
+class CommandWithoutPathTest(unittest.TestCase):
+    """変数で渡すコマンドは PATH に頼らない (#154)。
+
+    Claude デスクトップアプリは起動時の PATH を持ち続け、Bash ツールのシェルスナップショットが
+    zshenv の後でそれを書き戻す。PATH だけが上書きされて変数は残るので、「変数はあるのに
+    コマンドが無い」になり、mokume のエージェントは 1Password の承認待ちへ落ちていた。
+    """
+
+    def test_app_private_key_command_resolves_without_setup_bin_on_path(self):
+        env = {k: v for k, v in os.environ.items()}
+        env.pop("MOKUME_APP_PRIVATE_KEY_CMD", None)
+        cmd = subprocess.run(
+            ["zsh", "-c", f'source "{ZSHENV}"; printf "%s" "$MOKUME_APP_PRIVATE_KEY_CMD"'],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        # 使う側 (mokume の gh-app-token.sh) は bash で eval する。PATH は setup を知らない形にする
+        resolved = subprocess.run(
+            ["bash", "-c", 'eval "set -- $CMD"; command -v "$1"'],
+            env={"PATH": "/usr/bin:/bin", "CMD": cmd},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, resolved.returncode, f"解決できない: {cmd}")
+        self.assertEqual(str(REPO / "bin" / "secret-read"), resolved.stdout.strip())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
