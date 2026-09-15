@@ -31,7 +31,6 @@ homebrew_cask_packages:
   - fujitsu-scansnap-home
   - jump-desktop-connect
   - docker-desktop
-  - stats
 
 ###############
 # AppStore Apps
