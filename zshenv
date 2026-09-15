@@ -12,7 +12,6 @@
 _setup_root="${${(%):-%N}:A:h}"
 typeset -U path
 path=("$_setup_root/bin" $path)
-unset _setup_root
 export PATH
 
 # Gyazo Upload API のトークンの「参照」だけを置く (値は持たせない)。
@@ -33,7 +32,14 @@ export GYAZO_TOKEN_REF="op://Automation/Gyazo API/credential"
 # scheduled task) が非対話で zshrc を読まず、空のまま「鍵が無い」で止まるため。
 # 承認が要る PR は App identity でしか作れないので (mokume の ADR-0007)、ここが空だと
 # エージェントは PR を作れない。
-export MOKUME_APP_PRIVATE_KEY_CMD='secret-read "op://Automation/mokume-agent/mokume-agent.2026-08-26.private-key.pem"'
+#
+# コマンドは絶対パスで書く。上で PATH へ足した分は、Claude デスクトップアプリのセッションでは
+# 残らないことがある — アプリは起動した時点の PATH を持ち続け、Bash ツールのシェル
+# スナップショットがこのファイルの後でそれを書き戻す (セットアップ前に起動していたアプリで
+# 実際に踏んだ。#154)。書き戻されるのは PATH だけで変数は残るので、裸の secret-read だと
+# 「変数はあるのにコマンドが無い」になり、エージェントは 1Password の承認待ちへ落ちる。
+export MOKUME_APP_PRIVATE_KEY_CMD="${(q)_setup_root}/bin/secret-read \"op://Automation/mokume-agent/mokume-agent.2026-08-26.private-key.pem\""
+unset _setup_root
 
 # SSH agent は Secretive (Secure Enclave)。ssh-keygen -Y sign は SSH_AUTH_SOCK から
 # agent を引くので、コミット署名にもこの変数が要る。zshrc に置くと非対話シェルが

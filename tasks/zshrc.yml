@@ -38,3 +38,34 @@
     dest: "{{ ansible_facts['env']['HOME'] }}/.zshenv"
     state: link
     force: true
+
+# Claude デスクトップアプリは起動した時点のシェル環境 (PATH) を持ち続け、Bash ツールの
+# シェルスナップショットが zshenv の後でそれを書き戻す。zshenv を張る・変える前から動いて
+# いたアプリのセッションでは、変数は届くのに PATH だけが古く、secret-read が見つからずに
+# 1Password の承認待ちへ落ちる (#154)。symlink の有無ではなく時刻で比べるので、張り終えた
+# 後にもう一度流しても検出できる。再起動はセッションを落とすのでここでは行わず、知らせるだけ
+- name: Check whether the Claude desktop app predates the current zshenv
+  ansible.builtin.shell:
+    cmd: |
+      # pgrep からはアプリ本体が見えないことがある (実測) ので ps の実行ファイル名で探す
+      pid=$(ps -axo pid=,comm= | awk '/\/Claude\.app\/Contents\/MacOS\/Claude$/ { print $1; exit }')
+      [ -n "$pid" ] || exit 0
+      started=$(LC_ALL=C date -j -f '%a %b %d %T %Y' \
+        "$(LC_ALL=C ps -o lstart= -p "$pid" | awk '{ $1 = $1; print }')" +%s) || exit 0
+      link=$(stat -f %m "$HOME/.zshenv")
+      target=$(stat -L -f %m "$HOME/.zshenv")
+      [ "$target" -gt "$link" ] && link=$target
+      [ "$started" -lt "$link" ] && echo stale
+      exit 0
+    executable: /bin/zsh
+  register: claude_app_env
+  changed_when: false
+  check_mode: false
+
+- name: Ask to restart the Claude desktop app
+  ansible.builtin.debug:
+    msg: >-
+      Claude デスクトップアプリが ~/.zshenv より前から動いています。アプリを再起動してください。
+      再起動するまでアプリ内のセッションでは PATH が古いままで、secret-read が見つからず
+      1Password の承認待ちで止まることがあります (setup#154)。
+  when: "'stale' in claude_app_env.stdout"
