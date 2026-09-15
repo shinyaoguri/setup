@@ -234,6 +234,22 @@ echo "============================================================"
 echo ""
 ansible-playbook -i "localhost," "$PLAYBOOK"
 echo ""
+
+##########
+# Step 7: 秘密のキャッシュを温める
+##########
+# 無人セッション (Claude の hook・scheduled task) は初回の読み出しで 1Password の承認を
+# 待って止まる。人がいるここで承認を済ませ、Keychain に入れておく (setup#154)。
+# 1Password へのサインインと CLI 連携は GUI 操作なので、まだなら失敗する — 止めずに案内する
+echo "🔑 Step 7: 秘密のキャッシュを温める (1Password の承認が出ます)"
+if "${PLAYBOOK:h}/bin/secret-read" --warm; then
+	echo "   ✓ キャッシュ済み"
+else
+	echo "   ⚠️  温められなかった参照があります。1Password にサインインして"
+	echo "      設定 > 開発者 の「1Password CLI と連携」を有効にしてから打ち直してください:"
+	echo "        ${PLAYBOOK:h}/bin/secret-read --warm"
+fi
+echo ""
 echo "============================================================"
 echo "  ✅ セットアップが完了しました!"
 echo "============================================================"
@@ -242,4 +258,5 @@ echo "  次のステップ:"
 echo "    1. ターミナルを再起動してください"
 echo "    2. システム環境設定で各種設定を確認してください"
 echo "    3. インストールされたアプリを起動して初期設定を行ってください"
+echo "    4. 手作業が残る項目 (Secretive の鍵・1Password の CLI 連携など) は README の「新しいマシンで」を参照"
 echo ""

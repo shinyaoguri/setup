@@ -464,6 +464,41 @@ class SecretReadTestCase(unittest.TestCase):
         result = self.run_script("--check")
         self.assertIn("不正", result.stdout)
 
+    # --- 温める (#154) ---
+    #
+    # 新しいマシンで、無人セッションが初回の op read (= 1Password の承認) で止まらないように、
+    # 人がいるセットアップ中に許可リストの参照をまとめてキャッシュへ入れておく。
+
+    def test_warm_は許可リストの未キャッシュを入れて値を出さない(self):
+        other = "op://Automation/Other/credential"
+        self.allowlist.write_text(f"{GYAZO_REF}\n{other}\n")
+        result = self.run_script("--warm")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.op_calls()), 2)
+        self.assertEqual(len(self.cached_entries()), 2)
+        self.assertIn(GYAZO_REF, result.stdout)
+        self.assertIn(other, result.stdout)
+        self.assertNotIn("gyazo-token-abc", result.stdout + result.stderr, "--warm が値を漏らしている")
+        # 温めた後は op が無くても読める = 無人セッションが止まらない
+        self.assertEqual(self.run_script(GYAZO_REF, with_op=False).stdout, "gyazo-token-abc\n")
+
+    def test_warm_はキャッシュ済みなら_op_を呼ばない(self):
+        self.run_script(GYAZO_REF)
+        result = self.run_script("--warm")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.op_calls()), 1, "キャッシュ済みでも op を呼んでいる")
+
+    def test_warm_は取れなかった参照を名乗って非ゼロで終わる(self):
+        result = self.run_script("--warm", op_fails=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(GYAZO_REF, result.stdout + result.stderr)
+        self.assertEqual(self.cached_entries(), [], "失敗した値をキャッシュしている")
+
+    def test_warm_は引数を取らない(self):
+        result = self.run_script("--warm", GYAZO_REF)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.op_calls(), [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
