@@ -31,7 +31,23 @@
       自分の claude の直下が Bash ツールのシェル         → 素通し (自分が立てたもの)
       自分の claude の直下がそれ以外                    → ask (MCP サーバか、exec で置き換えた
                                                           自分の背面プロセスか区別できない)
-      どの claude にも属さない                          → ask (孤児・人が端末から立てたもの)
+      どの claude にも属さない (孤児) → **出所で見直す** (下記):
+        出所にこのセッションの session_id               → allow
+        出所がこのセッションの作業ディレクトリ配下       → allow / 同じ所を開いた別セッションが
+                                                          居れば ask
+        どちらでもない                                  → ask (人が端末から立てたもの・別の worktree)
+
+**孤児は「他人のもの」ではなく「鎖が切れた自分のもの」であることが多い** (setup#153)。スケッチは
+Bash ツールのシェルから起動されるので、そのシェルが終わると launchd に再親付けされて `ppid=1` に
+なる。親子関係だけを見ていると、自分で立てたプロセスが時間の経過だけで「判定できない」側へ移り、
+止めるたびに人を呼ぶことになる (実測: ask 20 件のうち 13 件がこれで、正体はすべて自分のスケッチ
+だった)。
+
+**持ち主は鎖が切れても出所のパスに残っている。** 引数か cwd に、そのセッションの scratchpad
+(`/…/<session_id>/…`) か作業ディレクトリが現れる。PreToolUse の payload は `session_id` と `cwd` を
+渡してくるので突き合わせられる。session_id は scratchpad が 1 セッション 1 つなので一意だが、
+**作業ディレクトリは一意ではない** — 同じ worktree を複数のセッションが開くことは実在する
+(実測で 1 つの worktree の scratchpad に session_id が 2 つ在った) ので、その場合は ask へ戻す。
   - 自分の claude が見つからない                        → 数字の PID は ask (黙って素通しにしない)
 
 **シグナル 0 (`kill -0`) も例外にしない。** 何も起こさないが、例外にしないことで、このフックが
@@ -55,7 +71,8 @@ SIP により外から環境を読めない (実測で 0 件)。区別できな�
 環境変数:
   CLAUDE_SIGNAL_GUARD=0  無効化する
   SIGNAL_GUARD_PS        プロセス表をファイルから読む (テスト用。1 行 1 プロセスの
-                         タブ区切り: pid, ppid, 起動時刻, comm, args)
+                         タブ区切り: pid, ppid, 起動時刻, comm, args, cwd)。
+                         cwd の列を書くと `lsof` を呼ばずにそれを使う
   SIGNAL_GUARD_SELF      祖先を辿り始める PID (テスト用。既定はこのプロセス)
 
 契約: stdin に PreToolUse の JSON。素通しは無出力 + 終了コード 0。
@@ -80,7 +97,7 @@ REDIRECTS = {"<", ">", ">>", "<<", ">&", "<&", "&>", ">|"}
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 LOOSE_KILL = re.compile(r"(^|[\s;&|(`])(?:\S*/)?(kill|pkill|killall)(\s|$)")
 
-RANK = {None: 0, "ask": 1, "deny": 2}
+RANK = {None: 0, "allow": 1, "ask": 2, "deny": 3}
 
 
 class Verdict:
@@ -210,8 +227,13 @@ def kill_targets(arguments):
 # --- プロセス表 ------------------------------------------------------------------
 
 
+def using_fixture():
+    """プロセス表が差し替えられているか (テスト)。差し替え中は `lsof` を呼ばない。"""
+    return bool(os.environ.get("SIGNAL_GUARD_PS", ""))
+
+
 def process_table():
-    """{pid: (ppid, 起動時刻, comm, args)}"""
+    """{pid: (ppid, 起動時刻, comm, args, cwd)}。cwd は引けていなければ空。"""
     fixture = os.environ.get("SIGNAL_GUARD_PS", "")
     table = {}
     if fixture:
@@ -219,8 +241,10 @@ def process_table():
             for line in handle:
                 if not line.strip():
                     continue
-                pid, ppid, started, comm, args = (line.rstrip("\n").split("\t") + [""] * 5)[:5]
-                table[int(pid)] = (int(ppid), started, comm, args)
+                pid, ppid, started, comm, args, cwd = (
+                    line.rstrip("\n").split("\t") + [""] * 6
+                )[:6]
+                table[int(pid)] = (int(ppid), started, comm, args, cwd)
         return table
     heads = subprocess.run(
         ["ps", "-axww", "-o", "pid=,ppid=,lstart=,comm="], capture_output=True, text=True
@@ -230,14 +254,60 @@ def process_table():
         if len(parts) < 8:
             continue
         pid, ppid, started, comm = parts[0], parts[1], " ".join(parts[2:7]), parts[7]
-        table[int(pid)] = (int(ppid), started, comm, "")
+        table[int(pid)] = (int(ppid), started, comm, "", "")
     bodies = subprocess.run(["ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True).stdout
     for line in bodies.splitlines():
         parts = line.strip().split(None, 1)
         if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) in table:
-            ppid, started, comm, _ = table[int(parts[0])]
-            table[int(parts[0])] = (ppid, started, comm, parts[1])
+            ppid, started, comm, _, cwd = table[int(parts[0])]
+            table[int(parts[0])] = (ppid, started, comm, parts[1], cwd)
     return table
+
+
+def cwds_of(table, pids):
+    """{pid: cwd}。プロセス表が持っていなければ `lsof` で一度にまとめて引く。
+
+    `ps` は cwd を出せないので、要るときだけ引く (孤児の出所を見るときだけ)。
+    """
+    known, unknown = {}, []
+    for pid in pids:
+        entry = table.get(pid)
+        if entry is None:
+            continue
+        if entry[4]:
+            known[pid] = entry[4]
+        elif not using_fixture():
+            unknown.append(pid)
+    if not unknown:
+        return known
+    try:
+        out = subprocess.run(
+            ["lsof", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(str(pid) for pid in unknown)],
+            capture_output=True,
+            text=True,
+        ).stdout
+    except OSError:  # lsof が無い環境では cwd 無しで判定する (出所が減るだけ)
+        return known
+    current = None
+    for line in out.splitlines():
+        if line.startswith("p"):
+            current = int(line[1:]) if line[1:].isdigit() else None
+        elif line.startswith("n") and current is not None:
+            known.setdefault(current, line[1:])
+    return known
+
+
+def under(path, root):
+    """path が root 自身か、その配下か。文字列の前方一致ではなくパスの境界で見る。"""
+    if not path or not root:
+        return False
+    root = root.rstrip("/")
+    return path == root or path.startswith(root + "/")
+
+
+def mentions(args, root):
+    """コマンド行のどれかの語が root 自身かその配下を指しているか。"""
+    return any(under(word, root) for word in args.split())
 
 
 def is_claude(table, pid):
@@ -277,7 +347,59 @@ HOW_TO = (
 )
 
 
-def judge_pid(table, own, own_ancestors, pid, verdict):
+def sessions_sharing(table, own, own_cwd):
+    """自分以外の生きている claude で、同じ作業ディレクトリ (かその配下) を開いているもの。"""
+    others = [pid for pid in table if pid != own and is_claude(table, pid)]
+    return sorted(pid for pid, cwd in cwds_of(table, others).items() if under(cwd, own_cwd))
+
+
+def judge_orphan(table, own, pid, marks, verdict):
+    """親子の鎖が切れたプロセスを、出所のパスで見直す (setup#153)。
+
+    孤児の多くは他人のものではなく、**自分が立てて再親付けされたもの**である。
+    """
+    session_id, own_cwd = marks
+    args = table[pid][3] or ""
+    cwd = cwds_of(table, [pid]).get(pid, "")
+
+    # scratchpad は 1 セッション 1 つなので、session_id が出所に在れば持ち主は一意に決まる
+    if session_id and (session_id in args or session_id in cwd):
+        verdict.add(
+            "allow",
+            f"{describe(table, pid)} は**このセッションが立てたもの** (出所にこのセッションの "
+            f"scratchpad `{session_id}` が在る)。起動したシェルが終わって launchd へ再親付けされ、"
+            "親子の鎖が切れているだけで持ち主は変わらない。確認は不要。",
+        )
+        return
+
+    # 作業ディレクトリは一意ではないので、同じ所を開いた別セッションが居ないことまで確かめる
+    if own_cwd and (under(cwd, own_cwd) or mentions(args, own_cwd)):
+        sharers = sessions_sharing(table, own, own_cwd)
+        if not sharers:
+            verdict.add(
+                "allow",
+                f"{describe(table, pid)} は**このセッションの作業ディレクトリ** (`{own_cwd}`) から"
+                "起きた孤児で、そこを開いている Claude Code セッションは他に居ない。確認は不要。",
+            )
+        else:
+            listed = "・".join(f"PID {pid}" for pid in sharers)
+            verdict.add(
+                "ask",
+                f"{describe(table, pid)} はこのセッションの作業ディレクトリ (`{own_cwd}`) から起きた"
+                f"孤児だが、**同じ所を開いているセッションが他にも居る** (claude {listed})。"
+                f"どちらが立てたものかは出所から決まらないので人に確認する (setup#153)。{HOW_TO}",
+            )
+        return
+
+    verdict.add(
+        "ask",
+        f"{describe(table, pid)} はどの Claude Code セッションにも属さず (孤児か、人が端末から"
+        "立てたもの)、出所もこのセッションの scratchpad・作業ディレクトリのどちらでもない。"
+        "持ち主を判定できないので人に確認する (setup#150・setup#153)。",
+    )
+
+
+def judge_pid(table, own, own_ancestors, pid, verdict, marks=("", "")):
     if pid not in table:
         return
     if own is None:
@@ -292,11 +414,7 @@ def judge_pid(table, own, own_ancestors, pid, verdict):
         return
     owner, below = nearest_claude(table, pid)
     if owner is None:
-        verdict.add(
-            "ask",
-            f"{describe(table, pid)} はどの Claude Code セッションにも属さない (孤児か、人が端末から"
-            "立てたもの)。持ち主を判定できないので人に確認する (setup#150)。",
-        )
+        judge_orphan(table, own, pid, marks, verdict)
     elif owner != own:
         verdict.add(
             "deny",
@@ -380,8 +498,9 @@ def main():
         self_pid = int(os.environ.get("SIGNAL_GUARD_SELF", "") or os.getpid())
         own, _ = nearest_claude(table, self_pid)
         own_ancestors = set(chain(table, self_pid))
+        marks = (payload.get("session_id") or "", payload.get("cwd") or "")
         for pid in literal:
-            judge_pid(table, own, own_ancestors, pid, verdict)
+            judge_pid(table, own, own_ancestors, pid, verdict, marks)
 
     emit(verdict)
 

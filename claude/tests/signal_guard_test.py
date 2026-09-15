@@ -18,6 +18,14 @@ from hookenv import clean_env
 SCRIPT = Path(__file__).resolve().parent.parent / "signal-guard.py"
 
 APP = "/Users/u/Library/Application Support/Claude/claude-code/2.1.270/claude.app/Contents/MacOS/claude"
+
+# setup#153: 孤児の出所を見るための印。scratchpad は 1 セッション 1 つなので session_id は
+# 持ち主を一意に決めるが、作業ディレクトリは同じ所を複数のセッションが開きうる
+SESSION = "25ffe969-aaa7-4e44-ae8b-7d73ff17aebf"
+OTHER_SESSION = "ed5539c6-47dd-4545-85c0-5131afae864b"
+OWN_CWD = "/Users/u/Repos/proj/.claude/worktrees/issue-1"
+OTHER_CWD = "/Users/u/Repos/proj/.claude/worktrees/issue-2"
+SCRATCH = "/private/tmp/claude-501/-Users-u-Repos-proj"
 SNAPSHOT = "/bin/zsh -c source /Users/u/.claude/shell-snapshots/snapshot-zsh-1-abc.sh 2>/dev/null || true && eval '…'"
 
 # setup#150 の実測を写した表 (PID はそのまま、パスだけ伏せた)
@@ -37,7 +45,31 @@ TABLE = [
     (5666, 5665, APP, APP + " --output-format stream-json"),
     (5682, 5666, "/opt/homebrew/Cellar/mokume/0.7.1/libexec/mokume", "mokume mcp"),  # 止めてしまった
     (30652, 1, "/tmp/fresh/.build/debug/fresh", "/tmp/fresh/.build/debug/fresh"),  # 孤児
+    # setup#153 の実測を写した孤児 — スケッチは起動したシェルが終わると ppid=1 へ移る
+    (31001, 1, "sketch", f"mokume-cli run {SCRATCH}/{SESSION}/scratchpad/sketch.swift"),
+    (31002, 1, "sketch", f"mokume-cli run {SCRATCH}/{OTHER_SESSION}/scratchpad/sketch.swift"),
+    (31003, 1, "mokume-cli", "mokume-cli watch"),  # 出所は cwd にしか無い (下の CWD)
+    (31004, 1, "mokume-cli", "mokume-cli watch"),
+    # 名前がこのセッションの worktree で始まるだけの**別の** worktree (issue-1 と issue-1-other)
+    (31005, 1, "mokume-cli", "mokume-cli watch"),
+    (31006, 1, "sketch", f"mokume-cli run {OWN_CWD}-other/.build/debug/sketch"),
 ]
+
+# プロセスの cwd (fixture の 6 列目)。書いておくとフックは lsof を呼ばない
+CWD = {
+    88906: OWN_CWD,  # このセッションの claude
+    5666: OTHER_CWD,  # 別セッションの claude — 別の worktree を開いている
+    30652: "/tmp/fresh",
+    31003: OWN_CWD,
+    31004: OTHER_CWD,
+    31005: OWN_CWD + "-other",
+}
+
+# PreToolUse の payload が渡してくる印
+MINE = {"session_id": SESSION, "cwd": OWN_CWD}
+# 別セッション (5666) と同じ worktree を開いている場合
+SHARED = {"session_id": SESSION, "cwd": OTHER_CWD}
+
 SELF = 63200
 
 # setup#150 で実際に打ったコマンド
@@ -52,45 +84,56 @@ class SignalGuardTest(unittest.TestCase):
     def setUpClass(cls):
         cls.fixture = tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False, encoding="utf-8")
         for pid, ppid, comm, args in TABLE:
-            cls.fixture.write(f"{pid}\t{ppid}\tMon Sep 14 17:12:54 2026\t{comm}\t{args}\n")
+            cwd = CWD.get(pid, "")
+            cls.fixture.write(
+                f"{pid}\t{ppid}\tMon Sep 14 17:12:54 2026\t{comm}\t{args}\t{cwd}\n"
+            )
         cls.fixture.close()
 
     @classmethod
     def tearDownClass(cls):
         Path(cls.fixture.name).unlink()
 
-    def run_hook(self, command, **env):
+    def run_hook(self, command, payload=None, **env):
         values = {"SIGNAL_GUARD_PS": self.fixture.name, "SIGNAL_GUARD_SELF": str(SELF)}
         values.update(env)
+        body = {"tool_name": "Bash", "tool_input": {"command": command}}
+        body.update(payload or {})
         return subprocess.run(
             [str(SCRIPT)],
-            input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            input=json.dumps(body),
             capture_output=True,
             text=True,
             timeout=30,
             env=clean_env(**values),
         )
 
-    def decision(self, command, **env):
-        result = self.run_hook(command, **env)
+    def decision(self, command, payload=None, **env):
+        result = self.run_hook(command, payload, **env)
         self.assertEqual(result.returncode, 0, result.stderr)
         if not result.stdout.strip():
             return None, ""
         output = json.loads(result.stdout)["hookSpecificOutput"]
         return output["permissionDecision"], output["permissionDecisionReason"]
 
-    def assert_allowed(self, command, **env):
-        decision, reason = self.decision(command, **env)
+    def assert_allowed(self, command, payload=None, **env):
+        decision, reason = self.decision(command, payload, **env)
         self.assertIsNone(decision, f"素通しのはずが {decision}: {command}\n{reason}")
 
-    def assert_denied(self, command, **env):
-        decision, reason = self.decision(command, **env)
+    def assert_denied(self, command, payload=None, **env):
+        decision, reason = self.decision(command, payload, **env)
         self.assertEqual(decision, "deny", f"止めるはずが {decision}: {command}")
         return reason
 
-    def assert_asked(self, command, **env):
-        decision, reason = self.decision(command, **env)
+    def assert_asked(self, command, payload=None, **env):
+        decision, reason = self.decision(command, payload, **env)
         self.assertEqual(decision, "ask", f"聞くはずが {decision}: {command}")
+        return reason
+
+    def assert_decided_allow(self, command, payload=None, **env):
+        """素通し (判定を permissions へ戻す) ではなく、フックが allow を名乗ること。"""
+        decision, reason = self.decision(command, payload, **env)
+        self.assertEqual(decision, "allow", f"確認なしで通すはずが {decision}: {command}\n{reason}")
         return reason
 
     # --- 踏んだもの ---------------------------------------------------------
@@ -150,6 +193,35 @@ class SignalGuardTest(unittest.TestCase):
     def test_複数の送り先はいちばん強い判定になる(self):
         self.assertIn("別の Claude Code セッション", self.assert_denied("kill 13728 5682"))
         self.assert_asked("kill 13728 30652")
+
+    # --- 孤児の出所で持ち主を見直す (setup#153) ----------------------------
+
+    def test_自分の_scratchpad_から起きた孤児は確認なしで通す(self):
+        reason = self.assert_decided_allow("kill 31001", MINE)
+        self.assertIn(SESSION, reason)
+
+    def test_別のセッションの_scratchpad_から起きた孤児は聞く(self):
+        self.assert_asked("kill 31002", MINE)
+
+    def test_自分の作業ディレクトリから起きた孤児は確認なしで通す(self):
+        # 出所が cwd にしか無い形 (`mokume-cli watch` を引数なしで立てたもの)
+        self.assertIn(OWN_CWD, self.assert_decided_allow("kill 31003", MINE))
+
+    def test_同じ作業ディレクトリを開いたセッションが他に居れば聞く(self):
+        reason = self.assert_asked("kill 31004", SHARED)
+        self.assertIn("他にも居る", reason)
+        self.assertIn("5666", reason)
+
+    def test_出所がどちらでもない孤児は印を渡しても聞く(self):
+        self.assert_asked("kill 30652", MINE)
+
+    def test_名前が前方一致するだけの別の_worktree_は自分のものにしない(self):
+        # issue-1 と issue-1-other。前方一致で見ると隣の worktree を自分のものと誤判定する
+        self.assert_asked("kill 31005", MINE)  # cwd に出る形
+        self.assert_asked("kill 31006", MINE)  # コマンド行に出る形
+
+    def test_出所の印を渡しても別セッションのものは止める(self):
+        self.assertIn("別の Claude Code セッション", self.assert_denied("kill 5682", MINE))
 
     # --- 送り先を静的に読めない形 ------------------------------------------
 
