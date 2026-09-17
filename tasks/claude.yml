@@ -59,15 +59,13 @@
 # 認める形は timeout(1) と $SECONDS の 2 つ。テストは
 # claude/tests/wait_deadline_guard_test.py
 #
-# repo-standards.json はリポジトリ標準チェックリストの正本。消費者は claude-plugins の
-# repo-standards プラグイン (~/.claude/repo-standards.json 経由で読む)。
-# テストは claude/tests/repo_standards_test.py
+# repo-standards.json はここでは配らない。正本は claude-plugins の
+# plugins/repo-standards/ に同梱されている (claude-plugins の ADR-0022)。
 - name: Define Claude global config files
   ansible.builtin.set_fact:
     claude_config_files:
       - CLAUDE.md
       - settings.json
-      - repo-standards.json
       - runcat-metrics.py
       - git-safety-guard.sh
       - provisioning-preflight.sh

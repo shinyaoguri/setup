@@ -84,10 +84,11 @@ python3 claude/tests/runcat_metrics_test.py
   入れられず `-x` では無視対象まで対象に入って費用が非有界になるので `ask` のまま。
   `git checkout <rev> -- <settings.json>` は `autoMode.hard_deny` の自己権限拡大に当たるので、
   退避を作ったうえで `ask` にする (対象は git にパスを展開させて見るので `-- .` でも拾う)
-- `claude/repo-standards.json` はリポジトリ標準チェックリストの正本。消費者は
-  shinyaoguri/claude-plugins の repo-standards プラグイン (`/repo-audit` 等が
-  `~/.claude/repo-standards.json` 経由で読む)。項目の増減はテストが守るが、
-  check type や builtin 名の変更はプラグイン側スクリプトとの契約が壊れないか確認する
+- **リポジトリ標準チェックリスト (`repo-standards.json`) はここには無い。** 正本は
+  shinyaoguri/claude-plugins の `plugins/repo-standards/` に同梱されており、項目を増減する
+  PR はあちらへ出す (claude-plugins の ADR-0022)。ここに置いていた頃は正本と消費側スクリプトが
+  リポジトリを跨いでいて、契約を検証するテストが無かった。既存マシンには dangling な
+  `~/.claude/repo-standards.json` が残るので `rm` で外す (playbook は消さない)
 - **シグナルの送り先は名前ではなく親子関係で持ち主を決める** (`claude/signal-guard.py`・setup#150)。
   Bash ツールのシェルもフックもそのセッションの `claude` プロセスの子なので、対象の一番近い
   `claude` の祖先が自分と違えば別セッションのもので deny になる。`pkill` / `killall` /
