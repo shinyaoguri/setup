@@ -38,7 +38,7 @@
       ansible.builtin.import_tasks: tasks/git.yml
 
     - name: Fonts
-      tags: font
+      tags: fonts
       ansible.builtin.import_tasks: tasks/fonts.yml
 
     - name: Terminal.app defaults
