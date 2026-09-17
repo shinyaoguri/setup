@@ -127,6 +127,57 @@ class OverwriteBackupTest(unittest.TestCase):
         )
 
 
+class DefaultsTakeEffectTest(unittest.TestCase):
+    """`defaults write` は保存値を書くだけで、動いているプロセスには届かない。
+
+    実測 (issue #176): Dock の autohide を 1 → 0 にしても、System Events が返す
+    生の状態は true のままだった。反映には Dock の入れ直しが要る。
+    """
+
+    def setUp(self):
+        raw = (TASKS / "macos.yml").read_text()
+        self.body = raw
+        # コメントは「なぜその形にしたか」を書くのに機構の名前を引用するので、
+        # タスク単位で見るときは外す (コメントが前のタスクの塊に混ざる)
+        self.tasks_only = "\n".join(
+            line for line in raw.split("\n") if not line.lstrip().startswith("#")
+        )
+
+    def test_dock_is_restarted_after_the_setting_changes(self):
+        self.assertIn("killall", self.body, "Dock を入れ直していない")
+        self.assertIn(
+            "when: dock_autohide.changed", self.body,
+            "Dock の再起動が条件付きになっていない",
+        )
+
+    def test_the_restart_is_not_unconditional(self):
+        """無条件に打つと毎回 changed を返し、#174 で直した非冪等を再発させる。"""
+        for block in re.split(r"\n(?=- name:)", self.tasks_only):
+            if "killall" not in block:
+                continue
+            self.assertRegex(
+                block, r"when:\s*\S+\.changed",
+                "プロセスを入れ直すタスクに changed の条件が無い",
+            )
+
+    def test_signal_target_is_scoped_to_the_user(self):
+        """送り先を名前だけで決めない (claude/signal-guard.py と同じ理由)。"""
+        self.assertRegex(
+            self.tasks_only, r"killall\s+-u\s",
+            "killall が全ユーザーのプロセスを対象にしている",
+        )
+
+    def test_relogin_is_documented_where_it_cannot_be_fixed(self):
+        """直せないものは「効かない」と正直に書く。
+
+        反映機構を確認できていない設定について、プロセスを殺す根拠は無い。
+        """
+        setup = (TASKS.parent / "sillicon_mac_setup.zsh").read_text()
+        self.assertIn("ログアウト", setup, "再ログインの案内が完了メッセージに無い")
+        readme = (TASKS.parent / "README.md").read_text()
+        self.assertIn("ログアウト", readme, "再ログインの案内が README に無い")
+
+
 class TaskTagNamingTest(unittest.TestCase):
     """CLAUDE.md の「tag 名はファイル名と同じ」を守る。
 
