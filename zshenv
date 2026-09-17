@@ -12,6 +12,15 @@
 _setup_root="${${(%):-%N}:A:h}"
 typeset -U path
 path=("$_setup_root/bin" $path)
+
+# Homebrew も**ここ**で通す。zshrc (対話シェル専用) にしか無いと、hook・cron・launchd
+# から走る zsh に届かない。secret-read の refresh_if_stale は `command -v op` で抜けるので、
+# op が引けない = キャッシュの自動ローテートが一度も走らない状態になっていた
+# (CLAUDE.md の「24 時間ごとに取り直される」が無人セッションで成立していなかった。#170)。
+# sbin も通す — sbin にしか入らない formula がある。
+# `brew shellenv` を eval しないのは、非対話シェルすべてでプロセスを 1 つ余計に起動する
+# ことになるため。ここで要るのは PATH だけ。
+path=("/opt/homebrew/bin" "/opt/homebrew/sbin" $path)
 export PATH
 
 # Gyazo Upload API のトークンの「参照」だけを置く (値は持たせない)。

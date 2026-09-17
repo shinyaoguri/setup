@@ -112,6 +112,18 @@ class NonInteractiveEssentialsTest(unittest.TestCase):
         env = source_zshenv()
         self.assertIn(str(REPO / "bin"), env["PATH"].split(":"))
 
+    def test_puts_homebrew_on_path(self):
+        """op も非対話シェルから引ける必要がある (issue #170)。
+
+        secret-read の refresh_if_stale は `command -v op` で抜けるので、op が
+        引けないと**自動ローテートが一度も走らない**。zshrc は対話シェルしか読まれず、
+        hook / cron / launchd から走る zsh には届かない。
+        """
+        env = source_zshenv(PATH="/usr/bin:/bin")
+        path = env["PATH"].split(":")
+        self.assertIn("/opt/homebrew/bin", path)
+        self.assertIn("/opt/homebrew/sbin", path)
+
 
 class CommandWithoutPathTest(unittest.TestCase):
     """変数で渡すコマンドは PATH に頼らない (#154)。
