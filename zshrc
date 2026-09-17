@@ -77,8 +77,7 @@ alias ...='cd ../..'
 alias bd="cd .."
 alias rmt='trash'
 
-# Homebrew
-export PATH="/opt/homebrew/bin:$PATH"
+# Homebrew の PATH は zshenv が通す (非対話シェルからも op を引くため。#170)
 
 # Add local bin to PATH
 export PATH="$HOME/.local/bin:$PATH"
