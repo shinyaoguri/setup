@@ -93,6 +93,40 @@ class FontIdempotencyTest(unittest.TestCase):
         self.assertNotIn("greedy", self.body)
 
 
+class OverwriteBackupTest(unittest.TestCase):
+    """人の設定を上書きするタスクは、退避を取ってから上書きする (issue #175)。
+
+    ~/.ssh/config は ansible が所有する設計だが、既にファイルがあるマシン
+    (バックアップから復元した環境・setup より先に手で設定した環境) では、その中身を
+    黙って捨てることになる。
+    """
+
+    def test_ssh_config_is_backed_up_before_overwrite(self):
+        body = (TASKS / "ssh.yml").read_text()
+        self.assertIn(
+            "backup: true", body,
+            "~/.ssh/config を退避なしで全置換している",
+        )
+
+    def test_overwriting_tasks_declare_a_backup(self):
+        """dest が既存ファイルを差しうる copy は、退避の宣言を持つこと。
+
+        content: を持つ copy = ファイルを丸ごと書き出す形。symlink を張る file や
+        src: を持つ copy (退避そのもの) は対象外。
+        """
+        missing = []
+        for path in sorted(TASKS.glob("*.yml")):
+            body = path.read_text()
+            for block in re.split(r"\n(?=- name:)", body):
+                if "ansible.builtin.copy:" not in block or "content: |" not in block:
+                    continue
+                if "backup: true" not in block:
+                    missing.append(path.name)
+        self.assertEqual(
+            missing, [], "内容を丸ごと書き出す copy に backup の宣言が無い"
+        )
+
+
 class TaskTagNamingTest(unittest.TestCase):
     """CLAUDE.md の「tag 名はファイル名と同じ」を守る。
 
