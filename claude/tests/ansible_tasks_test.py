@@ -19,15 +19,24 @@ TASKS = Path(__file__).resolve().parent.parent.parent / "tasks"
 ABSENT_PKG = "com.example.definitely.not.installed"
 
 
+def without_comments(path):
+    """コメント行を落とした本文。
+
+    コメントは「なぜその形にしたか」を書くのに**悪い形や機構の名前をそのまま引用する**
+    ので、素の文字列一致で検査するとコメントに当たって常に緑になる (実際に 3 回踏んだ)。
+    タスクの中身を見る検査は必ずここを通す。
+    """
+    return "\n".join(
+        line for line in path.read_text().split("\n")
+        if not line.lstrip().startswith("#")
+    )
+
+
 class RosettaDetectionTest(unittest.TestCase):
     """Rosetta の存在チェック。誤ると新しいマシンに Rosetta が入らない。"""
 
     def setUp(self):
-        raw = (TASKS / "rosetta.yml").read_text()
-        # コメントは「なぜその形にしたか」を書くのに悪い形を引用するので、検査から外す
-        self.body = "\n".join(
-            line for line in raw.split("\n") if not line.lstrip().startswith("#")
-        )
+        self.body = without_comments(TASKS / "rosetta.yml")
 
     def test_uses_a_form_that_reports_absence(self):
         """`pkgutil --pkgs <id>` はスペース区切りだと引数を無視して必ず rc=0 を返す。
@@ -74,10 +83,7 @@ class FontIdempotencyTest(unittest.TestCase):
     """
 
     def setUp(self):
-        raw = (TASKS / "fonts.yml").read_text()
-        self.body = "\n".join(
-            line for line in raw.split("\n") if not line.lstrip().startswith("#")
-        )
+        self.body = without_comments(TASKS / "fonts.yml")
 
     def test_does_not_force_reinstall(self):
         self.assertNotIn(
@@ -102,7 +108,7 @@ class OverwriteBackupTest(unittest.TestCase):
     """
 
     def test_ssh_config_is_backed_up_before_overwrite(self):
-        body = (TASKS / "ssh.yml").read_text()
+        body = without_comments(TASKS / "ssh.yml")
         self.assertIn(
             "backup: true", body,
             "~/.ssh/config を退避なしで全置換している",
@@ -116,7 +122,7 @@ class OverwriteBackupTest(unittest.TestCase):
         """
         missing = []
         for path in sorted(TASKS.glob("*.yml")):
-            body = path.read_text()
+            body = without_comments(path)
             for block in re.split(r"\n(?=- name:)", body):
                 if "ansible.builtin.copy:" not in block or "content: |" not in block:
                     continue
@@ -135,13 +141,8 @@ class DefaultsTakeEffectTest(unittest.TestCase):
     """
 
     def setUp(self):
-        raw = (TASKS / "macos.yml").read_text()
-        self.body = raw
-        # コメントは「なぜその形にしたか」を書くのに機構の名前を引用するので、
-        # タスク単位で見るときは外す (コメントが前のタスクの塊に混ざる)
-        self.tasks_only = "\n".join(
-            line for line in raw.split("\n") if not line.lstrip().startswith("#")
-        )
+        self.body = (TASKS / "macos.yml").read_text()
+        self.tasks_only = without_comments(TASKS / "macos.yml")
 
     def test_dock_is_restarted_after_the_setting_changes(self):
         self.assertIn("killall", self.body, "Dock を入れ直していない")
@@ -176,6 +177,47 @@ class DefaultsTakeEffectTest(unittest.TestCase):
         self.assertIn("ログアウト", setup, "再ログインの案内が完了メッセージに無い")
         readme = (TASKS.parent / "README.md").read_text()
         self.assertIn("ログアウト", readme, "再ログインの案内が README に無い")
+
+
+class DeclaredDependencyTest(unittest.TestCase):
+    """playbook 自身が要求するものは vars/packages.yml に宣言する (issue #177)。
+
+    宣言が無いと、新しいマシンでそのタスクが実行ファイル不在で失敗するか、
+    受け手が居ないまま黙って空振りする。
+    """
+
+    def setUp(self):
+        self.packages = without_comments(TASKS.parent / "vars" / "packages.yml")
+        self.claude_task = without_comments(TASKS / "claude.yml")
+
+    def test_claude_code_is_declared(self):
+        """tasks/claude.yml が `claude mcp add` を打つ。"""
+        self.assertIn("claude mcp add", self.claude_task)
+        self.assertIn("- claude-code", self.packages)
+
+    def test_mas_is_declared(self):
+        """sillicon_mac_setup.zsh が App Store の導入に使う。"""
+        self.assertIn("- mas", self.packages)
+
+    def test_runcat_is_declared(self):
+        """tasks/claude.yml が seed する Custom Metrics カードの受け手。"""
+        self.assertIn("runcat-metrics.py --seed", self.claude_task)
+        self.assertIn("RunCatNeo", self.packages)
+
+    def test_gyazo_manual_installer_is_surfaced(self):
+        """gyazo cask は installer: manual で、brew は .pkg を置くだけ。
+
+        `brew list --cask gyazo` は .pkg があるだけで成功を返すので、黙って
+        スキップすると新しいマシンで Gyazo MCP が無音で未登録になる。
+        """
+        claude = self.claude_task
+        self.assertIn(
+            "brew list --cask gyazo", claude,
+            "cask の導入有無を見ていない (バイナリ不在との切り分けができない)",
+        )
+        self.assertIn("gyazo_cask_installed", claude)
+        readme = (TASKS.parent / "README.md").read_text()
+        self.assertIn("Gyazo を手でインストールする", readme)
 
 
 class TaskTagNamingTest(unittest.TestCase):

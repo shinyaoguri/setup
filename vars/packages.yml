@@ -7,6 +7,9 @@ homebrew_packages:
   - vim
   - neovim
   - fnm
+  # App Store からの導入に要る。sillicon_mac_setup.zsh の Step 5.6 が使う
+  # (かつては同スクリプトが場当たりに brew install していた。issue #177)
+  - mas
 
 ###############
 # GUI App List
@@ -20,6 +23,13 @@ homebrew_cask_packages:
   - google-drive
   - discord
   - visual-studio-code
+  # tasks/claude.yml が `claude mcp add` を打つので、playbook 自身の依存
+  # (入っていないマシンではそのタスクが実行ファイル不在で失敗する。issue #177)
+  - claude-code
+  # **手動インストーラの cask。** artifact が installer: manual なので brew は
+  # .pkg を Caskroom に置くだけで、アプリのインストールは人が .pkg を開く必要がある。
+  # それでも `brew list --cask gyazo` は成功を返すので、Step 5.5 は「導入済み」と
+  # 報告する。手順は README の「新しいマシンで」を参照 (issue #177)
   - gyazo
   - rectangle
   - zoom
@@ -37,6 +47,8 @@ homebrew_cask_packages:
 ###############
 appstore_apps:
   - { name: "Xcode", id: "497799835" }
+  # tasks/claude.yml が seed する Custom Metrics カードの受け手 (issue #177)
+  - { name: "RunCatNeo", id: "6757801838" }
   - { name: "ScreenPointer", id: "1368204906" }
   - { name: "Paste", id: "967805235" }
   - { name: "Jump Desktop", id: "524141863" }
