@@ -64,6 +64,35 @@ class RosettaDetectionTest(unittest.TestCase):
         )
 
 
+class FontIdempotencyTest(unittest.TestCase):
+    """フォントの導入が毎回 changed を返さないこと (issue #174)。
+
+    homebrew_cask は `"--force" not in install_options and _current_cask_is_installed()`
+    で導入済みを判定するので、force があると早期 return を飛ばして毎回入れ直す。
+    changed の数は provisioning-preflight.sh が予告に使う指標なので、常にノイズが
+    乗ると本当に変わるものが埋もれる。
+    """
+
+    def setUp(self):
+        raw = (TASKS / "fonts.yml").read_text()
+        self.body = "\n".join(
+            line for line in raw.split("\n") if not line.lstrip().startswith("#")
+        )
+
+    def test_does_not_force_reinstall(self):
+        self.assertNotIn(
+            "force", self.body,
+            "install_options: force は導入済みの判定を飛ばし、毎回 changed を返す",
+        )
+
+    def test_is_not_greedy(self):
+        """version: latest の cask は greedy を付けると常に outdated になる。
+
+        force を外しても greedy を付ければ同じ状態に戻るので、両方を固定する。
+        """
+        self.assertNotIn("greedy", self.body)
+
+
 class TaskTagNamingTest(unittest.TestCase):
     """CLAUDE.md の「tag 名はファイル名と同じ」を守る。
 
