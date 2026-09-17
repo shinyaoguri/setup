@@ -197,8 +197,11 @@ echo ""
 ##########
 echo "🛍  Step 5.6: App Store アプリのインストール (mas)"
 echo "   ℹ️  事前に App Store.app でサインインしておいてください (mas は CLI から sign-in できません)"
+# mas は vars/packages.yml の homebrew_packages に宣言してあるが、それを入れる
+# playbook はこの後 (Step 6) なので、ここでは自分で用意する。宣言は「新しいマシンで
+# 何が要るか」の台帳としての役目で、ここはその台帳より前に走る (issue #177)
 if ! command -v mas >/dev/null 2>&1; then
-	echo "   📦 mas をインストールします..."
+	echo "   📦 mas をインストールします (vars/packages.yml に宣言済み)..."
 	brew install mas
 fi
 # vars/packages.yml の appstore_apps を id<TAB>name 形式で抜き出し

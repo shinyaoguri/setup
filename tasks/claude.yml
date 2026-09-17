@@ -121,12 +121,35 @@
 # (Issue や PR に画像を貼るときにリポジトリへ画像をコミットせずに済む)。
 # バイナリは cask の gyazo が入れる。要 Gyazo v9.9.0 以降。
 # 参照: https://help-ja.gyazo.com/ の「Gyazo MCP サーバー（開発者向けプレビュー版）」
+- name: Check whether the Gyazo cask is installed
+  ansible.builtin.command: brew list --cask gyazo
+  register: gyazo_cask_installed
+  failed_when: false
+  changed_when: false
+
 - name: Check Gyazo MCP server binary
   ansible.builtin.stat:
     path: "{{ gyazo_mcp_server_path }}"
   register: gyazo_mcp_bin
   vars:
     gyazo_mcp_server_path: /Applications/Gyazo Menu.app/Contents/Helpers/cli-tool/GyazoMacMCPServer
+
+# gyazo cask は artifact が installer: manual なので、brew は .pkg を Caskroom に
+# 置くだけでアプリを入れない。それでも `brew list --cask gyazo` は成功を返すので、
+# セットアップは「導入済み」と報告する。ここで黙ってスキップすると、新しいマシンでは
+# Gyazo MCP が無音で未登録になり、gyazo-capture スキルが使えない理由が分からない
+# (issue #177)。cask は入っているのにバイナリが無い = .pkg を開いていない状態なので、
+# そこだけ気付けるように知らせる。
+- name: Warn when the Gyazo cask is installed but its app is not
+  ansible.builtin.debug:
+    msg: >-
+      Gyazo の MCP サーバが見つかりません。gyazo cask は手動インストーラなので、
+      /opt/homebrew/Caskroom/gyazo/ の .pkg を開いてインストールしてください
+      (README の「新しいマシンで」を参照)。済ませてから
+      ansible-playbook playbook_sillicon_mac.yml --tags claude を流し直すと登録されます。
+  when:
+    - not gyazo_mcp_bin.stat.exists
+    - gyazo_cask_installed.rc == 0
 
 # claude mcp add は登録済みだと rc=1 で終わり "already exists" を stderr に出す。
 # 2 回目以降を失敗にしないよう failed_when で除外する (これが冪等性の要)
