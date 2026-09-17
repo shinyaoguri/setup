@@ -26,10 +26,17 @@
     state: directory
     mode: '0700'
 
+# このファイルは ansible が所有する (中身にも「直接編集しない」と書いてある)。
+# ただし **既に ~/.ssh/config があるマシンでは、その中身を黙って捨てる** —
+# バックアップから復元した環境や、setup を流す前に手で SSH を設定した環境が該当する。
+# 上のコメントの「SSH で繋ぐ先は GitHub だけ」は今のこのマシンの状態であって、
+# 他のマシンや将来の保証ではない (issue #175)。
+# backup: true は内容が変わるときだけ退避を残す (冪等な再実行では作られない)。
 - name: Point GitHub SSH at the Secretive agent
   ansible.builtin.copy:
     dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/config"
     mode: '0600'
+    backup: true
     content: |
       # 実体は setup リポジトリの tasks/ssh.yml (ansible が書き出す)。直接編集しない
       Host github.com
