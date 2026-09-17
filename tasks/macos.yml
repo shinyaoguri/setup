@@ -1,5 +1,17 @@
 ---
 # macOS のシステム設定 (osx_defaults モジュールで冪等に管理)
+#
+# **`defaults write` は保存値を書くだけで、動いているプロセスには届かない。**
+# 反映のされ方は設定ごとに違う (issue #176):
+#
+#   com.apple.dock autohide      Dock を入れ直せば効く (下で条件付きに打っている)
+#   KeyRepeat / InitialKeyRepeat 再ログインが要る。プロセスを殺しても効かない
+#   トラックパッドの 3 キー       同上
+#   Kotoeri の句読点             入力メソッドの再起動。打鍵中に殺すのは破壊的なのでやらない
+#
+# 実測できたのは Dock だけ (生の状態を問い合わせる口があるのがこれだけのため)。
+# 残りは「効いていないように見えても再ログインで効く」と案内する側に寄せている
+# — 確かめられていない機構を根拠にプロセスを殺さない。
 
 # osx_defaults は strict な型チェックをするので、過去にシェルから別の型で
 # 書き込まれた残骸があると Type mismatch でコケる。型が合わないキーだけ
@@ -67,6 +79,28 @@
     key: autohide
     type: bool
     value: true
+  register: dock_autohide
+
+# `defaults write` は保存値を変えるだけで、動いている Dock には届かない。
+# 実測 (issue #176): autohide の保存値を 1 → 0 にしても、System Events が返す
+# **生の状態は true のまま**だった。Dock を入れ直して初めて効く。
+#
+# **設定が実際に変わったときだけ**打つ。無条件だと毎回 changed を返し、#174 で
+# 直したばかりの非冪等を再発させる (changed の数は provisioning-preflight.sh が
+# 予告に使う指標でもある)。
+#
+# -u で自分のプロセスに絞るのは、送り先を名前だけで決めないという
+# claude/signal-guard.py と同じ理由 (setup#150)。Dock が動いていない状況
+# (ログイン直後など) では killall が rc=1 を返すので、そこだけ許す。
+- name: Restart the Dock so the new setting takes effect
+  ansible.builtin.command:
+    cmd: /usr/bin/killall -u {{ ansible_facts['env']['USER'] }} Dock
+  when: dock_autohide.changed
+  register: dock_restart
+  changed_when: true
+  failed_when:
+    - dock_restart.rc != 0
+    - "'No matching processes' not in (dock_restart.stderr | default(''))"
 
 - name: Set Kotoeri punctuation to comma/period
   community.general.osx_defaults:
