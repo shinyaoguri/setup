@@ -25,8 +25,8 @@ DIFF_BODY = """TASK [Set Git global email] ****
 --- before
 +++ after
 @@ -1 +1 @@
--36407060+shinyaoguri@users.noreply.github.com
-+ogrsny@gmail.com
+-old-noreply@users.noreply.github.invalid
++new@example.invalid
 
 changed: [localhost]
 """
@@ -150,6 +150,58 @@ class CommandShapeTest(HookTestCase):
         ):
             with self.subTest(command):
                 self.assert_allowed(self.run_hook(command))
+
+    def test_command_substitution_is_not_executed(self):
+        """予告を組み立てる過程で任意コードを実行しない (issue #164)。
+
+        複合コマンドの判定が [;&|] しか見ていないと、$(...) が eval まで届いて
+        **人間が承認する前に**実行される。「実行前に中身を見る」ためのフックが
+        攻撃面になる形なので、実行されていないことを痕跡で直接見る。
+        """
+        self.fake_ansible(RECAP_NO_CHANGE)
+        marker = self.root / "PWNED"
+        self.assert_decision(
+            self.run_hook(
+                f"ansible-playbook playbook.yml --extra-vars $(touch {marker})"
+            ),
+            "ask",
+        )
+        self.assertFalse(marker.exists(), "承認前にコマンド置換が実行された")
+
+    def test_backtick_substitution_is_not_executed(self):
+        """バッククォートも同じ。"""
+        self.fake_ansible(RECAP_NO_CHANGE)
+        marker = self.root / "PWNED_BQ"
+        self.assert_decision(
+            self.run_hook(f"ansible-playbook playbook.yml --extra-vars `touch {marker}`"),
+            "ask",
+        )
+        self.assertFalse(marker.exists(), "承認前にバッククォートが実行された")
+
+    def test_redirect_asks(self):
+        """リダイレクトも予告を組み立てられない形 (プロセス置換 <(...) もここで塞がる)。"""
+        self.fake_ansible(RECAP_NO_CHANGE)
+        self.assert_decision(
+            self.run_hook("ansible-playbook playbook.yml > out.log"), "ask"
+        )
+
+    def test_sudo_prefixed_playbook_is_inspected(self):
+        """become を要するタスクでは sudo を付ける形が自然に出る (issue #164)。
+
+        先頭語だけを見ていると sudo で判定から外れ、予告なしに playbook が走る。
+        """
+        self.fake_ansible(RECAP_WITH_CHANGE + "\n" + DIFF_BODY)
+        reason = self.assert_decision(
+            self.run_hook("sudo ansible-playbook playbook.yml --tags macos"), "ask"
+        )
+        self.assertIn("changed", reason)
+
+    def test_env_prefixed_playbook_is_inspected(self):
+        """env / 変数代入も同じ。"""
+        self.fake_ansible(RECAP_WITH_CHANGE + "\n" + DIFF_BODY)
+        self.assert_decision(
+            self.run_hook("ANSIBLE_FORCE_COLOR=0 ansible-playbook playbook.yml"), "ask"
+        )
 
 
 if __name__ == "__main__":

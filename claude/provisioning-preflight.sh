@@ -36,8 +36,31 @@ command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null
 
 # 対象は ansible-playbook のみ。コマンド区切りで割ってから**先頭の語**を見る
 # (`echo ansible-playbook` のように引数として現れるだけのものを拾わないため)。
-printf '%s' "$command" | tr ';&|' '\n' |
-  grep -qE '^[[:space:]]*ansible-playbook([[:space:]]|$)' || exit 0
+#
+# 先頭には本物のコマンドの手前に来る語が付きうる — sudo / env / 変数代入など。
+# これを読み飛ばさないと `sudo ansible-playbook` が判定から外れ、become を要する
+# タスク (tasks/macos.yml など) が予告なしに走る (issue #164)。
+# 同じ判定は claude/signal-guard.py の command_word() が持つ。
+printf '%s' "$command" | tr ';&|' '\n' | awk '
+  {
+    i = 1
+    while (i <= NF) {
+      if ($i ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { i++; continue }
+      if ($i == "sudo" || $i == "env" || $i == "command" ||
+          $i == "exec" || $i == "nohup" || $i == "time" || $i == "builtin") {
+        i++
+        while (i <= NF && $i ~ /^-/) i++
+        continue
+      }
+      break
+    }
+    if (i <= NF) {
+      name = $i
+      sub(/^.*\//, "", name)   # 絶対パスで呼ばれても basename で見る
+      if (name == "ansible-playbook") { found = 1 }
+    }
+  }
+  END { exit !found }' || exit 0
 # dry-run そのものは状態を変えないので素通しする (二重に走らせない)。
 printf '%s' "$command" | grep -qE '(^|[[:space:]])(--check|-C)([[:space:]]|$)' && exit 0
 
@@ -50,9 +73,38 @@ if printf '%s' "$command" | grep -qE '^[[:space:]]*cd[[:space:]]+[^&;|]+&&'; the
   rest=$(printf '%s' "$command" | sed -E 's/^[[:space:]]*cd[[:space:]]+[^&;|]+&&[[:space:]]*//')
 fi
 
+# 予告を走らせるときは前置語 (sudo / env / 変数代入) を外す。付けたまま dry-run すると
+# フックの中で sudo のパスワード待ちに落ちうるし、予告として知りたいのは
+# 「ansible-playbook が何を変えるか」なので root 権限は要らない。
+# 権限不足で dry-run が失敗すれば、その結果を持って ask に落ちる (安全側)。
+rest=$(printf '%s' "$rest" | awk '
+  {
+    i = 1
+    while (i <= NF) {
+      if ($i ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { i++; continue }
+      if ($i == "sudo" || $i == "env" || $i == "command" ||
+          $i == "exec" || $i == "nohup" || $i == "time" || $i == "builtin") {
+        i++
+        while (i <= NF && $i ~ /^-/) i++
+        continue
+      }
+      break
+    }
+    out = ""
+    for (j = i; j <= NF; j++) out = (out == "" ? $j : out " " $j)
+    print out
+  }')
+
 # ここから先は「ansible-playbook 単体」でないと予告を組み立てられない。
-if printf '%s' "$rest" | grep -qE '[;&|]'; then
-  decide ask "ansible-playbook が他のコマンドと繋がっているため、変更内容を先に見ることができない。
+#
+# 見るのは区切り [;&|] だけでは足りない。下の dry-run は eval で走らせるので、
+# コマンド置換 $(...) ・バッククォート・リダイレクトが残っていると**人間が承認する
+# 前に**実行される (issue #164)。`<` を弾けばプロセス置換 <(...) も塞がる。
+# 改行も区切りとして働くので同じ扱いにする。
+# 予告を組み立てられない形はすべてここで ask に落とし、eval へ渡さない。
+if printf '%s' "$rest" | grep -qE '[;&|$`<>]' ||
+  [ "$(printf '%s' "$rest" | wc -l | tr -d ' ')" != "0" ]; then
+  decide ask "ansible-playbook が他のコマンドと繋がっている (または置換・リダイレクトを含む) ため、変更内容を先に見ることができない。
 
 ansible-playbook だけを単体で実行すれば、このフックが --check --diff で予告する。
 そのうえで実行するなら、何が変わるのかをユーザーへ伝えて判断を仰ぐ。"
