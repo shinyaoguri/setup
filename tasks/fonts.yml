@@ -1,11 +1,25 @@
 ---
 # 日本語/英語フォント (Cask)
 
-# install_options: force は、過去に手動配置されたフォントファイルを Cask 管理下に取り込むため。
-# これがないと ~/Library/Fonts/ に同名ファイルがある環境で install が拒否される。
+# state: upgraded にしているのは、present + install_options: force だったため。
+# homebrew_cask は `"--force" not in install_options and _current_cask_is_installed()`
+# で「導入済み」の早期 return を判定するので、force があると毎回入れ直して changed を
+# 返していた (実測で --check が 8 本すべてを changed と予告する)。changed の数は
+# provisioning-preflight.sh が「何が変わるか」の予告に使う指標なので、常に 8 件の
+# ノイズが乗ると本当に変わるものが埋もれる (issue #174)。
+#
+# force の当初の目的 (手動配置されたフォントを Cask 管理下に取り込む) は済んでいる。
+# brew が `Moving Font` で ~/Library/Fonts へ移すので、そこにあるのは Cask 管理下の
+# 実ファイルであって手動配置の残骸ではない。
+#
+# **greedy は付けない。** 8 本中 5 本が version: latest の cask で、greedy を付けると
+# 常に outdated と見なされて force と同じ状態に戻る。latest のフォントを更新したい
+# ときは `brew upgrade --cask --greedy <名前>` を手で打つ — playbook が毎回全部を
+# 入れ直すことで代用する形は、冪等性と引き換えに合わない。
+# バージョン付きの cask (font-noto-sans-cjk-jp / font-noto-serif-cjk-jp) は
+# これで実際に古いときだけ追随する。
 - name: Install fonts via Homebrew Cask
   community.general.homebrew_cask:
     name: "{{ item }}"
-    state: present
-    install_options: force
+    state: upgraded
   loop: "{{ font_casks }}"
