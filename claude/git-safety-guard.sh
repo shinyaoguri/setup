@@ -114,19 +114,47 @@ branch_delete_targets_are_gone() {
   return 0
 }
 
-# `-D` に続くブランチ名を取り出す。シェルの区切り・リダイレクトが現れたら打ち切る。
-# `git branch -D x 2>&1 | tail -1` の "2>&1" までブランチ名として読むと、実在しない
-# 名前として判定不能に落ち、掃除のたびにユーザーを呼ぶことになる。
+# 「マージ済みかを問わず消す」形かどうか。git は 3 通りの綴りを同じ意味に扱う:
+#   -D / -d --force / --delete --force (-f は --force の短形)
+# -D リテラルだけを見ていると、残り 2 つが「-d だから安全」の側へ落ちて退避も作られない
+# まま allow が返る (issue #162)。判定の入口をここ 1 つに寄せる。
+# 区切りで割ってからセグメントごとに見る。エイリアス定義は
+# `!git gone | while read -r b; do git branch -D "$b"; done` のように削除が区切りの
+# 後ろに来るので、最初の区切りで打ち切ると検出できない。フラグはセグメントごとに
+# 数え直す (別々のコマンドの -d と --force を足し合わせないため)。
+deletes_branch_by_force() {
+  printf '%s' "${1:-$command}" |
+    awk '{ gsub(/&&|\|\||[;&|]/, "\n"); print }' |
+    awk '
+      BEGIN { found = 0 }
+      {
+        del = 0; force = 0
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /[<>]/) break
+          if ($i == "-D") { del = 1; force = 1 }
+          else if ($i == "-d" || $i == "--delete") del = 1
+          else if ($i == "-f" || $i == "--force") force = 1
+        }
+        if (del && force) found = 1
+      }
+      END { exit !found }'
+}
+
+# 削除対象のブランチ名を取り出す。削除フラグの後ろの語のうち、オプションでないものを集める。
+# シェルの区切り・リダイレクトが現れたら打ち切る — `git branch -D x 2>&1 | tail -1` の
+# "2>&1" までブランチ名として読むと、実在しない名前として判定不能に落ち、掃除のたびに
+# ユーザーを呼ぶことになる。
 branch_delete_targets() {
   printf '%s' "$command" | awk '{
-    for (i = 1; i <= NF; i++)
-      if ($i == "-D") {
-        for (j = i + 1; j <= NF; j++) {
-          if ($j ~ /[;&|<>]/) exit
-          print $j
-        }
-        exit
-      }
+    seen = 0
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /[;&|<>]/) exit
+      if ($i == "-D" || $i == "-d" || $i == "--delete") { seen = 1; continue }
+      if (!seen) continue
+      # 削除フラグの後ろに来る --force / -f などのオプションは対象名ではない
+      if ($i ~ /^-/) continue
+      print $i
+    }
   }'
 }
 
@@ -193,7 +221,7 @@ alias_deletes_only_gone_branches() {
     awk '{print $NF}' | sort -u); do
     definition=$(git config --get "alias.$name" 2>/dev/null) || continue
     printf '%s' "$definition" | grep -qE '^!git gone([[:space:]]|\|)' || continue
-    printf '%s' "$definition" | grep -qE 'git branch[[:space:]]+-D' || continue
+    deletes_branch_by_force "$definition" || continue
     return 0
   done
   return 1
@@ -554,7 +582,9 @@ fi
 
 # git branch -D — 「役目を終えた」と確認できなくても、先端を固定できれば失うものは無い
 branch_refs=""
-if has "${GIT}branch${ARG}-D([[:space:]]|$)" &&
+# 判定はエイリアス展開後の文字列に対して行う。`git gone-clean` のように、削除が
+# 定義の中にしか現れない形を取りこぼさないため ($command には現れない)
+if has "${GIT}branch([[:space:]]|$)" && deletes_branch_by_force "$scan" &&
   ! branch_delete_targets_are_gone && ! alias_deletes_only_gone_branches; then
   if branch_delete_targets_are_plain; then
     # shellcheck disable=SC2046  # 名前は branch_delete_targets_are_plain を通っている
@@ -591,12 +621,17 @@ is_reversible_branch_cleanup() {
   trimmed=$(trim "$command")
   printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
 
-  # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)
-  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-d([[:space:]]|$)' &&
+  # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)。
+  # ただし --force が付けば -D と等価になり git は確かめなくなるので、ここへは入れない
+  # (issue #162 — 「-d だから安全」は force の有無を見て初めて成り立つ)
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch([[:space:]]|$)' &&
+    ! deletes_branch_by_force "$trimmed" &&
+    printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+(-d|--delete)([[:space:]]|$)' &&
     return 0
-  # -D は対象すべてが「消しても失うものが無い」と確認できたときだけ
+  # force を伴う削除は、対象すべてが「消しても失うものが無い」と確認できたときだけ
   # (追跡先が畳まれている / push 前で内容が既定ブランチに入っている)
-  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-D([[:space:]]|$)' &&
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch([[:space:]]|$)' &&
+    deletes_branch_by_force "$trimmed" &&
     branch_delete_targets_are_gone && return 0
   # `git gone-clean` のような、掃除エイリアス 1 本きりの呼び出し
   printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+[a-zA-Z][-a-zA-Z0-9_]*$' &&
@@ -664,7 +699,7 @@ fi
 # 先端を固定したブランチ削除。上の is_reversible_branch_cleanup を先に置いてあるので、
 # 「役目を終えた」と確認できた対象はここへ来ない (固定も作らない)。
 if [ -n "$branch_refs" ] &&
-  command_is_only '^git[[:space:]]+branch[[:space:]]+-D([[:space:]]|$)'; then
+  command_is_only '^git[[:space:]]+branch([[:space:]]|$)' && deletes_branch_by_force; then
   decide allow "消えるブランチの先端を退避済み:
 $(printf '%s' "$branch_refs" | sed 's/^/  - /')
 
@@ -700,14 +735,22 @@ fi
 readonly SECRET_PATTERN='(^|/)\.env($|\.[^/]*$)|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|\.(pem|p12|pfx|jks|keystore)$|(^|/)[^/]*_rsa$'
 readonly SECRET_ALLOW='\.(example|sample|template|dist|pub)$|(^|/)\.env\.(example|sample|template)$'
 
+# commit と add は**両方**見る。排他にすると `git add .env && git commit -m x` で
+# commit 側だけが選ばれ、PreToolUse の時点ではまだ add が走っていないので
+# git diff --cached が空になって素通しする (issue #162)。モデルが最も普通に書く形なので、
+# 排他のままでは実質この deny が無いのと変わらない。
 secrets=""
 if has "${GIT}commit([[:space:]]|$)"; then
   secrets=$(git diff --cached --name-only 2>/dev/null |
     grep -E "$SECRET_PATTERN" | grep -vE "$SECRET_ALLOW")
-elif has "${GIT}add([[:space:]]|$)"; then
-  # add はステージ前なので、コマンドに書かれたパスをそのまま見る
-  secrets=$(printf '%s' "$command" | tr ' ' '\n' |
-    grep -E "$SECRET_PATTERN" | grep -vE "$SECRET_ALLOW")
+fi
+if has "${GIT}add([[:space:]]|$)"; then
+  # add はステージ前なので、コマンドに書かれたパスをそのまま見る。連結形でも拾えるよう、
+  # add のセグメントだけを取り出してから語に割る (他のコマンドの引数を巻き込まない)
+  staged_by_name=$(command_segments |
+    grep -E "^[[:space:]]*git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)" |
+    tr ' ' '\n' | grep -E "$SECRET_PATTERN" | grep -vE "$SECRET_ALLOW")
+  secrets=$(printf '%s\n%s\n' "$secrets" "$staged_by_name" | grep -v '^$' | sort -u)
 fi
 
 if [ -n "$secrets" ]; then

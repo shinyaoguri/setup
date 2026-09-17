@@ -209,6 +209,44 @@ class ReversibleOperationTest(HookTestCase):
         subprocess.run(["git", "branch", "feature/x"], cwd=self.repo, check=True)
         self.assert_auto_approved(self.run_hook("git branch -d feature/x"))
 
+    def test_forced_delete_spelled_as_lowercase_d_pins_the_tip(self):
+        """`-d --force` は -D と等価で、未マージでも消える (issue #162)。
+
+        -d だから安全という理由は --force があれば成り立たない。退避を作れたなら
+        allow でよいが、作らずに allow を返すと確認プロンプトごと消えて先端が失われる。
+        """
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/unmerged"], cwd=self.repo, check=True
+        )
+        self.commit("wip")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        tip = self.git("rev-parse", "feature/unmerged").stdout.strip()
+
+        self.assert_auto_approved(self.run_hook("git branch -d --force feature/unmerged"))
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, f"退避が作られていない: {refs}")
+        self.assertEqual(self.git("rev-parse", refs[0]).stdout.strip(), tip)
+
+    def test_forced_delete_spelled_long_pins_the_tip(self):
+        """`--delete --force` も同じ。長形式だけ検査から落ちていた。"""
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/long"], cwd=self.repo, check=True
+        )
+        self.commit("wip")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        tip = self.git("rev-parse", "feature/long").stdout.strip()
+
+        self.assert_auto_approved(
+            self.run_hook("git branch --delete --force feature/long")
+        )
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, f"退避が作られていない: {refs}")
+        self.assertEqual(self.git("rev-parse", refs[0]).stdout.strip(), tip)
+
     def test_delete_with_another_command_is_not_auto_approved(self):
         """allow はコマンド全体に効くので、削除以外が混ざったら allow は返さない。
 
@@ -848,6 +886,25 @@ class SecretFileTest(HookTestCase):
         """ステージ前でも、コマンドに書かれていれば止める。"""
         reason = self.assert_decision(self.run_hook("git add .env"), "deny")
         self.assertIn(".env", reason)
+
+    def test_add_then_commit_in_one_command_is_denied(self):
+        """`git add X && git commit` はモデルが最も普通に書く形 (issue #162)。
+
+        commit と add を排他に見ていると、この形では commit 側が選ばれ、フックの
+        時点ではまだ add が走っていないので git diff --cached が空になり素通しする。
+        """
+        reason = self.assert_decision(
+            self.run_hook('git add .env && git commit -m "x"'), "deny"
+        )
+        self.assertIn(".env", reason)
+
+    def test_add_then_commit_with_semicolon_is_denied(self):
+        """区切りが ; でも同じ。"""
+        self.assert_decision(self.run_hook('git add .env ; git commit -m "x"'), "deny")
+
+    def test_add_ordinary_file_then_commit_is_allowed(self):
+        """連結形を見るようにしても、秘密でないものは通す (過検出への回帰)。"""
+        self.assert_allowed(self.run_hook('git add src/main.py && git commit -m "x"'))
 
     def test_reason_offers_an_alternative(self):
         self.stage(".env")
