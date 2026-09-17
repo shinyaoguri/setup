@@ -86,7 +86,21 @@ else
 	echo "   ⚠️  Homebrew がインストールされていません"
 	echo ""
 	echo "   インストールを開始します..."
-	/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+	brew_installer=$(mktemp)
+	if ! curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$brew_installer"; then
+		rm -f "$brew_installer"
+		echo "   ❌ Homebrew のインストーラを取得できませんでした (ネットワークを確認してください)"
+		exit 1
+	fi
+	/bin/bash "$brew_installer"
+	rm -f "$brew_installer"
+
+	# **インストーラは実行中シェルの PATH を変えない。** 末尾に
+	# 「Run this command in your terminal to add Homebrew to your PATH」と表示するだけで、
+	# /opt/homebrew/bin を通しているのは zshrc (対話シェル専用) しかない。このまま進むと
+	# 直後の Step 3 の `brew install ansible` が command not found になり set -e で死ぬ
+	# — Homebrew は入った後なので原因が分かりにくい形で落ちる (issue #166)。
+	eval "$(/opt/homebrew/bin/brew shellenv)"
 fi
 echo ""
 
