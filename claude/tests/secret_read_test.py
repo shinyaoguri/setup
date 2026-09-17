@@ -47,6 +47,9 @@ done
 key="$FAKE_KEYCHAIN/$(printf '%s' "$svc" | shasum | cut -d' ' -f1)"
 case "$cmd" in
   add-generic-password)
+    # FAKE_SECURITY_RO は「読めるし消せるが書けない」状態の再現。キャッシュを
+    # 書く前に消していると、この状況で古い値ごと失われる (issue #168)
+    [ -n "${FAKE_SECURITY_RO:-}" ] && exit 1
     read -r first || exit 1
     read -r second || exit 1
     [ "$first" = "$second" ] || exit 1
@@ -126,6 +129,7 @@ class SecretReadTestCase(unittest.TestCase):
         with_op=True,
         op_fails=False,
         op_hangs=None,
+        keychain_readonly=False,
         ttl=None,
         refresh_timeout=None,
     ):
@@ -135,6 +139,8 @@ class SecretReadTestCase(unittest.TestCase):
         env["FAKE_KEYCHAIN"] = str(self.keychain)
         env["FAKE_OP_LOG"] = str(self.op_log)
         env["FAKE_OP_VALUE_FILE"] = str(self.value_file)
+        if keychain_readonly:
+            env["FAKE_SECURITY_RO"] = "1"
         if op_fails:
             env["FAKE_OP_FAIL"] = "1"
         if op_hangs is not None:
@@ -236,6 +242,27 @@ class SecretReadTestCase(unittest.TestCase):
             f"キャッシュ往復で値が変わった ({len(cached.stdout)} バイトになった)",
         )
 
+    def test_長い値から短い値へ変わっても古い分割が残らない(self):
+        """分割数が減ったときの掃除。値を書き切ってから余分を消す順でも効くこと。
+
+        古い実体が居座ると、読み出しが混ざった値を組み立てる余地が残る。
+        """
+        body = "\n".join("MIIEpQIBAAKCAQEAuSODvgDARc6Vjq0xKiX3B1kF3erBJ5V+OwY0R" for _ in range(26))
+        self.set_op_value(f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----")
+        self.run_script(GYAZO_REF)
+        chunked = sorted(p.name for p in self.keychain.iterdir())
+        self.assertGreater(len(chunked), 1, "分割されていない (前提が崩れた)")
+
+        self.set_op_value("short-token")
+        self.run_script("--refresh", GYAZO_REF)
+
+        cached = self.run_script(GYAZO_REF, with_op=False)
+        self.assertEqual(cached.stdout, "short-token\n")
+        self.assertEqual(
+            len(list(self.keychain.iterdir())), 1,
+            "分割数が減ったのに古い実体が残っている",
+        )
+
     # --- キャッシュしてはいけない参照 ---
 
     def test_許可リストに無い参照は_Keychain_に残さない(self):
@@ -311,6 +338,42 @@ class SecretReadTestCase(unittest.TestCase):
 
         result = self.run_script(GYAZO_REF, ttl=100, with_op=False)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
+
+    def test_Keychain_に書けなくてもキャッシュは残る(self):
+        """書く前に消していると、書けない状況で古い値ごと失われる (issue #168)。
+
+        この仕組みの本命は「1Password が閉じていても呼び出し側が止まらない」ことなので、
+        Keychain が一時的に書けないだけでキャッシュを失ってはいけない。
+        """
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+
+        # 書き込みだけが失敗する状況で取り直しに行く (op は成功する)
+        result = self.run_script(GYAZO_REF, ttl=100, keychain_readonly=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        self.assertTrue(
+            self.keychain_path(GYAZO_REF).exists(), "書き込み失敗でキャッシュが消えた"
+        )
+        again = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        self.assertEqual(again.stdout, "gyazo-token-abc\n")
+
+    def test_refresh_が失敗してもキャッシュは残る(self):
+        """--refresh はロックを解いて急ぐためのコマンドで、壊すためのものではない。
+
+        消してから取り直していると、1Password がロック中に打ったときに
+        「消えた」だけが残る — 無人セッションが止まる、防ぎたかった状態そのもの。
+        """
+        self.run_script(GYAZO_REF, ttl=100)
+
+        result = self.run_script("--refresh", GYAZO_REF, op_fails=True)
+        self.assertNotEqual(result.returncode, 0, "失敗が呼び出し側へ伝わっていない")
+
+        self.assertTrue(
+            self.keychain_path(GYAZO_REF).exists(), "--refresh の失敗でキャッシュが消えた"
+        )
+        again = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        self.assertEqual(again.stdout, "gyazo-token-abc\n")
 
     def test_op_が返ってこなくても待たされずキャッシュを返す(self):
         """ロック中の op read は承認待ちで返らない。待たないことがこの設計の核心。
