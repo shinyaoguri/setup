@@ -72,7 +72,23 @@ case "$MODE-$PLATFORM" in
 		;;
 	cloud-sillicon-mac)
 		echo "🌐 Cloud Mode: Downloading setup files..."
-		zsh -c "$(curl -H 'Cache-Control: no-cache' -sfSL https://raw.githubusercontent.com/shinyaoguri/setup/main/sillicon_mac_setup.zsh)"
+		# `zsh -c "$(curl ...)"` は**コマンド置換が終了ステータスを捨てる**ので、取得に
+		# 失敗すると空のスクリプトを実行して何事もなく終わり、途中で切断されると
+		# 部分的なスクリプトを実行する。後段は sudo セッションを握って cask / mas /
+		# ansible を回すので、途中実行には実害がある (issue #166)。
+		# 一度ファイルへ落として、取得の成否を確かめてから実行する。
+		remote_script=$(mktemp)
+		if ! curl -H 'Cache-Control: no-cache' -fsSL \
+			https://raw.githubusercontent.com/shinyaoguri/setup/main/sillicon_mac_setup.zsh \
+			-o "$remote_script"; then
+			rm -f "$remote_script"
+			echo "❌ セットアップスクリプトを取得できませんでした (ネットワークを確認してください)"
+			exit 1
+		fi
+		zsh "$remote_script"
+		status=$?
+		rm -f "$remote_script"
+		exit $status
 		;;
 	*-intel-mac)
 		echo "⚠️  Intel Mac はサポートされていません"

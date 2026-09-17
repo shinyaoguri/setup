@@ -6,10 +6,17 @@
     path: "{{ ansible_facts['env']['HOME'] }}/.oh-my-zsh"
   register: ohmyzsh_installed
 
+# `sh -c "$(curl ...)"` はコマンド置換が終了ステータスを捨てるので、取得に失敗しても
+# 空を実行して「成功」になり、途中で切断されると部分的なスクリプトを実行する。
+# 一度ファイルへ落として取得の成否を確かめてから実行する (issue #166)
 - name: Install Oh My Zsh
   ansible.builtin.shell:
     cmd: |
-      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+      set -e
+      installer=$(mktemp)
+      trap 'rm -f "$installer"' EXIT
+      curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$installer"
+      sh "$installer" "" --unattended
     executable: /bin/zsh
   environment:
     RUNZSH: "no"
