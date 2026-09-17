@@ -8,13 +8,19 @@ on:
     branches: [main]
   pull_request:
 
+# 既定のトークン権限は読み取りだけにする。リポジトリの既定が write なので、
+# 宣言が無いとテストを流すだけの job が書き込みトークンを持つ (issue #179)。
+# 書き込みが要る job ができたら、その job にだけ permissions を足す。
+permissions:
+  contents: read
+
 jobs:
   claude-scripts:
     # 対象は macOS 前提のシェルスクリプト (bash 3.2 / BSD 系コマンド) なので、
     # 実際に動く環境と同じ OS で流す
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: テストが存在することを確かめる
         # discover はテストが 0 件でも成功するので、拾い漏れをここで落とす
