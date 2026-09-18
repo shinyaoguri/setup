@@ -417,7 +417,9 @@ for rules in "$RULES_DIR"/*.rules; do
       sample=$(printf '%s' "$heredocs" | grep -iE -m 3 -- "$term") &&
         report_hit "$rules" "$term" "heredoc・ヒア文字列の本文 (--body / --body-file へ渡る本文)" "$sample"
       while IFS= read -r f; do
-        [ -n "$f" ] && [ -f "$f" ] || continue
+        # [ -f "" ] は偽なので -n の判定は要らない。A && B || C の形は
+        # 「A が真でも C が走る」と読めて紛らわしい (SC2015)
+        [ -f "$f" ] || continue
         sample=$(grep -iE -m 3 -- "$term" "$f" 2>/dev/null) &&
           report_hit "$rules" "$term" "本文ファイル $f" "$sample"
       done <<EOF2
