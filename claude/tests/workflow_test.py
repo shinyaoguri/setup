@@ -75,6 +75,24 @@ class DeclaredChecksActuallyRunTest(unittest.TestCase):
             self.skipTest("shellcheck の job が無い")
         self.assertIn("find claude bin", bodies, "対象を find で拾っていない")
 
+    def test_shellcheck_version_is_pinned(self):
+        """手元と CI で版が違うと「手元で通るのに CI で落ちる」が起きる。
+
+        実際にこの job を足したとき、手元 (0.11.0) では -S style でも 0 件なのに
+        CI (apt の 0.9.0) だけ SC2015 で落ちた。
+        """
+        bodies = "\n".join(p.read_text() for p in workflow_files())
+        if "shellcheck" not in bodies:
+            self.skipTest("shellcheck の job が無い")
+        self.assertNotIn(
+            "apt-get install -y shellcheck", bodies,
+            "apt の版は Ubuntu のリリースに紐づくので手元と食い違う",
+        )
+        self.assertRegex(
+            bodies, r"SHELLCHECK_VERSION:\s*v\d+\.\d+\.\d+",
+            "shellcheck の版が固定されていない",
+        )
+
     def test_the_linter_gets_the_collections_it_needs(self):
         """osx_defaults / homebrew_cask は community.general にある。
 

@@ -59,8 +59,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # apt の版は Ubuntu のリリースに紐づく (noble は 0.9.0) ので、手元 (Homebrew の
+      # 最新) と食い違う。実際この job を足したとき、手元では -S style でも 0 件なのに
+      # CI だけ SC2015 で落ちた。**手元で通れば CI でも通る**を保つために版を固定する。
+      # 更新は手で上げる (dependabot は action のバージョンしか見ない)
       - name: shellcheck を入れる
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C "$tmp"
+          sudo install "$tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
 
       - name: 対象が 1 本以上あることを確かめる
         # 対象ゼロでも shellcheck は成功するので、拾い漏れをここで落とす
