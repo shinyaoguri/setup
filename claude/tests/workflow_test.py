@@ -63,6 +63,18 @@ class DeclaredChecksActuallyRunTest(unittest.TestCase):
         ran = any("ansible-lint" in p.read_text() for p in workflow_files())
         self.assertTrue(ran, ".ansible-lint を流す job が CI に無い")
 
+    def test_shellcheck_has_a_runner(self):
+        """bash スクリプトは手元で流すしかなく、指摘が溜まっても気付けなかった。"""
+        bodies = "\n".join(p.read_text() for p in workflow_files())
+        self.assertIn("shellcheck", bodies, "shellcheck を流す job が CI に無い")
+
+    def test_shellcheck_targets_are_discovered(self):
+        """対象を一覧で並べない。足した人が忘れた瞬間に検査から外れる。"""
+        bodies = "\n".join(p.read_text() for p in workflow_files())
+        if "shellcheck" not in bodies:
+            self.skipTest("shellcheck の job が無い")
+        self.assertIn("find claude bin", bodies, "対象を find で拾っていない")
+
     def test_the_linter_gets_the_collections_it_needs(self):
         """osx_defaults / homebrew_cask は community.general にある。
 

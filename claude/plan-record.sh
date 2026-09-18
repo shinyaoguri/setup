@@ -247,7 +247,12 @@ EOF
 
   cwd=$(printf '%s' "$payload" | jq -r '.cwd // ""')
   session=$(printf '%s' "$payload" | jq -r '.session_id // "nosession"')
-  [ -n "$cwd" ] && cd "$cwd" 2>/dev/null
+  # cd に失敗したら黙って通す。呼び出し元のディレクトリのまま下の git rev-parse を
+  # 走らせると、**別のリポジトリ**の branch / root で投稿先を決めてしまう (SC2164)
+  if [ -n "$cwd" ] && ! cd "$cwd" 2>/dev/null; then
+    debug "cwd へ移動できない (cwd=$cwd)"
+    exit 0
+  fi
 
   # git リポジトリの外で立てたプランには投稿先が無い。黙って通す
   if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then

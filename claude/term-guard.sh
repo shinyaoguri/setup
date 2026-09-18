@@ -380,6 +380,9 @@ for rules in "$RULES_DIR"/*.rules; do
       ;;
     path)
       if [ -z "$target_slug" ]; then
+        # ここの "~" は **case のパターン**で、展開させたくない (展開すると
+        # ルール側が書いた ~ と照合できない)。直後に $HOME へ置き換えている
+        # shellcheck disable=SC2088
         case "$val" in "~" | "~/"*) val="$HOME${val#"~"}" ;; esac
         case "$cwd" in "$val" | "$val"/*) applicable=true ;; esac
       fi

@@ -50,3 +50,21 @@ jobs:
 
       - name: ansible-lint
         run: ansible-lint
+
+  # bash スクリプトは手元で流すしかなく、指摘が溜まっても気付けなかった (issue #179)。
+  # 対象を find で拾うのは、claude/ に .sh を足したときに取りこぼさないため
+  # (一覧を手で並べると、足した人が忘れた瞬間に検査から外れる)
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: shellcheck を入れる
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: 対象が 1 本以上あることを確かめる
+        # 対象ゼロでも shellcheck は成功するので、拾い漏れをここで落とす
+        run: test "$(find claude bin -name '*.sh' -o -name 'secret-read' | wc -l)" -gt 0
+
+      - name: shellcheck
+        run: find claude bin -name '*.sh' -o -name 'secret-read' | xargs shellcheck
