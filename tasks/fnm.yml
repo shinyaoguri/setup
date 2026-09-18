@@ -5,6 +5,8 @@
 - name: Check if any Node.js version is installed via fnm
   ansible.builtin.shell:
     cmd: |
+      # パイプの失敗を握り潰さない (ansible-lint risky-shell-pipe)
+      set -o pipefail
       eval "$(fnm env --shell zsh)"
       fnm list | grep -qE 'v[0-9]+'
     executable: /bin/zsh

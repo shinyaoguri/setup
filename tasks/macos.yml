@@ -18,7 +18,7 @@
 # 事前に消しておけば、後続タスクは current_value=None となり strict のまま通る。
 - name: Drop existing keys that have a mismatched type
   ansible.builtin.shell: |
-    set -eu
+    set -euo pipefail
     current=$(/usr/bin/defaults read-type "{{ item.domain }}" "{{ item.key }}" 2>/dev/null | sed 's/^Type is //') || exit 0
     if [ -n "$current" ] && [ "$current" != "{{ item.type }}" ]; then
       /usr/bin/defaults delete "{{ item.domain }}" "{{ item.key }}"
@@ -92,7 +92,12 @@
 # -u で自分のプロセスに絞るのは、送り先を名前だけで決めないという
 # claude/signal-guard.py と同じ理由 (setup#150)。Dock が動いていない状況
 # (ログイン直後など) では killall が rc=1 を返すので、そこだけ許す。
-- name: Restart the Dock so the new setting takes effect
+# ansible-lint は「changed のときに走るタスクは handler にすべき」と言う (no-handler)。
+# ここでは採らない — handler は play 側 (playbook_sillicon_mac.yml) の handlers: に
+# 置く必要があり、macOS の関心が playbook と tasks/macos.yml に割れる。
+# CLAUDE.md が構成として「tasks/*.yml は 1 ファイル 1 関心」を掲げているので、
+# lint の作法よりそちらを優先する (issue #179)。
+- name: Restart the Dock so the new setting takes effect  # noqa: no-handler
   ansible.builtin.command:
     cmd: /usr/bin/killall -u {{ ansible_facts['env']['USER'] }} Dock
   when: dock_autohide.changed

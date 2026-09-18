@@ -50,6 +50,30 @@ class LeastPrivilegeTest(unittest.TestCase):
                 )
 
 
+class DeclaredChecksActuallyRunTest(unittest.TestCase):
+    """設定ファイルを置いただけで流していない検査を作らない。
+
+    .ansible-lint は profile: production を宣言していたのに流す口がどこにも無く、
+    実際に流すと 8 件で落ちた。宣言と実際の検査が食い違うと、守れているつもりの
+    ものが守れていない (issue #179)。
+    """
+
+    def test_ansible_lint_config_has_a_runner(self):
+        self.assertTrue((REPO / ".ansible-lint").exists(), ".ansible-lint が無い")
+        ran = any("ansible-lint" in p.read_text() for p in workflow_files())
+        self.assertTrue(ran, ".ansible-lint を流す job が CI に無い")
+
+    def test_the_linter_gets_the_collections_it_needs(self):
+        """osx_defaults / homebrew_cask は community.general にある。
+
+        入れないと syntax-check[unknown-module] で落ち、本当の指摘が埋もれる。
+        """
+        bodies = "\n".join(p.read_text() for p in workflow_files())
+        if "ansible-lint" not in bodies:
+            self.skipTest("ansible-lint の job が無い")
+        self.assertIn("community.general", bodies)
+
+
 class ActionFreshnessTest(unittest.TestCase):
     """action のバージョンは自分では古びない。拾う仕組みが要る。"""
 

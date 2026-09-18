@@ -28,3 +28,25 @@ jobs:
 
       - name: claude/tests を流す
         run: python3 -m unittest discover -s claude/tests -p '*_test.py' -v
+
+  # .ansible-lint は profile: production を宣言していたが、流す口がどこにも無く
+  # 設定だけが残っていた (実際に流すと 8 件で落ちた)。宣言を実際の検査にする (issue #179)
+  ansible-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+
+      # osx_defaults / homebrew_cask は community.general にある。入れないと
+      # syntax-check[unknown-module] で落ち、本当の指摘が埋もれる
+      - name: ansible と collection を入れる
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install ansible-lint
+          ansible-galaxy collection install community.general
+
+      - name: ansible-lint
+        run: ansible-lint
