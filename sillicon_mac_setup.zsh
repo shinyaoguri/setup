@@ -367,7 +367,7 @@ else
 				--height=80% --border=rounded --layout=reverse \
 				--marker='◉ ' --pointer='▸' \
 				--header=$'App Store アプリ (未導入のみ)\n Tab で選択 / Enter で決定 / Esc で何も入れずに進む' \
-				--preview 'echo "App Store ID: {1}"; echo; echo "{2..}"' \
+				--preview 'printf "%s\n\nApp Store ID: %s\n" {2..} {1}' \
 				--preview-window=right:40%:wrap | awk '{print $1}')"} )
 		fi
 

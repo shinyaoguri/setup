@@ -11,6 +11,7 @@
 """
 
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -138,6 +139,37 @@ class NonInteractiveTest(unittest.TestCase):
         body = SCRIPT.read_text()
         self.assertIn("--with-optional", body)
         self.assertIn("--no-optional", body)
+
+
+class PreviewQuotingTest(unittest.TestCase):
+    """fzf は {N} を**シェル引用して**渡す (issue #191)。
+
+    文字列の中へ埋めると `App Store ID: '524141863'` のように引用符ごと表示される。
+    preview は「何なのか分からないものを確かめる」ための窓なので、そこに実装の都合が
+    漏れると読む側の負担になる。printf の引数として渡せば引用は剥がれる。
+    """
+
+    def preview_command(self, marker):
+        """スクリプトから --preview の中身を取り出す。"""
+        for line in SCRIPT.read_text().split("\n"):
+            if "--preview" in line and marker in line:
+                m = re.search(r"--preview '(.*)' *\\?$", line)
+                self.assertIsNotNone(m, f"--preview を読み取れない: {line}")
+                return m.group(1)
+        self.fail(f"{marker} を含む --preview が無い")
+
+    def test_appstore_preview_shows_no_quotes(self):
+        cmd = self.preview_command("App Store ID")
+        # fzf がするのと同じ引用をして実行する
+        cmd = cmd.replace("{2..}", "'RunCatNeo'").replace("{1}", "'6757801838'")
+        out = subprocess.run(
+            ["zsh", "-c", cmd], capture_output=True, text=True, check=True
+        ).stdout
+        self.assertIn("RunCatNeo", out)
+        self.assertIn("6757801838", out)
+        self.assertNotIn(
+            "'", out, "fzf の引用符が preview に漏れている (printf の引数へ渡す)"
+        )
 
 
 class FnmGuardTest(unittest.TestCase):
