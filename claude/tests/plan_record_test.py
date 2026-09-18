@@ -358,7 +358,11 @@ class PlanRecordTestCase(unittest.TestCase):
         self.git("checkout", "-q", "-b", "worktree-bridge-cse_0127aTN6krq7fqrr56rh6gbc")
         result = self.capture("名乗りの無い計画。\n", FAKE_GH_ISSUE="127")
         self.assertIn("まだありません", result.stderr)
-        self.assertNotIn("127", result.stderr)
+        # 見るのは「番号を投稿先として拾ったか」。素の "127" で見ると、記録ファイル名に
+        # 入るエポックがその並びを含むだけで落ちる — 実際に epoch 1789641274 で落ちた。
+        # 時計の値で赤くなるテストは、壊れていないものを壊れたと言う
+        self.assertNotIn("gh issue comment 127", result.stderr)
+        self.assertNotIn("gh pr comment 127", result.stderr)
 
     def test_capture_still_reads_a_delimited_number_from_the_branch_name(self):
         # 区切りに接した数字は従来どおり拾う (推定の親切さを落とさない)
