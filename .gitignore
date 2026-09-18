@@ -39,3 +39,16 @@ Temporary Items
 ### Python ###
 # unittest discover が claude/tests/ に残すバイトコード
 __pycache__/
+
+### 秘密とマシンローカルの設定 ###
+# グローバル CLAUDE.md は「秘密情報の置き場は gitignore 済みの .env などに限る」と
+# 定め、git-safety-guard.sh はこの gitignore が効いていることを一次防御として前提に
+# している (deny の理由も「.gitignore に追加する」から始まる)。
+# ここに無いと、その前提が新しいマシンで再現しない — settings.local.json を無視して
+# いたのはマシン側の ~/.config/git/ignore で、それを配る記述はどこにも無かった (#178)
+.env
+.env.*
+# 雛形は追跡する (値ではなく変数名だけを置く場所)
+!.env.example
+# マシンごとに違う許可。コミットすると他マシンの挙動を汚す
+.claude/settings.local.json
