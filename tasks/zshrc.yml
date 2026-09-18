@@ -54,6 +54,8 @@
 - name: Check whether the Claude desktop app predates the current zshenv
   ansible.builtin.shell:
     cmd: |
+      # パイプの失敗を握り潰さない (ansible-lint risky-shell-pipe)
+      set -o pipefail
       # pgrep からはアプリ本体が見えないことがある (実測) ので ps の実行ファイル名で探す
       pid=$(ps -axo pid=,comm= | awk '/\/Claude\.app\/Contents\/MacOS\/Claude$/ { print $1; exit }')
       [ -n "$pid" ] || exit 0
