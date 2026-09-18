@@ -8,10 +8,13 @@ macOS の環境構築 (Ansible) と、Claude Code のグローバル設定の実
 
 - `setup.zsh` — ワンライナーの入口。`-l` でローカルモード (クローン済みの場合)
 - `sillicon_mac_setup.zsh` — 前段。Xcode CLT / Homebrew / Ansible / Cask / mas を入れる。
-  Cask と App Store は interactive TTY が要るため Ansible の外で先に済ませている
+  Cask と App Store は interactive TTY が要るため Ansible の外で先に済ませている。
+  optional の選択 (fzf) もここ。`--with-optional` / `--no-optional` で選択を省ける
 - `playbook_sillicon_mac.yml` — `tasks/*.yml` を tag 付きで import するだけ
 - `tasks/*.yml` — 1 ファイル 1 関心。tag 名はファイル名と同じ (`tasks/claude.yml` → `--tags claude`)
-- `vars/packages.yml` — インストール対象のパッケージ一覧
+- `vars/packages.yml` — インストール対象のパッケージ一覧。`*_required` は無条件に入れる土台
+  (無いと playbook か鍵まわりが成立しないもの)、`*_optional` は `sillicon_mac_setup.zsh` が
+  fzf で選ばせるもの。required へ足すのは「無いと壊れる」ことを言えるときだけ
 - `claude/` — Claude Code のグローバル設定の実体。`tasks/claude.yml` が `~/.claude/` へ symlink する
 - `zshrc` — `~/.zshrc` の実体
 - `.github/workflows/test.yml` — `claude/tests/` を macOS runner で流す唯一の CI

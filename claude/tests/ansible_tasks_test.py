@@ -191,7 +191,11 @@ class DeclaredDependencyTest(unittest.TestCase):
         self.claude_task = without_comments(TASKS / "claude.yml")
 
     def test_claude_code_is_declared(self):
-        """tasks/claude.yml が `claude mcp add` を打つ。"""
+        """tasks/claude.yml が `claude mcp add` を打つ。
+
+        required 側にあることは bootstrap_selection_test が見る (optional へ落ちると
+        選ばなかったマシンで Step 6 が失敗するため)。
+        """
         self.assertIn("claude mcp add", self.claude_task)
         self.assertIn("- claude-code", self.packages)
 
@@ -200,7 +204,11 @@ class DeclaredDependencyTest(unittest.TestCase):
         self.assertIn("- mas", self.packages)
 
     def test_runcat_is_declared(self):
-        """tasks/claude.yml が seed する Custom Metrics カードの受け手。"""
+        """tasks/claude.yml が seed する Custom Metrics カードの受け手。
+
+        必須ではない (seed はカードの JSON を書くだけで、RunCat が入っていなくても
+        失敗しない。issue #191) が、台帳からは消さない。
+        """
         self.assertIn("runcat-metrics.py --seed", self.claude_task)
         self.assertIn("RunCatNeo", self.packages)
 
