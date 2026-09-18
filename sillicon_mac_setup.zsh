@@ -371,6 +371,9 @@ else
 				--preview-window=right:40%:wrap | awk '{print $1}')"} )
 		fi
 
+		if (( ${#MAS_SELECTED[@]} == 0 )) && [[ "$OPTIONAL_MODE" != none ]]; then
+			echo "   ℹ️  App Store アプリは選ばれませんでした"
+		fi
 		for app_id in "${MAS_SELECTED[@]}"; do
 			[[ -z "$app_id" ]] && continue
 			echo "   → $app_id をインストール中..."
