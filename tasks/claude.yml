@@ -65,6 +65,28 @@
 # repo-standards.json はリポジトリ標準チェックリストの正本。消費者は claude-plugins の
 # repo-standards プラグイン (~/.claude/repo-standards.json 経由で読む)。
 # テストは claude/tests/repo_standards_test.py
+# **worktree から流した playbook に symlink を張らせない** (issue #209)。
+#
+# 下の symlink は先を playbook_dir から組む。worktree (.claude/worktrees/*) から流すと
+# ~/ 配下のリンクが worktree を指し、worktree が掃除された時点で全部切れる。フックと
+# autoMode は fail-open なので、切れた状態では安全装置が無音で全部外れる。このリポジトリの
+# 開発は worktree で行うのが常で、「確かめるために流す」で踏みうる。
+#
+# 本体の場所を引いてそちらを指す手もあるが、採らない — 「worktree で直したのに反映
+# されない」という別の驚きになる。worktree の内容を配備したい場面は無いので、止めて
+# 本体から流す手順を出す。HOME を一時ディレクトリへ向けた結合テストのように、分かった
+# うえで流すときは -e allow_worktree_source=true。
+- name: Refuse to link from a git worktree (~/.claude)
+  ansible.builtin.assert:
+    that: >-
+      '/.claude/worktrees/' not in playbook_dir
+      or (allow_worktree_source | default(false) | bool)
+    fail_msg: >-
+      この playbook は git worktree ({{ playbook_dir }}) から流されています。ここで張る
+      symlink は worktree を指し、worktree が消えると全部切れます (setup#209)。
+      変更を main へ入れてから、本体の checkout (~/.setup) で流してください。
+    quiet: true
+
 - name: Define Claude global config files
   ansible.builtin.set_fact:
     claude_config_files:

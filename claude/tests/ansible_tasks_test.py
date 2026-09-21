@@ -362,6 +362,75 @@ class NodeVersionTest(unittest.TestCase):
         self.assertNotIn("--latest", self.body)
 
 
+class WorktreeSourceTest(unittest.TestCase):
+    """worktree から流した playbook に、~/ 配下の symlink を張らせない (issue #209)。
+
+    tasks/claude.yml と tasks/zshrc.yml は symlink の先を playbook_dir から組む。worktree
+    (.claude/worktrees/*) から流すと ~/.claude/* と ~/.zshrc が worktree を指し、worktree が
+    掃除された時点でリンクが全部切れる。フックと autoMode は fail-open なので、切れた状態では
+    **安全装置が無音で全部外れる**。このリポジトリの開発は worktree で行うのが常で、
+    「確かめるために --tags claude を流す」で踏みうる。
+    """
+
+    LINKING = ("claude.yml", "zshrc.yml")
+
+    def test_the_guard_comes_before_any_symlink(self):
+        """ansible が無い環境 (CI) でも見られる形の検査。"""
+        for name in self.LINKING:
+            with self.subTest(name):
+                body = without_comments(TASKS / name)
+                self.assertIn("state: link", body, "この検査の前提 (symlink を張る) が変わった")
+                guard = body.find("/.claude/worktrees/")
+                self.assertNotEqual(guard, -1, "worktree からの実行を止める検査が無い")
+                first_task = body.index("- name:")
+                self.assertLess(
+                    body.index("ansible.builtin.assert"), body.index("- name:", first_task + 1),
+                    "検査が先頭のタスクになっていない (止まる前に何かが適用される)",
+                )
+
+    def run_from(self, checkout, *extra):
+        home = Path(self.workdir.name) / "home"
+        home.mkdir(exist_ok=True)
+        result = subprocess.run(
+            ["ansible-playbook", "-i", "localhost,", str(checkout / "playbook_sillicon_mac.yml"),
+             "--tags", "zshrc", "--check", *extra],
+            capture_output=True, text=True, timeout=300, cwd=checkout,
+            env=clean_env(HOME=str(home), XDG_CONFIG_HOME=None, ANSIBLE_NOCOLOR="1"),
+        )
+        return result
+
+    def copy_repo_to(self, destination):
+        repo = TASKS.parent
+        shutil.copytree(
+            repo, destination,
+            ignore=shutil.ignore_patterns(".git", ".claude", "__pycache__"),
+        )
+        return destination
+
+    def test_running_from_a_worktree_is_refused(self):
+        """--check で流す (oh-my-zsh の取得を走らせないため)。assert は check でも評価される。"""
+        if shutil.which("ansible-playbook") is None:
+            self.skipTest("ansible が無い環境")
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+        root = Path(self.workdir.name)
+
+        plain = self.copy_repo_to(root / "plain" / "setup")
+        worktree = self.copy_repo_to(root / "main" / ".claude" / "worktrees" / "some-task")
+
+        # 対照。worktree でなければ通る (下の失敗が別の理由でないこと)
+        ok = self.run_from(plain)
+        self.assertEqual(ok.returncode, 0, ok.stdout[-2000:] + ok.stderr[-500:])
+
+        refused = self.run_from(worktree)
+        self.assertNotEqual(refused.returncode, 0, "worktree からの実行が通った")
+        self.assertIn("worktree", refused.stdout)
+
+        # 分かったうえで流す口 (HOME を一時ディレクトリへ向けた結合テストなど)
+        forced = self.run_from(worktree, "-e", "allow_worktree_source=true")
+        self.assertEqual(forced.returncode, 0, forced.stdout[-2000:])
+
+
 class TaskTagNamingTest(unittest.TestCase):
     """CLAUDE.md の「tag 名はファイル名と同じ」を守る。
 
