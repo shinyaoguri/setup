@@ -161,7 +161,12 @@
     if [ "$state" = same ]; then
       exit 0
     fi
-    /usr/bin/defaults -currentHost write -g "$key" '<array>{% for m in macos_modifier_mapping %}<dict><key>HIDKeyboardModifierMappingSrc</key><integer>{{ m.src }}</integer><key>HIDKeyboardModifierMappingDst</key><integer>{{ m.dst }}</integer></dict>{% endfor %}</array>'
+    xml='<array>'
+    {% for m in macos_modifier_mapping %}
+    xml="$xml<dict><key>HIDKeyboardModifierMappingSrc</key><integer>{{ m.src }}</integer>"
+    xml="$xml<key>HIDKeyboardModifierMappingDst</key><integer>{{ m.dst }}</integer></dict>"
+    {% endfor %}
+    /usr/bin/defaults -currentHost write -g "$key" "$xml</array>"
     echo changed
   register: macos_modifier_remap
   changed_when: "'changed' in macos_modifier_remap.stdout"
