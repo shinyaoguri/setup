@@ -5,6 +5,11 @@
 # tasks/ssh.yml の冒頭コメントが正本 (Secretive の GUI 操作と GitHub への鍵登録)。
 # 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
 #
+# **署名の設定が入るのは bin/ssh-key-check --local が通ったときだけ。** 鍵があるかどうか
+# ではなく、その鍵で**承認を求められずに署名できたか**まで見る (issue #273)。要件を満たさない
+# 鍵で commit.gpgsign=true にすると以後のコミットが全部失敗し、症状 (「コミットできない」)
+# が原因 (「鍵タイプが ML-DSA」「Require Authentication が付いたまま」) から最も遠い形で出る。
+#
 # 1Password は SSH agent としては使わない (承認がプロセスツリー単位で 60 秒失効し、
 # 無人セッションが承認待ちで止まるため: shinyaoguri/setup#91)。秘密の保管庫としては
 # 引き続き使う (bin/secret-read)。
@@ -105,57 +110,87 @@
     value: '!git stale | while read -r branch; do git branch -d "$branch"; done'
     scope: global
 
-- name: Read the Secure Enclave public key that Secretive wrote out
-  # Secretive は作った鍵の公開鍵を PublicKeys/ に書き出す。agent (SecretAgent) が
-  # 止まっていても読めるので、ssh-add -L ではなくこのファイルを正とする。
-  # 鍵は 1 本だけ作る運用なので head -1 で足りる
-  ansible.builtin.shell:
-    cmd: >-
-      set -o pipefail &&
-      cat "$HOME"/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/PublicKeys/*.pub
-      | head -1
-    executable: /bin/zsh
-  register: ssh_pubkey
+- name: Check the Secure Enclave key is usable for signing
+  # 4 つの完了条件のうち、ネットワーク無しで分かるもの (鍵が 1 本に決まるか・SecretAgent が
+  # 常駐しているか・鍵タイプ・承認を求められずに署名できるか) を見る。GitHub への登録は
+  # 下で別に見る — ローカルで署名に使えるかと、登録済みかは別の話だから。
+  #
+  # **PATH には頼らない。** bin/ を PATH へ通すのは zshenv で、それを symlink する
+  # tasks/zshrc.yml はこのファイルより後ろ。新しいマシンの初回実行ではまだ PATH に居ない。
+  ansible.builtin.command:
+    cmd: "{{ playbook_dir }}/bin/ssh-key-check --local"
+  register: ssh_key_local
   failed_when: false
   changed_when: false
   check_mode: false # 読み取るだけなので --check でも実行する (でないと後続が空で落ちる)
 
-- name: Decide whether the signing key is available
+- name: Decide whether the signing key is usable
+  # rc 0 だけを通す。1 (壊れている) はもちろん **2 (確かめられなかった) も通さない** —
+  # 署名できると証明できていない鍵を有効化する理由が無く、外したときの壊れ方は
+  # 鍵が無いのに有効化したときと同じ (以後のコミットが全部落ちる)
   ansible.builtin.set_fact:
-    git_signing_key_available: "{{ ssh_pubkey.rc == 0 and ssh_pubkey.stdout != '' }}"
+    git_signing_key_usable: "{{ ssh_key_local.rc == 0 }}"
 
-# **鍵が無いことは、全体実行では失敗ではない。** 新しいマシンでは Secretive が同じ実行の
+- name: Read the public key that ssh-key-check selected
+  # **検査した鍵と、ここで書き出す鍵を同じにする。** 選び方の定義が 2 箇所にあると、
+  # 検査器が別の鍵を見て緑になる。以前はここが `cat PublicKeys/*.pub | head -1` で、
+  # 鍵が 2 本あるとファイル名順で任意の 1 本を拾っていた (今は 2 本ある時点で ng)
+  ansible.builtin.command:
+    cmd: "{{ playbook_dir }}/bin/ssh-key-check --print-key"
+  register: ssh_pubkey
+  when: git_signing_key_usable
+  changed_when: false
+  check_mode: false
+
+- name: Check the key is registered on GitHub
+  # ネットワークと gh の認証に依存するので、**失敗しても playbook を壊さない**
+  # (検査器の側で上限を掛けてあり、繋がらなければ「判定不能」に倒れる)
+  ansible.builtin.command:
+    cmd: "{{ playbook_dir }}/bin/ssh-key-check --github"
+  register: ssh_key_github
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+# **鍵が使えないことは、全体実行では失敗ではない。** 新しいマシンでは Secretive が同じ実行の
 # 中で入ったばかりで、鍵を作るのは GUI 操作 — 初回は必ず鍵が無い。ここで止めると
 # playbook は順序で後ろにある fonts / terminal / zshrc / claude / fnm を一切適用せず、
 # bootstrap も set -e で Step 7 と最後の案内へ届かない (issue #196)。
 # tasks/fnm.yml が fnm の不在を skip にしたのと同じ考え方で、署名の設定だけを飛ばす。
 #
 # **名指しで流されたとき (`--tags git`) は今までどおり止める。** README の手順 3 が
-# 「鍵を作ったら --tags ssh,git」と案内している、その実行で鍵が無いなら本当に失敗で
+# 「鍵を作ったら --tags ssh,git」と案内している、その実行で鍵が使えないなら本当に失敗で
 # ある。ここまで skip にすると署名が未適用のまま緑で終わる (1Password 版がそうなっていた)。
-- name: Fail if Secretive has no key yet
+#
+# どちらの側にも**検査器の出力をそのまま載せる**。「鍵が無い」しか言えなかった頃の固定文は、
+# 鍵が在って壊れている場合 (鍵タイプ・承認要求・2 本ある) に何の役にも立たなかった。
+# **一覧は debug で、判断は fail で。** ansible は msg の改行を \n のまま 1 行に詰めて出す
+# ので、検査器の出力を fail の本文に埋めると読めなくなる。stdout_lines を渡せば行ごとに並ぶ
+- name: Show which requirement the Secure Enclave key is missing
+  ansible.builtin.debug:
+    msg: "{{ ssh_key_local.stdout_lines }}"
+  when: not git_signing_key_usable
+
+- name: Fail if the Secure Enclave key is not usable
   ansible.builtin.fail:
-    msg: |
-      Secretive から公開鍵を取得できませんでした。
-      Secretive の手動セットアップを完了してから再実行してください (手順は tasks/ssh.yml の冒頭):
-        1. Secretive.app を起動し、SecretAgent の常駐を許可する
-        2. 「+」で鍵を 1 本作る (鍵タイプは ECDSA P-256 / "Require Authentication" は外す)
-        3. 公開鍵を GitHub に authentication key と signing key の両方で登録する
-      完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+    msg: >-
+      Secure Enclave の鍵がコミット署名に使える状態ではありません (上の一覧を参照)。
+      手順は tasks/ssh.yml の冒頭コメント。直したら:
+      ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
   when:
-    - not git_signing_key_available
+    - not git_signing_key_usable
     - "'git' in ansible_run_tags"
 
 - name: Tell what is left when commit signing was skipped
   ansible.builtin.debug:
     msg: >-
-      Secretive に鍵がまだ無いので、コミット署名の設定だけを飛ばしました (他の設定は適用済み)。
-      Secretive で鍵を作って GitHub に登録したら (手順は tasks/ssh.yml の冒頭)、
-      次を流してください: ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
-  when: not git_signing_key_available
+      Secure Enclave の鍵がまだ使えないので、コミット署名の設定だけを飛ばしました
+      (他の設定は適用済み)。直したら:
+      ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+  when: not git_signing_key_usable
 
 - name: Configure SSH commit signing
-  when: git_signing_key_available
+  when: git_signing_key_usable
   block:
     - name: Ensure ~/.ssh exists
       ansible.builtin.file:
@@ -223,3 +258,23 @@
         name: tag.gpgsign
         value: "true"
         scope: global
+
+# **ここは署名設定より後ろに置く。** GitHub への登録はローカルで署名できることの前提では
+# ないので、未登録で止めると「ローカルの要件は満たしているのに署名が入らない」になる。
+# 「登録されていない」と言い切れたときだけ失敗にする。gh のスコープ不足や
+# ネットワーク断は検査器が「判定不能」(rc 2) に倒すので、ここには来ない
+- name: Show what the GitHub side says
+  # 判定不能 (gh が無い・未認証・スコープ不足・オフライン) もここに出す。黙らせると
+  # 「毎回聞きに行っているのに毎回何も見ていない」になる
+  ansible.builtin.debug:
+    msg: "{{ ssh_key_github.stdout_lines }}"
+  when: ssh_key_github.rc | default(0) != 0
+
+- name: Fail if the key is not registered on GitHub
+  ansible.builtin.fail:
+    msg: >-
+      Secure Enclave の鍵が GitHub に登録されていません (上の一覧を参照)。
+      手順は tasks/ssh.yml の冒頭コメント
+  when:
+    - ssh_key_github.rc | default(0) == 1
+    - "'git' in ansible_run_tags"

@@ -1,0 +1,470 @@
+#!/usr/bin/env bash
+# Secretive (Secure Enclave) の手動セットアップが本当に完了しているかを見る。
+#
+# なぜ要るか: 完了条件は 4 つ (agent の常駐・鍵タイプ ECDSA P-256・"Require
+# Authentication" を外す・GitHub へ authentication key と signing key の両方で登録) ある
+# のに、機械が見ていたのは「公開鍵ファイルが 1 本でもあるか」だけだった。残りはどれも
+# 未検査で、**壊れていても playbook は緑で通る**。症状は後から、原因から最も遠い形で出る:
+# 無人セッションが承認待ちで無言に止まる / 署名が理由不明に落ちる / push だけが通らない。
+# 手順の正本は tasks/ssh.yml の冒頭コメント、経緯は issue #273。
+#
+# 使い方:
+#   ssh-key-check              4 つ全部を見る (人が打つ形)
+#   ssh-key-check --local      このマシンの中だけで分かること (ネットワーク不要)
+#   ssh-key-check --github     GitHub に聞かないと分からないこと
+#   ssh-key-check --print-key  署名に使う公開鍵の 1 行だけを stdout へ
+#
+# 終了コード: 0 = 全部 ok / 1 = ng あり / 2 = ng は無いが判定できなかったものがある /
+# 64 = 使い方の誤り。**「壊れている」と「確かめられなかった」を分ける**のは、呼び出し側
+# ごとに扱いが違うから — tasks/git.yml は --local の 2 を「署名を入れてはいけない」側に
+# 倒し (できると証明できていない鍵に commit.gpgsign=true を付けると以後のコミットが全部
+# 落ちる)、--github の 2 は案内に留める (gh の都合であってマシンの状態ではない)。
+# 倒し方をこちらに焼くと、どちらかの呼び出し側で必ず間違う。die が 64 (EX_USAGE) なのは、
+# フラグの打ち間違いが「鍵が壊れている」と読まれて署名設定が黙って飛ぶのを防ぐため。
+#
+# "Require Authentication" の判定について: Secretive のコンテナに設定値は無く、Secure
+# Enclave の access control も読めないので、**実際に署名させてみる以外に知る方法が無い**。
+# 正しい状態では一度もプロンプトが出ない (実測 0.08 秒) ので、コストを払うのは壊れている
+# ときだけ。ただし **Secretive 側の認証には持続があり、直前に別の用事で認証していると
+# その内側では見逃しうる** — だから ok の文面は状態ではなく観測を書く。
+# 常時走る場所 (zshenv・Claude の hook) には置かない。走るのは人が打つときと、
+# --tags git を含む playbook の実行だけ。
+#
+# 契約: --print-key だけが stdout に値を出す。他は診断の行しか出さない。
+# 呼び出し口は tasks/git.yml (署名設定の可否) と README 手順 10 (人が確かめる)。
+# テストは claude/tests/ssh_key_check_test.py (ssh-add / gh を PATH で偽物に差し替える)。
+# 差し替え口: SSH_KEY_CHECK_LIMIT (署名 probe を諦めるまでの秒数)
+#             SSH_KEY_CHECK_FAST (承認を求められていないと見なす上限ミリ秒。2000 で頭打ち)
+#             SSH_KEY_CHECK_GH_LIMIT (gh を諦めるまでの秒数)
+# 頭打ちにするのは、外から大きくできると Require Authentication が付いたままでも ok に
+# なり、**検査を無効化するスイッチ**になるため (secret-read の issue #214 と同じ理由)。
+
+set -euo pipefail
+
+readonly SECRETIVE_DATA="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"
+readonly PUBLIC_KEYS="$SECRETIVE_DATA/PublicKeys"
+
+# **環境の SSH_AUTH_SOCK は見ない。** ansible の command モジュールは zshenv を読まないし、
+# SSH 越しに入っているときは zshenv が転送された agent を指したままにする (それが正しい)。
+# 環境を信じると **別の agent を検査して緑になる**ので、ここは自分で組み立てる。
+readonly AGENT_SOCK="$SECRETIVE_DATA/socket.ssh"
+
+# OpenSSH も GitHub も対応している唯一の Secure Enclave 鍵。macOS 26 の Secretive は
+# ML-DSA-65 も作れるが、選ぶと署名が理由不明に落ちる (tasks/ssh.yml 冒頭)
+readonly WANT_KEY_TYPE='ecdsa-sha2-nistp256'
+
+die() {
+  printf 'ssh-key-check: %s\n' "$1" >&2
+  exit 64
+}
+
+# 環境変数の数値。壊れた値でも止めず既定へ倒す (secret-read の numeric_env と同じ方針だが、
+# こちらは名前が固定の 3 つだけなので eval を使わずに済ませる)
+positive_int() {
+  local value="$1" fallback="$2"
+  case "$value" in
+  '' | *[!0-9]*)
+    printf '%s' "$fallback"
+    ;;
+  *)
+    if [ "$value" -gt 0 ]; then
+      printf '%s' "$value"
+    else
+      printf '%s' "$fallback"
+    fi
+    ;;
+  esac
+}
+
+PROBE_LIMIT=$(positive_int "${SSH_KEY_CHECK_LIMIT:-}" 5)
+readonly PROBE_LIMIT
+
+FAST_MS=$(positive_int "${SSH_KEY_CHECK_FAST:-}" 1000)
+[ "$FAST_MS" -le 2000 ] || FAST_MS=2000
+readonly FAST_MS
+
+# gh を諦めるまでの秒数。captive portal 下で playbook が止まらないための上限。
+# ここは頭打ちを置かない — 大きくしても判定不能に倒れるだけで、検査は緩まないため
+GH_LIMIT=$(positive_int "${SSH_KEY_CHECK_GH_LIMIT:-}" 10)
+readonly GH_LIMIT
+
+usage() {
+  cat <<'EOF'
+ssh-key-check — Secretive (Secure Enclave) のセットアップが完了しているか見る
+
+  ssh-key-check              4 つ全部を見る
+  ssh-key-check --local      このマシンの中だけで分かること (ネットワーク不要)
+  ssh-key-check --github     GitHub に聞かないと分からないこと
+  ssh-key-check --print-key  署名に使う公開鍵の 1 行だけを stdout へ
+
+見るのは tasks/ssh.yml 冒頭の手動セットアップが済んでいるか:
+SecretAgent の常駐 / 鍵タイプ ECDSA P-256 / "Require Authentication" を外してあるか /
+GitHub に authentication key と signing key の両方で登録してあるか。
+
+終了コード: 0 = 全部 ok、1 = ng あり、2 = 判定できなかったものがある、64 = 使い方の誤り。
+EOF
+}
+
+OK_COUNT=0
+NG_COUNT=0
+UNKNOWN_COUNT=0
+
+# 診断の 1 行。ng と判定不能には **そのまま打てる次の手**を添える — この問題の本質は
+# 症状が原因から遠いことなので、症状名だけ出しても受け取った側は動けない
+report() { # $1=ok|ng|unknown  $2=ラベル  $3=状態  $4=次の手 (任意)
+  case "$1" in
+  ok) OK_COUNT=$((OK_COUNT + 1)) ;;
+  ng) NG_COUNT=$((NG_COUNT + 1)) ;;
+  unknown) UNKNOWN_COUNT=$((UNKNOWN_COUNT + 1)) ;;
+  esac
+  printf '  %s — %s\n' "$2" "$3"
+  [ -z "${4:-}" ] || printf '      %s\n' "$4"
+}
+
+WORK_DIR=''
+cleanup() { [ -z "$WORK_DIR" ] || rm -rf "$WORK_DIR"; }
+trap cleanup EXIT
+
+ensure_work_dir() {
+  [ -n "$WORK_DIR" ] && return 0
+  WORK_DIR=$(mktemp -d -t ssh-key-check) || die '一時ディレクトリを作れない'
+}
+
+now_ms() {
+  perl -MTime::HiRes -e 'printf "%d", Time::HiRes::time() * 1000'
+}
+
+# 人が読む行では HOME を ~ に畳む。ここに出るパスは Secretive のコンテナの下で、
+# 畳まないと 1 行が折り返して肝心の状態が読めなくなる (打てる形のままなのは変わらない)
+tilde() {
+  # 置換の綴りをそのまま書くと \~ が残る。チルダは変数越しに渡す
+  local home_mark='~'
+  printf '%s' "${1/#$HOME/$home_mark}"
+}
+
+humanize_ms() {
+  printf '%d.%02d 秒' $(($1 / 1000)) $((($1 % 1000) / 10))
+}
+
+# コマンドを上限付きで流す。結果は BOUNDED_* に入れて、戻り値はコマンド自身の終了コード。
+#
+# **時間切れを 128+SIGTERM から読まない。** 殺したのは番兵なので、番兵自身に印を残させて
+# それを見る。alarm(2) で済ませないのも同じ筋で、SIGALRM に素直に死ぬ実装だけを相手に
+# すると、テストの偽コマンドが本物より弱くなる (secret-read が実際に踏んだ穴: 偽 op は
+# SIGALRM で死ぬので、本物の Go 製 op には効かない実装が緑になっていた)。
+BOUNDED_OUT=''
+BOUNDED_ERR=''
+BOUNDED_TIMED_OUT=0
+ELAPSED_MS=0
+run_bounded() { # $1=上限秒  $2...=コマンド
+  local limit="$1" started rc=0 killed
+  shift
+  ensure_work_dir
+  BOUNDED_OUT="$WORK_DIR/out"
+  BOUNDED_ERR="$WORK_DIR/err"
+  killed="$WORK_DIR/killed"
+  : >"$BOUNDED_OUT"
+  : >"$BOUNDED_ERR"
+  : >"$killed"
+
+  started=$(now_ms)
+  (
+    "$@" >"$BOUNDED_OUT" 2>"$BOUNDED_ERR" &
+    cmd_pid=$!
+    (
+      sleep "$limit"
+      printf 'killed' >"$killed"
+      kill -TERM "$cmd_pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$cmd_pid" 2>/dev/null || true
+    ) >/dev/null 2>&1 &
+    sentinel_pid=$!
+    if wait "$cmd_pid"; then cmd_rc=0; else cmd_rc=$?; fi
+    kill "$sentinel_pid" 2>/dev/null || true
+    exit "$cmd_rc"
+  ) || rc=$?
+  ELAPSED_MS=$(($(now_ms) - started))
+
+  if [ -s "$killed" ]; then
+    BOUNDED_TIMED_OUT=1
+    return 124
+  fi
+  BOUNDED_TIMED_OUT=0
+  return "$rc"
+}
+
+# 公開鍵の比較に使う形。GitHub は登録時のコメントを落として返すことがあるので、
+# 第 1・2 フィールド (種別と本体) だけを見る
+key_fields() {
+  awk 'NR == 1 { print $1 " " $2 }' "$1"
+}
+
+# --- C0: 署名に使う鍵を決める -------------------------------------------------
+#
+# **ここで決めた 1 本を、この後の検査も tasks/git.yml も使う** (--print-key)。
+# 「ansible が使う鍵」と「検査器が見る鍵」の定義が 2 箇所にあると、検査器が別の鍵を見て
+# 緑になる。以前の `cat *.pub | head -1` は鍵が 2 本あるとファイル名順で任意の 1 本を拾っていた。
+SELECTED_KEY=''
+KEY_COUNT=0
+select_key() {
+  local f
+  SELECTED_KEY=''
+  KEY_COUNT=0
+  [ -d "$PUBLIC_KEYS" ] || return 1
+  for f in "$PUBLIC_KEYS"/*.pub; do
+    # glob が何にも当たらないと綴りがそのまま来る
+    [ -f "$f" ] || continue
+    KEY_COUNT=$((KEY_COUNT + 1))
+    SELECTED_KEY="$f"
+  done
+  [ "$KEY_COUNT" -eq 1 ] || {
+    SELECTED_KEY=''
+    return 1
+  }
+  [ -s "$SELECTED_KEY" ] || {
+    SELECTED_KEY=''
+    return 1
+  }
+  return 0
+}
+
+check_key_selection() {
+  if [ "$KEY_COUNT" -eq 0 ]; then
+    report ng '公開鍵' "$(tilde "$PUBLIC_KEYS") に .pub が無い" \
+      'Secretive.app の「+」で鍵を 1 本作る (ECDSA P-256 / "Require Authentication" は外す)'
+    return
+  fi
+  if [ -z "$SELECTED_KEY" ]; then
+    report ng '公開鍵' "$KEY_COUNT 本ある (どれで署名するか決まらない)" \
+      '鍵は 1 本だけ作る運用。古いマシンの残りなら Secretive で消す'
+    return
+  fi
+  report ok '公開鍵' "$(basename "$SELECTED_KEY")"
+}
+
+# --- C1: SecretAgent が常駐しているか ----------------------------------------
+AGENT_OK=0
+check_agent() {
+  local rc=0
+  if [ ! -S "$AGENT_SOCK" ]; then
+    report ng 'SecretAgent' "socket が無い ($(tilde "$AGENT_SOCK"))" \
+      'Secretive.app を起動し、SecretAgent の常駐を許可する'
+    return
+  fi
+  SSH_AUTH_SOCK="$AGENT_SOCK" run_bounded "$PROBE_LIMIT" ssh-add -l || rc=$?
+  case "$rc" in
+  0)
+    AGENT_OK=1
+    report ok 'SecretAgent' '常駐していて鍵を持っている'
+    ;;
+  1)
+    report ng 'SecretAgent' '常駐しているが鍵を 1 本も持っていない' \
+      'Secretive.app で鍵を作る。作ってあるなら SecretAgent を起動し直す'
+    ;;
+  *)
+    report ng 'SecretAgent' 'socket はあるが応答しない' \
+      'Secretive.app を起動し直して、SecretAgent の常駐を許可する'
+    ;;
+  esac
+}
+
+# --- C2: 鍵タイプ -------------------------------------------------------------
+check_key_type() {
+  local type
+  if [ -z "$SELECTED_KEY" ]; then
+    report unknown '鍵タイプ' '判定不能 (見るべき鍵が決まらない)'
+    return
+  fi
+  type=$(awk 'NR == 1 { print $1 }' "$SELECTED_KEY")
+  if [ "$type" = "$WANT_KEY_TYPE" ]; then
+    report ok '鍵タイプ' "$type (ECDSA P-256)"
+    return
+  fi
+  report ng '鍵タイプ' "$type (OpenSSH も GitHub も未対応。署名が理由不明に落ちる)" \
+    "Secretive で $WANT_KEY_TYPE (ECDSA P-256) の鍵を作り直し、GitHub に登録し直す"
+}
+
+# --- C3: 承認を求められずに署名できるか --------------------------------------
+check_signs_without_approval() {
+  local attempt rc
+
+  if [ -z "$SELECTED_KEY" ]; then
+    report unknown '承認なしで署名できる' '判定不能 (見るべき鍵が決まらない)'
+    return
+  fi
+  # 居ない agent に probe を打って 5 秒待つのは無駄で、かつ時間切れを
+  # 「Require Authentication が付いている」と誤って読める
+  if [ "$AGENT_OK" -ne 1 ]; then
+    report unknown '承認なしで署名できる' '判定不能 (SecretAgent が応えないので試せない)'
+    return
+  fi
+
+  # 1 回目は agent を温めるためのもの。Secure Enclave の cold start を承認要求と
+  # 取り違えないように、**判定は 2 回目の結果で行う**
+  for attempt in 1 2; do
+    rc=0
+    SSH_AUTH_SOCK="$AGENT_SOCK" run_bounded "$PROBE_LIMIT" \
+      ssh-add -T "$SELECTED_KEY" || rc=$?
+    if [ "$BOUNDED_TIMED_OUT" -eq 1 ]; then
+      # 温め直しても承認は要る。1 回目で時間切れならそこで打ち切る
+      report ng '承認なしで署名できる' \
+        "いいえ ($PROBE_LIMIT 秒で返らなかった = 承認を求められている)" \
+        'Secretive で鍵の "Require Authentication" を外す (画面に残ったダイアログは手で閉じる)'
+      return
+    fi
+    if [ "$rc" -ne 0 ]; then
+      report unknown '承認なしで署名できる' \
+        "判定不能 (ssh-add -T が $rc で失敗した)" \
+        'Secretive.app を起動し直してから、もう一度 ssh-key-check を打つ'
+      return
+    fi
+    [ "$attempt" -eq 1 ] || break
+  done
+
+  if [ "$ELAPSED_MS" -lt "$FAST_MS" ]; then
+    # 状態ではなく観測を書く。Secretive 側の認証の持続の内側では、付いていても
+    # 承認を求められずに通るため (冒頭コメント)
+    report ok '承認なしで署名できる' "承認を求められずに署名できた ($(humanize_ms "$ELAPSED_MS"))"
+    return
+  fi
+  report ng '承認なしで署名できる' \
+    "署名できたが $(humanize_ms "$ELAPSED_MS") かかった (承認を求められた可能性が高い)" \
+    'Secretive で鍵の "Require Authentication" を外す'
+}
+
+# --- C4: GitHub への登録 ------------------------------------------------------
+#
+# **gh の失敗は絶対に ng にしない。** 404 (スコープ不足) と [] (本当に未登録) を取り違えると、
+# `gh auth refresh` と言うべき場面で「鍵を登録し直せ」と言うことになる。ng にするのは
+# 「API が答えたのに、その一覧に自分の鍵が無い」ときだけ。
+check_github() { # $1=エンドポイント  $2=ラベル  $3=足りないスコープ  $4=登録の手順
+  local endpoint="$1" label="$2" scope="$3" how="$4" rc=0 want
+
+  if [ -z "$SELECTED_KEY" ]; then
+    report unknown "$label" '判定不能 (見るべき鍵が決まらない)'
+    return
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    report unknown "$label" '判定不能 (gh が無い)' 'brew install gh'
+    return
+  fi
+
+  run_bounded "$GH_LIMIT" gh api --paginate "$endpoint" --jq '.[].key' || rc=$?
+
+  if [ "$rc" -ne 0 ]; then
+    if grep -q "$scope" "$BOUNDED_ERR" 2>/dev/null; then
+      report unknown "$label" "判定不能 (gh api $endpoint にスコープが足りない)" \
+        "gh auth refresh -h github.com -s $scope"
+      return
+    fi
+    if [ "$BOUNDED_TIMED_OUT" -eq 1 ]; then
+      report unknown "$label" "判定不能 ($GH_LIMIT 秒で返らなかった)" \
+        'ネットワークが繋がってから、もう一度 ssh-key-check を打つ'
+      return
+    fi
+    report unknown "$label" "判定不能 (gh api $endpoint が $rc で失敗した)" \
+      'gh auth status で認証を確かめる'
+    return
+  fi
+
+  want=$(key_fields "$SELECTED_KEY")
+  if awk -v want="$want" '$1 " " $2 == want { found = 1 } END { exit !found }' "$BOUNDED_OUT"; then
+    report ok "$label" '登録済み'
+    return
+  fi
+  report ng "$label" 'この鍵が一覧に無い' "$how"
+}
+
+check_github_auth() {
+  check_github '/user/keys' 'GitHub authentication key' 'admin:public_key' \
+    "gh ssh-key add $(tilde "$SELECTED_KEY") --type authentication --title \"\$(scutil --get ComputerName)\""
+}
+
+check_github_signing() {
+  check_github '/user/ssh_signing_keys' 'GitHub signing key' 'admin:ssh_signing_key' \
+    "gh ssh-key add $(tilde "$SELECTED_KEY") --type signing --title \"\$(scutil --get ComputerName)\""
+}
+
+# --- 組み立て -----------------------------------------------------------------
+# 鍵そのものは下の検査行が言うので、ここでは**どこを見たか**だけを出す
+print_header() { # $1=local|github|all
+  printf 'Secretive: %s\n' "$(tilde "$SECRETIVE_DATA")"
+  case "$1" in
+  local) ;;
+  *) printf 'gh: %s\n' "$(command -v gh || printf '見つからない')" ;;
+  esac
+  printf '\n'
+}
+
+print_summary() {
+  local total=$((OK_COUNT + NG_COUNT + UNKNOWN_COUNT))
+  printf '\n'
+  if [ "$NG_COUNT" -eq 0 ] && [ "$UNKNOWN_COUNT" -eq 0 ]; then
+    printf '問題なし (%d 件)\n' "$total"
+    return 0
+  fi
+  if [ "$NG_COUNT" -gt 0 ] && [ "$UNKNOWN_COUNT" -gt 0 ]; then
+    printf 'ng %d 件・判定不能 %d 件 (全 %d 件)\n' "$NG_COUNT" "$UNKNOWN_COUNT" "$total"
+  elif [ "$NG_COUNT" -gt 0 ]; then
+    printf 'ng %d 件 (全 %d 件)\n' "$NG_COUNT" "$total"
+  else
+    printf '判定不能 %d 件 (全 %d 件)\n' "$UNKNOWN_COUNT" "$total"
+  fi
+  printf '手順の正本は tasks/ssh.yml の冒頭コメント\n'
+  [ "$NG_COUNT" -eq 0 ] || return 1
+  return 2
+}
+
+run_checks() { # $1=local|github|all
+  select_key || true
+  print_header "$1"
+  check_key_selection
+  case "$1" in
+  local | all)
+    check_agent
+    check_key_type
+    check_signs_without_approval
+    ;;
+  esac
+  case "$1" in
+  github | all)
+    check_github_auth
+    check_github_signing
+    ;;
+  esac
+  print_summary
+}
+
+# tasks/git.yml が署名に使う鍵を取るための口。**値以外は何も出さない**
+cmd_print_key() {
+  select_key || return 1
+  awk 'NR == 1' "$SELECTED_KEY"
+}
+
+main() {
+  case "${1:-}" in
+  -h | --help)
+    usage
+    return 0
+    ;;
+  --local | --github)
+    [ "$#" -eq 1 ] || die "$1 は引数を取らない"
+    run_checks "${1#--}" || return $?
+    ;;
+  --print-key)
+    [ "$#" -eq 1 ] || die '--print-key は引数を取らない'
+    cmd_print_key
+    ;;
+  --*)
+    die "知らないオプション: $1 (--help で使い方)"
+    ;;
+  '')
+    run_checks all || return $?
+    ;;
+  *)
+    die "知らない引数: $1 (--help で使い方)"
+    ;;
+  esac
+}
+
+main "$@"

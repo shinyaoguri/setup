@@ -500,11 +500,15 @@ echo "============================================================"
 echo "  ✅ セットアップが完了しました!"
 echo "============================================================"
 echo ""
-# 鍵が無いと playbook はコミット署名の設定だけを飛ばして進む (tasks/git.yml。issue #196)。
-# playbook の出力は長く、途中の 1 行は埋もれるので、残っていることをここでもう一度言う
+# 鍵が使えないと playbook はコミット署名の設定だけを飛ばして進む (tasks/git.yml。issue #196)。
+# 飛ばす理由は「鍵が無い」だけではなく、鍵タイプや承認要求の残りも含む (issue #273) ので、
+# 何が欠けているかは ssh-key-check に言わせる。playbook の出力は長く途中の 1 行は埋もれる
+# ので、残っていることをここでもう一度言う
 if [[ ! -s "$HOME/.ssh/git_signing_key.pub" ]]; then
-	echo "  ⚠️  コミット署名はまだ設定されていません (Secretive に鍵が無いため)。"
-	echo "     鍵を作って GitHub に登録したら、次を流してください (手順は tasks/ssh.yml の冒頭):"
+	echo "  ⚠️  コミット署名はまだ設定されていません (Secretive の鍵が要件を満たしていないため)。"
+	echo "     何が足りないかを見る:"
+	echo "       ${PLAYBOOK:h}/bin/ssh-key-check"
+	echo "     直したら、次を流してください (手順は tasks/ssh.yml の冒頭):"
 	echo "       ansible-playbook ${PLAYBOOK} --tags ssh,git"
 	echo ""
 fi

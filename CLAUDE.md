@@ -59,8 +59,10 @@ python3 claude/tests/runcat_metrics_test.py
 - SSH の鍵まわりは Secretive (Secure Enclave) 側の手動セットアップが前提。手順の正本は
   `tasks/ssh.yml` 冒頭のコメント。鍵の生成は GUI 操作なので ansible では自動化できない。
   **鍵タイプは ECDSA P-256、"Require Authentication" は外す** — どちらを外しても
-  無人セッションが承認待ちで止まる側に倒れる。1Password は秘密の保管庫としてのみ使う
-  (`bin/secret-read`)
+  無人セッションが承認待ちで止まる側に倒れる。**この 4 つ (agent の常駐・鍵タイプ・
+  承認要求の有無・GitHub への登録) は `bin/ssh-key-check` が検査し、`tasks/git.yml` は
+  コミット署名を入れるかどうかをその結果で決める** (#273)。1Password は秘密の保管庫と
+  してのみ使う (`bin/secret-read`)
 - **Claude デスクトップアプリは起動した時点の PATH を持ち続ける。** Bash ツールのシェルスナップショットが
   zshenv の後でそれを書き戻すので、zshenv が export した変数は届くのに PATH の追加だけが消える
   (セットアップ前から開いていたアプリで踏んだ。#154)。**変数で渡すコマンドは絶対パスで書く**

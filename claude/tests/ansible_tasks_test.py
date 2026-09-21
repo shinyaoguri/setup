@@ -16,6 +16,15 @@ import unittest
 from pathlib import Path
 
 from hookenv import clean_env
+from ssh_key_check_test import (
+    ECDSA_KEY,
+    FAKE_GH,
+    FAKE_SSH_ADD,
+    GITHUB_KEY,
+    MLDSA_KEY,
+    bind_agent_socket,
+    install_fake,
+)
 
 TASKS = Path(__file__).resolve().parent.parent.parent / "tasks"
 
@@ -268,21 +277,19 @@ class DeclaredDependencyTest(unittest.TestCase):
         self.assertIn("Gyazo を手でインストールする", readme)
 
 
-class FirstRunWithoutKeyTest(unittest.TestCase):
-    """新しいマシンの初回実行が、Secretive の鍵が無いことで止まらない (issue #196)。
+class GitTaskTestCase(unittest.TestCase):
+    """tasks/git.yml を、HOME を一時ディレクトリへ向けて**実際に流す**土台。
 
-    Secretive は同じ実行の中で入ったばかりで、鍵を作るのは GUI 操作 — つまり初回は
-    **必ず**鍵が無い。tasks/git.yml がそこで fail していたため、playbook は順序で後ろに
-    ある fonts / terminal / zshrc / claude / fnm を一切適用せず、bootstrap も set -e で
-    Step 7 と最後の案内へ届かなかった。「鍵がまだ無い」は途中経過であって失敗ではない。
+    when の条件を文字列で見ても、実際に止まるか止まらないかは分からない (git config
+    --global も鍵の探索も HOME の下で完結するので、本当に流せる)。ansible が無い環境
+    では skip — CI で流す件は issue #220。
 
-    when の条件を文字列で見ても、実際に止まらないことは分からない。HOME を一時
-    ディレクトリへ向けて tasks/git.yml を本当に流す (git config --global も鍵の探索も
-    HOME の下で完結する)。ansible が無い環境では skip — CI で流す件は issue #220。
+    署名の可否は bin/ssh-key-check が決めるようになった (issue #273) ので、その検査が
+    見るもの — SecretAgent の socket・ssh-add・gh — も一時ディレクトリの中に作る。
+    偽物の定義は ssh_key_check_test と共有する (2 箇所に持つと片方だけ直る)。
     """
 
     PLAYBOOK = TASKS.parent / "playbook_sillicon_mac.yml"
-    FAKE_KEY = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY= test@secretive"
 
     def setUp(self):
         if shutil.which("ansible-playbook") is None:
@@ -291,21 +298,43 @@ class FirstRunWithoutKeyTest(unittest.TestCase):
         self.addCleanup(self.workdir.cleanup)
         self.home = Path(self.workdir.name)
 
+        self.secretive = self.home / "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"
+        (self.secretive / "PublicKeys").mkdir(parents=True)
+        self.addCleanup(bind_agent_socket(self.secretive).close)
+
+        self.fake_bin = self.home / "fake-bin"
+        self.fake_bin.mkdir()
+        install_fake(self.fake_bin / "ssh-add", FAKE_SSH_ADD)
+        install_fake(self.fake_bin / "gh", FAKE_GH)
+        self.set_github_keys(auth=[GITHUB_KEY], signing=[GITHUB_KEY])
+
     def other_tags(self):
         tags = re.findall(r"^\s*tags:\s*(\S+)", self.PLAYBOOK.read_text(), re.M)
         self.assertIn("git", tags)
         return [t for t in tags if t != "git"]
 
-    def run_git_tasks(self, explicit):
+    def run_git_tasks(self, explicit, agent="ok", sign="ok", gh_auth="ok", gh_signing="ok"):
         """explicit=True は `--tags git` (人が名指しで流した)。False は全体実行の再現で、
         git 以外を --skip-tags で外す (重い brew / cask を流さないため)。どちらの形でも
         走るのは tasks/git.yml だけだが、ansible_run_tags は前者が ['git']、後者が ['all']。
         """
         selection = ["--tags", "git"] if explicit else ["--skip-tags", ",".join(self.other_tags())]
+        env = clean_env(HOME=str(self.home), XDG_CONFIG_HOME=None, ANSIBLE_NOCOLOR="1")
+        # 偽物を先に引かせる。ansible 自身は本物の PATH から引く必要があるので足すだけ
+        env["PATH"] = f"{self.fake_bin}:{env['PATH']}"
+        env["FAKE_SSH_ADD_LOG"] = str(self.home / "ssh-add.log")
+        env["FAKE_GH_LOG"] = str(self.home / "gh.log")
+        env["FAKE_GH_AUTH_FILE"] = str(self.github_auth)
+        env["FAKE_GH_SIGNING_FILE"] = str(self.github_signing)
+        env["SSH_KEY_CHECK_LIMIT"] = "2"
+        env["SSH_KEY_CHECK_GH_LIMIT"] = "2"
+        env["FAKE_SSH_ADD_LIST"] = agent
+        env["FAKE_SSH_ADD_SIGN"] = sign
+        env["FAKE_GH_AUTH"] = gh_auth
+        env["FAKE_GH_SIGNING"] = gh_signing
         return subprocess.run(
             ["ansible-playbook", "-i", "localhost,", str(self.PLAYBOOK), *selection],
-            capture_output=True, text=True, timeout=300, cwd=self.home,
-            env=clean_env(HOME=str(self.home), XDG_CONFIG_HOME=None, ANSIBLE_NOCOLOR="1"),
+            capture_output=True, text=True, timeout=300, cwd=self.home, env=env,
         )
 
     def git_config(self, key):
@@ -315,10 +344,24 @@ class FirstRunWithoutKeyTest(unittest.TestCase):
         )
         return result.stdout.strip()
 
-    def place_key(self):
-        keys = self.home / "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/PublicKeys"
-        keys.mkdir(parents=True)
-        (keys / "test.pub").write_text(self.FAKE_KEY + "\n")
+    def place_key(self, key=ECDSA_KEY):
+        (self.secretive / "PublicKeys" / "test.pub").write_text(key + "\n")
+
+    def set_github_keys(self, auth=None, signing=None):
+        self.github_auth = self.home / "github-auth-keys"
+        self.github_signing = self.home / "github-signing-keys"
+        self.github_auth.write_text("".join(f"{k}\n" for k in (auth or [])))
+        self.github_signing.write_text("".join(f"{k}\n" for k in (signing or [])))
+
+
+class FirstRunWithoutKeyTest(GitTaskTestCase):
+    """新しいマシンの初回実行が、Secretive の鍵が無いことで止まらない (issue #196)。
+
+    Secretive は同じ実行の中で入ったばかりで、鍵を作るのは GUI 操作 — つまり初回は
+    **必ず**鍵が無い。tasks/git.yml がそこで fail していたため、playbook は順序で後ろに
+    ある fonts / terminal / zshrc / claude / fnm を一切適用せず、bootstrap も set -e で
+    Step 7 と最後の案内へ届かなかった。「鍵がまだ無い」は途中経過であって失敗ではない。
+    """
 
     def test_full_run_without_a_key_does_not_stop(self):
         """全体実行では止まらず、鍵と無関係な設定は入り、署名だけが入らない。"""
@@ -350,8 +393,109 @@ class FirstRunWithoutKeyTest(unittest.TestCase):
         self.assertEqual(self.git_config("commit.gpgsign"), "true")
         self.assertEqual(self.git_config("gpg.format"), "ssh")
         signing_key = self.home / ".ssh/git_signing_key.pub"
-        self.assertEqual(signing_key.read_text().strip(), self.FAKE_KEY)
-        self.assertIn(self.FAKE_KEY, (self.home / ".config/git/allowed_signers").read_text())
+        self.assertEqual(signing_key.read_text().strip(), ECDSA_KEY)
+        self.assertIn(ECDSA_KEY, (self.home / ".config/git/allowed_signers").read_text())
+
+
+class UnusableKeyTest(GitTaskTestCase):
+    """鍵は在るが要件を満たさないとき (issue #273)。
+
+    **「鍵が無い」と同じ扱いにする。** 要件を満たさない鍵で commit.gpgsign=true にすると
+    以後のコミットが全部失敗し、症状 (「コミットできない」) は原因 (「鍵タイプが ML-DSA」)
+    から最も遠いところに出る。これは #196 で直した「鍵が無いだけで止まる」の裏返しで、
+    方針は同じ — **未完成の状態で playbook を止めない。ただし未完成のまま緑で終わらせない**。
+    """
+
+    def test_broken_key_does_not_stop_the_full_run(self):
+        """全体実行は止まらず、鍵と無関係な設定は入り、署名だけが入らない。"""
+        self.place_key(MLDSA_KEY)
+        result = self.run_git_tasks(explicit=False)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-1000:])
+        self.assertTrue(self.git_config("alias.gone"), "鍵と無関係な alias まで skip された")
+        self.assertEqual(self.git_config("commit.gpgsign"), "")
+        self.assertEqual(self.git_config("user.signingkey"), "")
+
+    def test_explicit_git_tag_with_a_broken_key_fails(self):
+        """名指しで流したのに使えない鍵なら、それは失敗 (README 手順 3 の「済んだら」の後)。"""
+        self.place_key(MLDSA_KEY)
+        result = self.run_git_tasks(explicit=True)
+        self.assertNotEqual(result.returncode, 0, "使えない鍵なのに成功として終わった")
+        self.assertEqual(self.git_config("commit.gpgsign"), "")
+
+    def test_the_message_says_which_requirement_is_missing(self):
+        """「鍵が無い」しか言えない固定文では、鍵が在って壊れている場合に役に立たない。"""
+        self.place_key(MLDSA_KEY)
+        result = self.run_git_tasks(explicit=False)
+        self.assertIn("ssh-mldsa65", result.stdout, "何が欠けているかを言っていない")
+
+    def test_a_stopped_agent_also_skips_signing(self):
+        """agent が応えないなら「署名できる」と証明できていない。鍵の形だけでは通さない。"""
+        self.place_key()
+        result = self.run_git_tasks(explicit=False, agent="noagent")
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:])
+        self.assertEqual(self.git_config("commit.gpgsign"), "")
+
+
+class GithubRegistrationTest(GitTaskTestCase):
+    """GitHub への登録は、ローカルで署名できることの前提ではない (issue #273)。"""
+
+    def test_signing_is_configured_even_when_the_key_is_not_on_github(self):
+        self.place_key()
+        self.set_github_keys(auth=[], signing=[])
+        self.run_git_tasks(explicit=False)
+        self.assertEqual(self.git_config("commit.gpgsign"), "true")
+
+    def test_explicit_git_tag_fails_when_the_key_is_not_on_github(self):
+        """名指しで流したなら、登録まで済んでいるはず (README 手順 3)。"""
+        self.place_key()
+        self.set_github_keys(auth=[], signing=[])
+        result = self.run_git_tasks(explicit=True)
+        self.assertNotEqual(result.returncode, 0, "未登録なのに成功として終わった")
+        # ローカルの要件は満たしているので、署名の設定自体は入っている
+        self.assertEqual(self.git_config("commit.gpgsign"), "true")
+
+    def test_an_unreachable_github_does_not_break_the_run(self):
+        """gh のスコープ不足・オフラインは「判定不能」で、マシンの状態ではない。"""
+        self.place_key()
+        result = self.run_git_tasks(explicit=True, gh_signing="scope")
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-1000:])
+        self.assertEqual(self.git_config("commit.gpgsign"), "true")
+        self.assertIn("admin:ssh_signing_key", result.stdout, "打つ手を出していない")
+
+
+class SigningGateShapeTest(unittest.TestCase):
+    """署名設定のゲートの形。**ansible が無い環境 (CI) でも見られる**検査。
+
+    上の 3 クラスは実際に playbook を流すので CI では skip される (issue #220)。
+    ゲートそのものが外れたことだけは、形を見るだけでも拾えるようにしておく。
+    """
+
+    def setUp(self):
+        self.body = without_comments(TASKS / "git.yml")
+
+    def test_signing_is_gated_on_the_checker(self):
+        """検査結果を register だけして見ない形を防ぐ。"""
+        self.assertIn("git_signing_key_usable", self.body)
+        self.assertIn("ssh_key_local.rc == 0", self.body)
+        self.assertNotIn("git_signing_key_available", self.body)
+
+    def test_the_checker_is_called_by_absolute_path(self):
+        """bin/ を PATH へ通すのは zshenv で、symlink する tasks/zshrc.yml は git より後ろ。
+
+        PATH 頼みで呼ぶと、新しいマシンの初回実行でだけ検査器が見つからない。
+        """
+        self.assertIn("{{ playbook_dir }}/bin/ssh-key-check", self.body)
+
+    def test_the_signing_key_comes_from_the_checker(self):
+        """検査した鍵と書き出す鍵を同じにする (`cat *.pub | head -1` へ戻らないこと)。"""
+        self.assertIn("--print-key", self.body)
+        self.assertNotIn("head -1", self.body)
+
+    def test_the_checks_are_not_counted_as_changes(self):
+        """読むだけのタスクが毎回 changed と出ると、冪等性を目で追う運用が壊れる。"""
+        for block in self.body.split("\n- name:"):
+            if "ssh-key-check" in block:
+                self.assertIn("changed_when: false", block, block)
 
 
 class NodeVersionTest(unittest.TestCase):
