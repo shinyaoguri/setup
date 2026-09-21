@@ -202,6 +202,30 @@ class DeclaredDependencyTest(unittest.TestCase):
         self.assertIn("claude mcp add", self.claude_task)
         self.assertIn("- claude-code", self.packages)
 
+    def required_formulae(self):
+        block = self.packages.split("homebrew_packages_required:")[1].split("\n\n")[0]
+        return re.findall(r"^\s+-\s+(\S+)", block, re.M)
+
+    def test_gh_is_declared_as_required(self):
+        """配っているフックが `gh` を打つ (issue #200)。
+
+        plan-record.sh は PR / Issue へプランを投稿し、gh-comment-guard.sh と term-guard.sh は
+        gh のコマンドを検査する。グローバル CLAUDE.md の運用 (Issue・PR を置き場にする) と
+        README 手順 3 の `gh auth refresh` も gh が前提。macOS は gh を同梱していないので、
+        宣言が無いと新しいマシンで配った設定がそのまま動かない。
+        """
+        callers = [
+            path.name for path in sorted((TASKS.parent / "claude").glob("*.sh"))
+            if re.search(r"(^|[\s(|;&])gh\s+(pr|issue|api|repo)\b", without_comments(path), re.M)
+        ]
+        self.assertTrue(callers, "gh を打つフックが見つからない (この検査の前提が変わった)")
+        self.assertIn("gh", self.required_formulae())
+
+    def test_direnv_is_declared(self):
+        """zshrc が direnv の hook を読む。無くても壊れない (存在チェック付き) ので optional。"""
+        self.assertIn("direnv hook zsh", (TASKS.parent / "zshrc").read_text())
+        self.assertIn("- direnv", self.packages)
+
     def test_mas_is_declared(self):
         """sillicon_mac_setup.zsh が App Store の導入に使う。"""
         self.assertIn("- mas", self.packages)

@@ -9,6 +9,10 @@
 # 成り立っていない。一方でダウンロードは重く、Office (2.7GB) と ScanSnap (1.1GB) だけで
 # 全体 (約 9.5GB) の 40% を占める。
 #
+# **台帳の範囲は「どのマシンでも使うもの」まで。** 特定のプロジェクトでしか使わない道具
+# (言語処理系・ビルドツール・そのプロジェクトの CLI) は、そのプロジェクトの手順が入れる
+# ものなので、ここには載せない — `brew leaves` との差がゼロになることは目指さない。
+#
 # required に置くのは「**それが無いと playbook か鍵まわりが成立しないもの**」だけ。
 # 「あると便利」は optional。宣言そのものはどちらの側にも残るので、「自分が何を使うか」の
 # 台帳としての価値は失わない。
@@ -29,6 +33,11 @@ homebrew_packages_required:
   # sillicon_mac_setup.zsh が自前で入れる (mas と同じ形)
   - fzf
   - gum
+  # 配っているフックと運用の前提。claude/plan-record.sh が PR・Issue へ投稿し、
+  # グローバル CLAUDE.md は Issue・PR を作業の置き場にしている。README 手順 3 の
+  # `gh auth refresh` もこれ。macOS は同梱していないので、無いと配った設定が動かない
+  # (issue #200)。jq もフックが使うが、こちらは macOS 15 以降が /usr/bin/jq を同梱している
+  - gh
 
 # 要るときに選んで入れるもの
 homebrew_packages_optional:
@@ -38,6 +47,9 @@ homebrew_packages_optional:
   # Node を使わないマシンには要らない。外すと tasks/fnm.yml が対象外になる
   # (あちらに「fnm が無ければ skip」のガードを入れてある)
   - fnm
+  # zshrc が hook を読む (.envrc でディレクトリ単位に環境を切り替える)。存在チェック付き
+  # なので、無くても壊れない
+  - direnv
 
 ###############
 # GUI App List
