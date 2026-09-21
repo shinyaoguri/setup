@@ -48,6 +48,23 @@ class SecretsAreIgnoredTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertTrue(ignored(name, repo_only=True))
 
+    def test_private_key_files_are_ignored(self):
+        """秘密鍵のファイルを置いても追跡されない (issue #226)。
+
+        このリポジトリは GitHub App の秘密鍵 (PEM) を扱う運用をしている。値は 1Password に
+        在ってファイルにはしない建前だが、取り出して確かめる場面でファイルができうる。
+        """
+        for name in ("mokume-agent.private-key.pem", "deploy.key", "tmp/cert.p12"):
+            with self.subTest(name):
+                self.assertTrue(
+                    ignored(name, repo_only=True),
+                    f"{name} がリポジトリの .gitignore で無視されていない",
+                )
+
+    def test_public_keys_are_not_ignored(self):
+        """公開鍵まで無視しない (*.pub は配るものになりうる)。"""
+        self.assertFalse(ignored("id_ecdsa.pub", repo_only=True))
+
     def test_the_template_stays_tracked(self):
         """.env.example は値でなく変数名を置く場所なので追跡する。"""
         self.assertFalse(
