@@ -14,9 +14,13 @@ preflight のテストと同じ型)。検証したいのは「どの参照をキ
 """
 
 import base64
+import fcntl
+import os
+import pty
 import stat
 import subprocess
 import tempfile
+import termios
 import time
 import unittest
 from pathlib import Path
@@ -50,6 +54,15 @@ case "$cmd" in
     # FAKE_SECURITY_RO は「読めるし消せるが書けない」状態の再現。キャッシュを
     # 書く前に消していると、この状況で古い値ごと失われる (issue #168)
     [ -n "${FAKE_SECURITY_RO:-}" ] && exit 1
+    # 本物はパスワードを getpass() で読み、getpass は **/dev/tty を先に開く** (開けない
+    # ときだけ stdin へ落ちる)。制御端末があるとパイプは読まれず、端末にプロンプトを
+    # 出したまま待ち続ける (実測。issue #212)。ここを常に stdin から読む作りにして
+    # いたため、人が端末から打つ経路でだけ止まることを検査が拾えなかった。
+    # 本物どおりに待つとテストが固まるので、印を残してすぐ失敗する
+    if ( : </dev/tty ) 2>/dev/null; then
+      : > "$FAKE_KEYCHAIN/PROMPTED_ON_TTY"
+      exit 1
+    fi
     read -r first || exit 1
     read -r second || exit 1
     [ "$first" = "$second" ] || exit 1
@@ -132,6 +145,7 @@ class SecretReadTestCase(unittest.TestCase):
         keychain_readonly=False,
         ttl=None,
         refresh_timeout=None,
+        controlling_tty=False,
     ):
         env = clean_env()
         env["PATH"] = f"{self.bin}:/usr/bin:/bin"
@@ -157,7 +171,17 @@ class SecretReadTestCase(unittest.TestCase):
             env=env,
             capture_output=True,
             text=True,
+            preexec_fn=self.acquire_controlling_tty if controlling_tty else os.setsid,
         )
+
+    def acquire_controlling_tty(self):
+        """子プロセスに制御端末を持たせる (人が端末から打った状態の再現)。
+
+        stdin / stdout はパイプのまま。security が見るのは標準入出力ではなく
+        **制御端末があるかどうか**なので、再現に要るのはそこだけ。
+        """
+        os.setsid()
+        fcntl.ioctl(self.pty_slave, termios.TIOCSCTTY, 0)
 
     def op_calls(self):
         return [line for line in self.op_log.read_text().splitlines() if line]
@@ -531,6 +555,52 @@ class SecretReadTestCase(unittest.TestCase):
     #
     # 新しいマシンで、無人セッションが初回の op read (= 1Password の承認) で止まらないように、
     # 人がいるセットアップ中に許可リストの参照をまとめてキャッシュへ入れておく。
+
+    # --- 制御端末がある状態 (人が端末から打つ経路) ---------------------------
+
+    def open_pty(self):
+        master, self.pty_slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, self.pty_slave)
+
+    def test_端末から打ってもキャッシュへ書ける(self):
+        """security は制御端末があると stdin を読まず、端末で待ち続ける (issue #212)。
+
+        Claude の Bash ツールや hook は制御端末を持たないので動いていたが、README が
+        案内する `secret-read --warm` と setup の Step 7 は**人が端末から打つ**経路で、
+        そこでだけ無音で止まっていた。
+        """
+        self.open_pty()
+        result = self.run_script("--warm", controlling_tty=True)
+        self.assertFalse(
+            (self.keychain / "PROMPTED_ON_TTY").exists(),
+            "security が端末へプロンプトを出す形で呼ばれた (パイプの値は読まれない)",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.run_script(GYAZO_REF, with_op=False).stdout.strip(), "gyazo-token-abc")
+
+    def test_端末から打った読み出しでも期限切れを取り直せる(self):
+        """素の `secret-read <参照>` も、取り直しのときに同じ書き込みを通る。"""
+        self.open_pty()
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+        self.set_op_value("rotated-token")
+        result = self.run_script(GYAZO_REF, ttl=100, controlling_tty=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.keychain / "PROMPTED_ON_TTY").exists())
+        self.assertEqual(self.run_script(GYAZO_REF, with_op=False).stdout.strip(), "rotated-token")
+
+    def test_偽_security_は制御端末があると_stdin_を読まない(self):
+        """対照。偽物が本物の挙動を再現していなければ、上の 2 本は何も確かめていない。"""
+        self.open_pty()
+        env = dict(clean_env(), FAKE_KEYCHAIN=str(self.keychain))
+        result = subprocess.run(
+            [str(self.bin / "security"), "add-generic-password", "-s", "x", "-U", "-w"],
+            input="v\nv\n", env=env, capture_output=True, text=True,
+            preexec_fn=self.acquire_controlling_tty,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.keychain / "PROMPTED_ON_TTY").exists())
 
     def test_warm_は許可リストの未キャッシュを入れて値を出さない(self):
         other = "op://Automation/Other/credential"
