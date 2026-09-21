@@ -9,7 +9,7 @@
 
 なので、境界 (見直し済みの版そのものは含めない)・数値としての版の比較
 (2.1.99 < 2.1.100)・語の境界 (`Edit` が `Edited` に当たらない)・起票条件の 4 通り・
-切り詰めを、作った changelog で固定する。
+節の優先度と切り詰めを、作った changelog で固定する。
 
     python3 claude/tests/changelog_diff_test.py
 """
@@ -36,6 +36,7 @@ CHANGELOG = """# Changelog
 ## 2.1.100
 
 - Added `updatedInput` support to PreToolUse hooks
+- Added a brand new `fooBar` setting nobody wrote down
 - Edited wording in the onboarding flow
 
 ## 2.1.99
@@ -169,30 +170,63 @@ class IssueNeededTest(unittest.TestCase):
 
 
 class RenderTest(unittest.TestCase):
+    HEADINGS = ("## 本体の仕様語", "## 追加・変更・削除", "## ツール名・一般語", "## 全抜粋")
+
     def setUp(self):
         self.args = diff.summarize(CHANGELOG, ledger("2.1.98"), "2026-09-02")
 
-    def test_sections_in_order(self):
+    def section(self, report, index):
+        start = report.index(self.HEADINGS[index])
+        rest = self.HEADINGS[index + 1:]
+        return report[start:report.index(rest[0])] if rest else report[start:]
+
+    def test_sections_in_order_of_reading_value(self):
         report = diff.render(*self.args)
         self.assertIn("# Claude Code 2.1.98 → 2.1.100 (2 版)", report)
-        positions = [report.index(h) for h in ("## 本体の仕様語", "## ツール名・一般語", "## 非推奨・削除・改名", "## 全抜粋")]
+        positions = [report.index(h) for h in self.HEADINGS]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("意図: `guard`, `signature`", report)
 
-    def test_notice_lines_are_listed_once(self):
+    def test_new_feature_outside_the_vocabulary_is_surfaced(self):
+        """自作を置き換えられる新機能は、台帳の語彙に無い言葉で書かれる。当たりの節だけでは拾えない。"""
         report = diff.render(*self.args)
-        notices = report[report.index("## 非推奨・削除・改名"):report.index("## 全抜粋")]
-        self.assertIn("Removed the legacy", notices)
-        self.assertNotIn("updatedInput", notices)
+        self.assertNotIn("fooBar", self.section(report, 0))
+        self.assertIn("fooBar", self.section(report, 1))
+        self.assertIn("Removed the legacy", self.section(report, 1))
 
-    def test_truncates_the_excerpt_not_the_hits(self):
-        long_log = "## 2.1.99\n\n- Added PreToolUse thing\n" + "".join(f"- filler line {n}\n" for n in range(5000))
-        args = diff.summarize(long_log, ledger("2.1.98"), "2026-09-02")
-        report = diff.render(*args, max_chars=3000)
-        self.assertLessEqual(len(report), 3000)
-        self.assertIn("Added PreToolUse thing", report[:report.index("## 全抜粋")])
-        self.assertIn("長いのでここで切った", report)
-        self.assertIn(diff.CHANGELOG_URL, report)
+    def test_strong_hits_are_not_repeated_as_changes(self):
+        self.assertNotIn("updatedInput", self.section(diff.render(*self.args), 1))
+
+    def test_fixes_are_not_listed_as_changes(self):
+        self.assertNotIn("truncation", self.section(diff.render(*self.args), 1))
+
+    def long_args(self):
+        long_log = (
+            "## 2.1.99\n\n- Added PreToolUse thing\n"
+            + "".join(f"- Added setting number {n}\n" for n in range(40))
+            + "".join(f"- Fixed Bash filler line {n}\n" for n in range(5000))
+        )
+        return diff.summarize(long_log, ledger("2.1.98"), "2026-09-02")
+
+    def test_never_exceeds_the_limit(self):
+        """GitHub の Issue 本文には上限が在る。節が増えても、どれかが長くても超えない。"""
+        for limit in (60000, 20000, 5000, 2500):
+            with self.subTest(limit):
+                self.assertLessEqual(len(diff.render(*self.long_args(), max_chars=limit)), limit)
+
+    def test_lower_sections_are_cut_first(self):
+        report = diff.render(*self.long_args(), max_chars=5000)
+        self.assertIn("Added PreToolUse thing", self.section(report, 0))
+        self.assertNotIn("入らなかった", self.section(report, 0))
+        self.assertIn("Added setting number 39", self.section(report, 1))
+        self.assertIn("入らなかった", self.section(report, 3))
+        self.assertIn(diff.CHANGELOG_URL, self.section(report, 3))
+
+    def test_empty_sections_say_so(self):
+        quiet = "## 2.1.99\n\n- Fixed something unrelated\n\n## 2.1.98\n\n- old\n"
+        report = diff.render(*diff.summarize(quiet, ledger("2.1.98", "2026-01-01"), "2026-09-02"))
+        self.assertIn("(なし)", self.section(report, 0))
+        self.assertIn("Fixed something unrelated", self.section(report, 3))
 
 
 class CommandLineTest(unittest.TestCase):
