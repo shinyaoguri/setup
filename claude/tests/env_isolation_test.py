@@ -41,6 +41,9 @@ CANARIES = frozenset(
         "CLAUDE_WAIT_DEADLINE_GUARD",
         "TERM_GUARD_RULES_DIR",
         "SECRET_CACHE_ALLOWLIST",
+        # numeric_env 経由 (eval) で読まれるもの。走査がこの綴りを拾えていることの番人
+        "SECRET_CACHE_TTL",
+        "SECRET_CACHE_RETRY",
     }
 )
 

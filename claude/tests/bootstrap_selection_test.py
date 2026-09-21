@@ -25,24 +25,22 @@ REPO = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO / "sillicon_mac_setup.zsh"
 PACKAGES = REPO / "vars" / "packages.yml"
 
-# スクリプト本体と同じ awk を使う。ここで別の実装を書くと、片方だけ直したときに
-# 「テストは緑なのに本番は読めない」が起きる
-YAML_LIST = r"""
-awk -v key="$1" '
-    $0 ~ "^" key ":" { flag=1; next }
-    /^[^ #]/         { flag=0 }
-    flag && /^[[:space:]]*-[[:space:]]/ {
-        sub(/^[[:space:]]*-[[:space:]]*/,"")
-        print
-    }
-' "$2"
-"""
+def script_function(name):
+    """本体から関数の定義を切り出す (`name() {` から、行頭の `}` まで)。"""
+    match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", SCRIPT.read_text(), re.M | re.S)
+    if match is None:
+        raise AssertionError(f"{SCRIPT.name} に {name}() が見つからない")
+    return match.group(0)
 
 
 def yaml_list(key):
+    """**本体の yaml_list をそのまま流す。** 以前はここに awk の写しを持っていた。写しは
+    本体だけを直したときに「テストは緑なのに本番は読めない」をそのまま起こす (#218)。
+    """
     r = subprocess.run(
-        ["zsh", "-f", "-c", YAML_LIST, "zsh", key, str(PACKAGES)],
+        ["zsh", "-f", "-c", script_function("yaml_list") + '\nyaml_list "$1"', "zsh", key],
         capture_output=True, text=True, check=True,
+        env=clean_env(PACKAGES_YAML=str(PACKAGES)),
     )
     return [l for l in r.stdout.split("\n") if l]
 

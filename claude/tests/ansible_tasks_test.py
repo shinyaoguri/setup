@@ -148,11 +148,24 @@ class DefaultsTakeEffectTest(unittest.TestCase):
         self.tasks_only = without_comments(TASKS / "macos.yml")
 
     def test_dock_is_restarted_after_the_setting_changes(self):
-        self.assertIn("killall", self.body, "Dock を入れ直していない")
+        """コメントを落とした本文で見る。
+
+        以前は素の本文を見ていた。tasks/macos.yml のコメントは `killall` も
+        `dock_autohide.changed` も引用しているので、**タスクを消しても緑のまま**だった
+        (このファイルの冒頭が「必ず without_comments を通す」と定めている、その当の穴。#218)。
+        """
+        self.assertIn("killall", self.tasks_only, "Dock を入れ直していない")
         self.assertIn(
-            "when: dock_autohide.changed", self.body,
+            "when: dock_autohide.changed", self.tasks_only,
             "Dock の再起動が条件付きになっていない",
         )
+
+    def test_the_comments_alone_would_have_satisfied_the_old_check(self):
+        """上の検査が意味を持つことの確認 — コメントだけでも同じ語が揃っている。"""
+        comments = "\n".join(
+            line for line in self.body.split("\n") if line.lstrip().startswith("#")
+        )
+        self.assertIn("killall", comments)
 
     def test_the_restart_is_not_unconditional(self):
         """無条件に打つと毎回 changed を返し、#174 で直した非冪等を再発させる。"""
@@ -444,6 +457,14 @@ class TaskTagNamingTest(unittest.TestCase):
             playbook,
         )
         self.assertTrue(imports, "playbook から import を読み取れなかった")
+        # 正規表現に合った import だけを見ていると、tags と import の順を入れ替えただけの
+        # ファイルが検査から黙って外れる。tasks/ に在るものと突き合わせる (#218)
+        self.assertEqual(
+            sorted(name for _, name in imports),
+            sorted(path.stem for path in TASKS.glob("*.yml")),
+            "tasks/*.yml と、playbook から読み取れた import が一致しない "
+            "(import されていないか、この検査が読めない書き方になっている)",
+        )
         mismatched = [(tag, name) for tag, name in imports if tag != name]
         self.assertEqual(
             mismatched, [],
