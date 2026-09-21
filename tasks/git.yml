@@ -223,3 +223,27 @@
         name: tag.gpgsign
         value: "true"
         scope: global
+
+# **配備先は開発用の checkout を兼ねている** (issue #222)。ここで push するのは例外では
+# なく日常なのに、クローンは HTTPS (sillicon_mac_setup.zsh の GITHUB_REPO_URL) なので
+# push が OAuth トークン経由になる。gh のトークンは `workflow` スコープを持たないため、
+# `.github/workflows` に触れていないブランチまで弾かれた (issue #272)。gh 自身の
+# git_protocol は ssh なので、push だけ SSH へ寄せて想定を揃える。fetch は HTTPS の
+# まま — 新しいマシンの初回クローンがその経路で成立している。
+#
+# **鍵ができるまでは寄せない。** 認証鍵と署名鍵は Secure Enclave の 1 本を兼用するので、
+# 鍵が無いうちに push 先だけ SSH にすると、まだ通らない経路へ倒すことになる。
+- name: Check whether the setup checkout is in place
+  ansible.builtin.stat:
+    path: "{{ ansible_facts['env']['HOME'] }}/.setup/.git"
+  register: setup_checkout
+
+- name: Push the setup checkout over SSH
+  community.general.git_config:
+    name: remote.origin.pushurl
+    value: "git@github.com:shinyaoguri/setup.git"
+    scope: local
+    repo: "{{ ansible_facts['env']['HOME'] }}/.setup"
+  when:
+    - git_signing_key_available
+    - setup_checkout.stat.exists
