@@ -8,6 +8,7 @@
 #   KeyRepeat / InitialKeyRepeat 再ログインが要る。プロセスを殺しても効かない
 #   トラックパッドの 3 キー       同上
 #   Kotoeri の句読点             入力メソッドの再起動。打鍵中に殺すのは破壊的なのでやらない
+#   修飾キーの入れ替え           再ログインが要る (ファイル末尾。issue #276)
 #
 # 実測できたのは Dock だけ (生の状態を問い合わせる口があるのがこれだけのため)。
 # 残りは「効いていないように見えても再ログインで効く」と案内する側に寄せている
@@ -113,3 +114,54 @@
     key: JIMPrefPunctuationTypeKey
     type: int
     value: 3
+
+# 修飾キーの入れ替え (Caps Lock → 左 Control / fn を無効)。
+#
+# 置き場は ByHost の .GlobalPreferences — システム設定 > キーボード > 修飾キー が書く場所。
+# **`-currentHost` を落とすと別の場所へ書いて無言で効かない。**
+# キー名の末尾 `0-0-0` は VendorID-ProductID で、0-0-0 は「全キーボードに共通」。
+# 特定のキーボードを名指しする形もあるが、内蔵でも外付けでも同じ配列にしたいので共通側に置く。
+#
+# **osx_defaults では書けない** — 値が辞書の配列で、あのモジュールが扱えるのは
+# scalar と文字列配列まで。
+#
+# **値は XML plist の文字列で渡す。** 旧形式 (`({Src=123;})`) も defaults は受け取るが、
+# 裸の数字を**文字列として**書き込む (実測)。システム側は整数で持っているので、
+# 文字列で書くと型が食い違ったまま黙って効かない。
+#
+# **3 件を 1 つの値として持つ。** この pref は辞書の配列ひとつなので、Caps Lock だけを
+# 書くと配列ごと上書きして fn の 2 件が消える (issue #276)。
+#
+# 反映は再ログイン。`defaults` は保存値を書くだけで動いているプロセスには届かない
+# (issue #176。キーリピート・トラックパッドと同じ)。hidutil なら即時に効くが再起動で
+# 消えるので、正本を二重に持たない。
+- name: Remap modifier keys (Caps Lock to Control, fn disabled)
+  vars:
+    # Src/Dst は HID の (usage page << 32 | usage)。0x700000000 (= 30064771072) は「無効」
+    macos_modifier_mapping:
+      - { src: 30064771129, dst: 30064771300 }      # Caps Lock 0x700000039 -> 左 Control 0x7000000E4
+      - { src: 1095216660483, dst: 30064771072 }    # 内蔵 fn 0xFF00000003 -> 無効
+      - { src: 280379760050179, dst: 30064771072 }  # 外付け fn 0xFF01000000003 -> 無効
+  ansible.builtin.shell: |
+    set -euo pipefail
+    key=com.apple.keyboard.modifiermapping.0-0-0
+    desired='{{ macos_modifier_mapping | to_json }}'
+    # 並び順は意味を持たないので、組の集合として突き合わせる。順序で比べると、
+    # システム設定を開いた拍子に並べ替えられただけで毎回 changed を返す。
+    state=$({ /usr/bin/defaults -currentHost export -g - 2>/dev/null || true; } | /usr/bin/python3 -c '
+    import json, plistlib, sys
+    raw = sys.stdin.buffer.read()
+    have = plistlib.loads(raw).get(sys.argv[1], []) if raw else []
+    # key=repr は「型が違えば違う」を保ったまま必ず順序を決める。素の比較だと、
+    # 旧形式で文字列として書かれた残骸に当たった瞬間に TypeError で落ちる
+    pairs = lambda ms, s, d: sorted(((m.get(s), m.get(d)) for m in ms), key=repr)
+    print("same" if pairs(have, "HIDKeyboardModifierMappingSrc", "HIDKeyboardModifierMappingDst")
+          == pairs(json.loads(sys.argv[2]), "src", "dst") else "differ")
+    ' "$key" "$desired")
+    if [ "$state" = same ]; then
+      exit 0
+    fi
+    /usr/bin/defaults -currentHost write -g "$key" '<array>{% for m in macos_modifier_mapping %}<dict><key>HIDKeyboardModifierMappingSrc</key><integer>{{ m.src }}</integer><key>HIDKeyboardModifierMappingDst</key><integer>{{ m.dst }}</integer></dict>{% endfor %}</array>'
+    echo changed
+  register: macos_modifier_remap
+  changed_when: "'changed' in macos_modifier_remap.stdout"
