@@ -7,6 +7,15 @@ claude/intents.json の reviewed_against より新しい版の節を抜き、台
 ここは**読む材料を絞る**ところまでで、判定は claude-upstream-review スキルの仕事
 (shinyaoguri/setup#232)。
 
+レポートは上から読む価値の高い順に並べ、長ければ下から削る:
+
+  1. 本体の仕様語に当たった行 (強い当たり)
+  2. 追加・変更・削除の行で、1 に無いもの — **自作を置き換えられる新機能は、台帳の語彙に無い
+     言葉で書かれる** (新しい設定キー・新しいフックのイベント)。当たりの節だけでは拾えない。
+     実測で箇条書きの半分は Fixed で、置換の判断に効く Added / Changed / Removed は 15% ほど
+  3. ツール名・一般語に当たった行 (弱い当たり)
+  4. 全抜粋
+
 当たりは 2 段に分ける。実際の changelog で測ると、`PreToolUse` は 40 版で 3 行しか
 当たらないのに `Bash` は 55 行当たる — ツール名は一般語で、ほとんどがツール自体の
 修正であってフックの契約とは関係が無い:
@@ -32,10 +41,10 @@ from pathlib import Path
 
 CHANGELOG_URL = "https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
 HEADING_RE = re.compile(r"^## (\d+)\.(\d+)\.(\d+)\s*$")
-# 告知の形式は決まっていないので、ここに当たらない非推奨化も在る。見落としを減らす補助
-NOTICE_RE = re.compile(r"deprecat|remov|renam|no longer|breaking", re.IGNORECASE)
+# 行頭の動詞は changelog の慣習で、仕様ではない。告知の形式も決まっていないので、文中の語でも拾う
+CHANGE_RE = re.compile(r"^- (Added|Changed|Removed|Deprecated|Renamed)\b|deprecat|remov|renam|no longer|breaking", re.IGNORECASE)
 WEAK_SURFACES = {"tool-name", "harness-behavior", "model-behavior", "desktop-app"}
-# GitHub の Issue 本文の上限は 65,536 字。要約と当たりの節を置いた残りを全抜粋に回す
+# GitHub の Issue 本文の上限は 65,536 字。workflow が足す末尾の数行ぶんを空けておく
 DEFAULT_MAX_CHARS = 60000
 DEFAULT_MAX_AGE_DAYS = 30
 
@@ -134,6 +143,17 @@ def hit_lines(hits):
     ]
 
 
+def fit(lines, budget):
+    """budget 字に収まるところまでの行と、入らなかった行数。1 行も入らなければ空。"""
+    kept, used = [], 0
+    for line in lines:
+        if used + len(line) + 1 > budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    return kept, len(lines) - len(kept)
+
+
 def render(summary, newer, hits, max_chars=DEFAULT_MAX_CHARS):
     if summary["parse_failed"]:
         return (
@@ -144,49 +164,46 @@ def render(summary, newer, hits, max_chars=DEFAULT_MAX_CHARS):
 
     strong = [h for h in hits if h[4]]
     weak = [h for h in hits if not h[4]]
-    hit_text = {line for _label, line, _w, _i, _s in hits}
-    notices = [
+    strong_text = {line for _label, line, _w, _i, _s in strong}
+    changes = [
         f"- `{label}` {line[2:]}"
         for _version, label, lines in newer for line in lines
-        if NOTICE_RE.search(line) and line not in hit_text
+        if CHANGE_RE.search(line) and line not in strong_text
     ]
+    excerpt = []
+    for _version, label, lines in newer:
+        excerpt += [f"### {label}", "", *lines, ""]
 
-    head = [
+    intro = "\n".join([
         f"# Claude Code {summary['reviewed']} → {summary['latest']} ({summary['versions']} 版)",
         "",
         f"台帳 (`claude/intents.json`) の見直し済みは **{summary['reviewed']}** ({summary['reviewed_date']}・{summary['age_days']} 日前)。"
         "判定は `claude-upstream-review` スキルで行い、終えたら `reviewed_against` を進める。",
         "",
-        "このレポートは読む材料を絞っただけで、判定ではない。当たりが無い行にも、自作の手段を"
-        "置き換えられる新機能は載りうる (語彙に無いものは当たらない)。",
+        "このレポートは読む材料を絞っただけで、判定ではない。上の節ほど読む価値が高く、長いときは下の節から削ってある。",
         "",
-        f"## 本体の仕様語に当たった行 ({len(strong)})",
-        "",
-        *(hit_lines(strong) or ["(なし)"]),
-        "",
-        f"## ツール名・一般語に当たった行 ({len(weak)})",
-        "",
-        "ツール自体の修正が大半で、フックの契約に関わるものは少ない。",
-        "",
-        *(hit_lines(weak) or ["(なし)"]),
-        "",
-        f"## 非推奨・削除・改名を示す語を含む、上に無い行 ({len(notices)})",
-        "",
-        *(notices or ["(なし)"]),
-        "",
-        "## 全抜粋",
-        "",
+    ])
+    # 読む価値の高い順。上の節が予算を使い切ったら、下の節は見出しと「入らなかった」の 1 行だけになる
+    parts = [
+        (f"## 本体の仕様語に当たった行 ({len(strong)})", "", hit_lines(strong)),
+        (f"## 追加・変更・削除の行で、上に無いもの ({len(changes)})",
+         "自作を置き換えられる新機能は、台帳の語彙に無い言葉で書かれる。当たりの節だけで済ませない。", changes),
+        (f"## ツール名・一般語に当たった行 ({len(weak)})",
+         "ツール自体の修正が大半で、フックの契約に関わるものは少ない。", hit_lines(weak)),
+        ("## 全抜粋", "", excerpt),
     ]
-    body = []
-    for _version, label, lines in newer:
-        body += [f"### {label}", "", *lines, ""]
-
-    head_text, body_text = "\n".join(head), "\n".join(body)
-    room = max_chars - len(head_text)
-    if len(body_text) > room:
-        notice = f"\n\n(長いのでここで切った。続きは {CHANGELOG_URL})\n"
-        body_text = body_text[: max(room - len(notice), 0)].rsplit("\n", 1)[0] + notice
-    return head_text + body_text
+    more = f"(あと {{}} 行は入らなかった。全文は {CHANGELOG_URL})"
+    frames = ["\n".join(filter(None, [heading, "", note, "" if note else None])) + "\n" for heading, note, _ in parts]
+    # 見出し・注記・「入らなかった」の行は、使うかどうかに関わらず先に全部引く。残りだけを行に配るので、
+    # どの節がどれだけ削られても全体は max_chars を超えない
+    fixed = len(intro) + sum(len(frame) + len(more) + 8 for frame in frames) + len(parts)
+    left = max(max_chars - fixed, 0)
+    out = [intro]
+    for frame, (_heading, _note, lines) in zip(frames, parts):
+        kept, dropped = fit(lines or ["(なし)"], left)
+        left -= sum(len(line) + 1 for line in kept)
+        out.append(frame + "\n".join(kept + ([more.format(dropped)] if dropped else [])) + "\n")
+    return "\n".join(out)
 
 
 def main(argv=None):

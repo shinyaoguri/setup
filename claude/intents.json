@@ -500,7 +500,7 @@
       "id": "upstream-tracking",
       "intent": "Claude 本体の更新に合わせて、この台帳の手段を見直す (自作は見直しのたびに存在理由を問われる)",
       "why": "自前で組んだものが本体の標準機能に入っても、気付く経路が無い",
-      "rationale": ["shinyaoguri/setup#232"],
+      "rationale": ["shinyaoguri/setup#232", "shinyaoguri/claude-plugins:docs/decisions/0027-intents-ledger-cross-repo-coverage.md"],
       "means": [
         {"kind": "self", "ref": "claude/intents.json"},
         {"kind": "self", "ref": "claude/tests/intents_test.py"},
@@ -513,9 +513,8 @@
         {"surface": "skill-spec", "name": "SKILL.md の frontmatter", "stability": "documented"},
         {"surface": "desktop-app", "name": "デスクトップアプリは独自の claude バイナリを同梱し、PATH 上の CLI と版がずれる", "stability": "undocumented"}
       ],
-      "verify": ["claude/tests/intents_test.py", "claude/tests/changelog_diff_test.py", "claude/tests/workflow_test.py"],
-      "sunset": "本体が、設定とフックの非推奨・置換可能性を自己診断するようになったら",
-      "gap": "自作プラグイン側の手段 (plugin-self の # 以降のパス) が実在するかは、このリポジトリの CI からは見えない。claude-plugins 側の週次検査は未実装 (#232)"
+      "verify": ["claude/tests/intents_test.py", "claude/tests/changelog_diff_test.py", "claude/tests/workflow_test.py", "none: 自作プラグイン側の手段の実在は、claude-plugins の週次 freshness (scripts/check-intent-coverage.sh) が見る"],
+      "sunset": "本体が、設定とフックの非推奨・置換可能性を自己診断するようになったら"
     },
     {
       "id": "wish-hook-contract-against-real-claude",
