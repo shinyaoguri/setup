@@ -52,7 +52,10 @@ python3 claude/tests/runcat_metrics_test.py
   手段なのかを台帳にも書く — 意図を言えない手段は `claude/tests/intents_test.py` が CI で落とす。
   自作の手段 (`self` / `plugin-self` / `doc`) には `sunset` (本体に何が入ったらやめるか) が必須で、
   本体が更新されるたびに存在理由を問われるのは自作の側。状態 (met / partial / unmet) は手で書かず
-  `means` と `gap` から読む。理由の本文は台帳に写さず `rationale` から ADR・Issue・冒頭コメントを指す
+  `means` と `gap` から読む。理由の本文は台帳に写さず `rationale` から ADR・Issue・冒頭コメントを指す。
+  **台帳に載せるのは、本体の機能と代替関係にあるものだけ** (setup#246)。コミットの書式や
+  「1 PR = 1 関心事」のような仕事の流儀は、本体に何が入っても置き換わらず `sunset` を書けないので
+  載せない — 古びていないかは見直しスキルの通読 (手順 4) が見る
 - SSH の鍵まわりは Secretive (Secure Enclave) 側の手動セットアップが前提。手順の正本は
   `tasks/ssh.yml` 冒頭のコメント。鍵の生成は GUI 操作なので ansible では自動化できない。
   **鍵タイプは ECDSA P-256、"Require Authentication" は外す** — どちらを外しても
