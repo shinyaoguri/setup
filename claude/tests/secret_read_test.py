@@ -145,6 +145,7 @@ class SecretReadTestCase(unittest.TestCase):
         keychain_readonly=False,
         ttl=None,
         refresh_timeout=None,
+        retry=None,
         controlling_tty=False,
     ):
         env = clean_env()
@@ -163,6 +164,8 @@ class SecretReadTestCase(unittest.TestCase):
             env["SECRET_CACHE_TTL"] = str(ttl)
         if refresh_timeout is not None:
             env["SECRET_CACHE_REFRESH_TIMEOUT"] = str(refresh_timeout)
+        if retry is not None:
+            env["SECRET_CACHE_RETRY"] = str(retry)
         if not with_op:
             # op を PATH から外す = 1Password が使えない状況の再現
             (self.bin / "op").unlink()
@@ -205,6 +208,11 @@ class SecretReadTestCase(unittest.TestCase):
         path = self.keychain_path(ref)
         epoch, _, encoded = path.read_text().partition(":")
         path.write_text(f"{int(epoch) - seconds}:{encoded}")
+
+    def age_failed_attempt(self, ref, seconds):
+        """取り直しに失敗した時刻の控えを seconds 秒だけ過去へずらす。"""
+        path = self.keychain_path(f"{ref}#attempt")
+        path.write_text(str(int(path.read_text()) - seconds))
 
     def write_legacy_cache(self, ref, value):
         """時刻を持たない旧形式 (base64 のみ) のキャッシュを置く。"""
@@ -353,6 +361,63 @@ class SecretReadTestCase(unittest.TestCase):
 
         self.run_script(GYAZO_REF, ttl=100, op_fails=True)
         self.assertEqual(len(self.op_calls()), calls_after_failure)
+
+    def test_取り直しに失敗したら短い間隔でもう一度試す(self):
+        """失敗のたびに次の試行を TTL いっぱい先送りしない (issue #213)。
+
+        以前は失敗するとキャッシュの時刻を現在へ進めていたので、次の試行は 24 時間後
+        だった。期限切れ後の最初の読み出しが毎回ロック中に当たる構成 (夜間の
+        scheduled task) では失敗が毎日繰り返され、いつまでもローテートに追いつかない。
+        """
+        self.run_script(GYAZO_REF, ttl=100000, retry=60)
+        self.age_cache(GYAZO_REF, 200000)
+        self.run_script(GYAZO_REF, ttl=100000, retry=60, op_fails=True)
+        self.set_op_value("rotated-token")
+
+        # 間隔の内側では呼び直さない (ロック中に毎回タイムアウトを待たない)
+        result = self.run_script(GYAZO_REF, ttl=100000, retry=60)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+
+        # 間隔を過ぎたら試す。TTL (100000 秒) は待たない
+        self.age_failed_attempt(GYAZO_REF, 61)
+        result = self.run_script(GYAZO_REF, ttl=100000, retry=60)
+        self.assertEqual(result.stdout, "rotated-token\n")
+
+    def test_取り直しに失敗しても最終取得時刻は動かさない(self):
+        """--check が、失敗しただけの時刻を「取得した時刻」として見せない。"""
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 3 * 3600)
+        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+
+        listing = self.run_script("--check").stdout
+        self.assertIn("3 時間前に取得", listing)
+        self.assertIn("取り直しに失敗", listing)
+
+    def test_取り直しに成功したら失敗の控えを消す(self):
+        self.run_script(GYAZO_REF, ttl=100, retry=0)
+        self.age_cache(GYAZO_REF, 200)
+        self.run_script(GYAZO_REF, ttl=100, retry=0, op_fails=True)
+        self.assertTrue(self.keychain_path(f"{GYAZO_REF}#attempt").exists())
+
+        self.run_script(GYAZO_REF, ttl=100, retry=0)
+        self.assertFalse(self.keychain_path(f"{GYAZO_REF}#attempt").exists())
+        self.assertNotIn("取り直しに失敗", self.run_script("--check").stdout)
+
+    def test_refresh_で取り直せたら失敗の控えを消す(self):
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+
+        self.run_script("--refresh", GYAZO_REF)
+        self.assertNotIn("取り直しに失敗", self.run_script("--check").stdout)
+
+    def test_forget_は失敗の控えも消す(self):
+        self.run_script(GYAZO_REF, ttl=100)
+        self.age_cache(GYAZO_REF, 200)
+        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+
+        self.run_script("--forget", GYAZO_REF)
+        self.assertEqual(self.cached_entries(), [])
 
     def test_取り直しに失敗しても値は壊さない(self):
         """時刻だけ進めるつもりで値まで飛ばしていないこと。"""
