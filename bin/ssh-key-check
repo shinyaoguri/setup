@@ -30,6 +30,17 @@
 # 常時走る場所 (zshenv・Claude の hook) には置かない。走るのは人が打つときと、
 # --tags git を含む playbook の実行だけ。
 #
+# **鍵は agent に聞く。公開鍵ファイルは一度も見ない** (issue #284)。Secretive は
+# ~/Library/Containers/.../Data/PublicKeys/<md5>.pub に写しを置くが、macOS 26 の
+# サンドボックスコンテナ保護で **readdir も open も Operation not permitted になる**
+# (stat(2) だけが通るので「在るのに読めない」)。フルディスクアクセスを持たないプロセス
+# 全部が該当し、ansible からも人の端末からも読めない。以前はここを glob で列挙していた
+# ため、正しい鍵が在るのに「.pub が無い」と ng を出し、tasks/git.yml が rc で判断して
+# コミット署名が永久に入らなかった — **読めなかったことを「無い」と言っていた**。
+# socket は保護の外にあるので ssh-add -L は通る。Secretive 自身もこのファイルを写し
+# (PublicKeyStandinFileController.swift: "easily accessible by scripts") としか
+# 位置付けていないので、agent が実際に持っている鍵を見るこちらが検査としても正しい。
+#
 # 契約: --print-key だけが stdout に値を出す。他は診断の行しか出さない。
 # 呼び出し口は tasks/git.yml (署名設定の可否) と README 手順 10 (人が確かめる)。
 # テストは claude/tests/ssh_key_check_test.py (ssh-add / gh を PATH で偽物に差し替える)。
@@ -55,7 +66,6 @@ readonly SCRIPT_DIR
 readonly SSH_TASK="${SCRIPT_DIR%/*}/tasks/ssh.yml"
 
 readonly SECRETIVE_DATA="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"
-readonly PUBLIC_KEYS="$SECRETIVE_DATA/PublicKeys"
 
 # **環境の SSH_AUTH_SOCK は見ない。** ansible の command モジュールは zshenv を読まないし、
 # SSH 越しに入っているときは zshenv が転送された agent を指したままにする (それが正しい)。
@@ -212,38 +222,66 @@ key_fields() {
   awk 'NR == 1 { print $1 " " $2 }' "$1"
 }
 
-# --- C0: 署名に使う鍵を決める -------------------------------------------------
+# --- 鍵を agent に聞く --------------------------------------------------------
 #
 # **ここで決めた 1 本を、この後の検査も tasks/git.yml も使う** (--print-key)。
 # 「ansible が使う鍵」と「検査器が見る鍵」の定義が 2 箇所にあると、検査器が別の鍵を見て
-# 緑になる。以前の `cat *.pub | head -1` は鍵が 2 本あるとファイル名順で任意の 1 本を拾っていた。
-SELECTED_KEY=''
+# 緑になる。**公開鍵ファイルは見ない** (冒頭。OS が読ませないし、写しでしかない)。
+#
+# ssh-add -L の終了コードは -l と同じ規約: 0 = 鍵あり / 1 = agent に鍵が無い /
+# それ以外 = agent に繋げない。1 回で常駐の検査と鍵の取得を兼ねる。
+AGENT_STATUS='unreachable' # ok | nokeys | unreachable
+SELECTED_KEY=''            # 1 本に決まったときだけ、その行を書いた一時ファイル
 KEY_COUNT=0
-select_key() {
-  local f
+load_agent_keys() {
+  local rc=0 keys
+  AGENT_STATUS='unreachable'
   SELECTED_KEY=''
   KEY_COUNT=0
-  [ -d "$PUBLIC_KEYS" ] || return 1
-  for f in "$PUBLIC_KEYS"/*.pub; do
-    # glob が何にも当たらないと綴りがそのまま来る
-    [ -f "$f" ] || continue
-    KEY_COUNT=$((KEY_COUNT + 1))
-    SELECTED_KEY="$f"
-  done
-  [ "$KEY_COUNT" -eq 1 ] || {
-    SELECTED_KEY=''
-    return 1
-  }
-  [ -s "$SELECTED_KEY" ] || {
-    SELECTED_KEY=''
-    return 1
-  }
-  return 0
+  [ -S "$AGENT_SOCK" ] || return 0
+  SSH_AUTH_SOCK="$AGENT_SOCK" run_bounded "$PROBE_LIMIT" ssh-add -L || rc=$?
+  case "$rc" in
+  0) AGENT_STATUS='ok' ;;
+  1)
+    # 「鍵が無い」は agent としては正常。鍵の有無は下の検査が言う
+    AGENT_STATUS='nokeys'
+    return 0
+    ;;
+  *) return 0 ;;
+  esac
+
+  # run_bounded の出力は次の呼び出しで上書きされるので、ここで写しを取る
+  keys="$WORK_DIR/agent-keys"
+  cp "$BOUNDED_OUT" "$keys"
+  KEY_COUNT=$(awk 'NF > 0' "$keys" | wc -l | tr -d ' ')
+  [ "$KEY_COUNT" -eq 1 ] || return 0
+  SELECTED_KEY="$WORK_DIR/selected.pub"
+  awk 'NF > 0 { print; exit }' "$keys" >"$SELECTED_KEY"
 }
 
+# 人が読む 1 行。**ファイル名は出さない** — 見ていないし、出しても OS が読ませないパスに
+# なる。agent から取った鍵そのものを指す fingerprint が代わり
+key_label() {
+  local fingerprint comment
+  fingerprint=$(ssh-keygen -lf "$SELECTED_KEY" 2>/dev/null | awk '{ print $2 }')
+  comment=$(awk 'NR == 1 { $1 = ""; $2 = ""; sub(/^ +/, ""); print }' "$SELECTED_KEY")
+  [ -n "$fingerprint" ] || fingerprint='fingerprint を計算できない鍵'
+  if [ -n "$comment" ]; then
+    printf '%s %s' "$fingerprint" "$comment"
+  else
+    printf '%s' "$fingerprint"
+  fi
+}
+
+# --- C0: 署名に使う鍵が 1 本に決まるか ----------------------------------------
 check_key_selection() {
+  if [ "$AGENT_STATUS" = 'unreachable' ]; then
+    # **ここを ng にしない。** 鍵が壊れているのではなく、見られなかっただけ
+    report unknown '公開鍵' '判定不能 (SecretAgent が応えないので鍵を見られない)'
+    return
+  fi
   if [ "$KEY_COUNT" -eq 0 ]; then
-    report ng '公開鍵' "$(tilde "$PUBLIC_KEYS") に .pub が無い" \
+    report ng '公開鍵' 'agent が鍵を 1 本も持っていない' \
       'Secretive.app の「+」で鍵を 1 本作る (ECDSA P-256 / "Require Authentication" は外す)'
     return
   fi
@@ -252,33 +290,22 @@ check_key_selection() {
       '鍵は 1 本だけ作る運用。古いマシンの残りなら Secretive で消す'
     return
   fi
-  report ok '公開鍵' "$(basename "$SELECTED_KEY")"
+  report ok '公開鍵' "$(key_label)"
 }
 
 # --- C1: SecretAgent が常駐しているか ----------------------------------------
-AGENT_OK=0
 check_agent() {
-  local rc=0
+  if [ "$AGENT_STATUS" != 'unreachable' ]; then
+    report ok 'SecretAgent' '常駐していて応答する'
+    return
+  fi
   if [ ! -S "$AGENT_SOCK" ]; then
     report ng 'SecretAgent' "socket が無い ($(tilde "$AGENT_SOCK"))" \
       'Secretive.app を起動し、SecretAgent の常駐を許可する'
     return
   fi
-  SSH_AUTH_SOCK="$AGENT_SOCK" run_bounded "$PROBE_LIMIT" ssh-add -l || rc=$?
-  case "$rc" in
-  0)
-    AGENT_OK=1
-    report ok 'SecretAgent' '常駐していて鍵を持っている'
-    ;;
-  1)
-    report ng 'SecretAgent' '常駐しているが鍵を 1 本も持っていない' \
-      'Secretive.app で鍵を作る。作ってあるなら SecretAgent を起動し直す'
-    ;;
-  *)
-    report ng 'SecretAgent' 'socket はあるが応答しない' \
-      'Secretive.app を起動し直して、SecretAgent の常駐を許可する'
-    ;;
-  esac
+  report ng 'SecretAgent' 'socket はあるが応答しない' \
+    'Secretive.app を起動し直して、SecretAgent の常駐を許可する'
 }
 
 # --- C2: 鍵タイプ -------------------------------------------------------------
@@ -301,14 +328,11 @@ check_key_type() {
 check_signs_without_approval() {
   local attempt rc
 
-  if [ -z "$SELECTED_KEY" ]; then
-    report unknown '承認なしで署名できる' '判定不能 (見るべき鍵が決まらない)'
-    return
-  fi
+  # 鍵が決まらないということは agent が応えないか鍵が無いかで、どちらでも試せない。
   # 居ない agent に probe を打って 5 秒待つのは無駄で、かつ時間切れを
   # 「Require Authentication が付いている」と誤って読める
-  if [ "$AGENT_OK" -ne 1 ]; then
-    report unknown '承認なしで署名できる' '判定不能 (SecretAgent が応えないので試せない)'
+  if [ -z "$SELECTED_KEY" ]; then
+    report unknown '承認なしで署名できる' '判定不能 (見るべき鍵が決まらない)'
     return
   fi
 
@@ -388,14 +412,20 @@ check_github() { # $1=エンドポイント  $2=ラベル  $3=足りないスコ
   report ng "$label" 'この鍵が一覧に無い' "$how"
 }
 
+# **登録も標準入力から渡す。** 公開鍵ファイルのパスを渡す形は、そのまま打つと gh が
+# 同じコンテナ保護で落ちる (冒頭)
+register_hint() { # $1=authentication|signing
+  printf 'ssh-key-check --print-key | gh ssh-key add --type %s --title "$(scutil --get ComputerName)"' "$1"
+}
+
 check_github_auth() {
   check_github '/user/keys' 'GitHub authentication key' 'admin:public_key' \
-    "gh ssh-key add $(tilde "$SELECTED_KEY") --type authentication --title \"\$(scutil --get ComputerName)\""
+    "$(register_hint authentication)"
 }
 
 check_github_signing() {
   check_github '/user/ssh_signing_keys' 'GitHub signing key' 'admin:ssh_signing_key' \
-    "gh ssh-key add $(tilde "$SELECTED_KEY") --type signing --title \"\$(scutil --get ComputerName)\""
+    "$(register_hint signing)"
 }
 
 # --- 組み立て -----------------------------------------------------------------
@@ -403,15 +433,34 @@ check_github_signing() {
 # **手順の全体を出すのは、まだ何も始まっていないときだけ。** 既に鍵がある人に毎回 5 手順を
 # 読ませると、本当に見るべき 1 行 (どれが欠けているか) がその中に埋もれる。
 # 出せたら 0、正本が読めなければ 1 (呼び出し側が在処の案内へ倒す)。
-print_setup_steps() {
+print_setup_steps() { # $1=前置きの 1 行
   local steps
   [ -r "$SSH_TASK" ] || return 1
   # 印の内側を取り、コメント記号と、端末では読めない Markdown の強調を落とす
   steps=$(sed -n '/setup-steps:begin/,/setup-steps:end/p' "$SSH_TASK" |
     sed '1d;$d' | sed -e 's/^#//' -e 's/\*\*//g')
   [ -n "$steps" ] || return 1
-  printf '\n鍵がまだ 1 本もありません。次の順に進めます (%s より):\n%s\n' \
-    "$(tilde "$SSH_TASK")" "$steps"
+  printf '\n%s 次の順に進めます (%s より):\n%s\n' \
+    "$1" "$(tilde "$SSH_TASK")" "$steps"
+}
+
+# まだ何も始まっていないか。**鍵が無いと確かめられたとき**と、**SecretAgent が一度も
+# 常駐していないとき** (socket すら無い = 手順 1 が未了) がそれに当たる。新しいマシンでは
+# Secretive.app が入っただけで一度も起動していないので、そこで手順が出ないと issue #278 が
+# 狙った場面をまるごと外す。socket はあるが応答しない人は「始めたが今は落ちている」なので、
+# 5 手順ではなく検査行の次の 1 手だけを読ませる
+nothing_started_yet() {
+  [ "$KEY_COUNT" -eq 0 ] || return 1
+  [ "$AGENT_STATUS" != 'unreachable' ] || [ ! -S "$AGENT_SOCK" ]
+}
+
+# 手順の前置き。**確かめられていないことを断定しない** (agent が応えないなら鍵の有無は不明)
+setup_steps_lead() {
+  if [ "$AGENT_STATUS" = 'unreachable' ]; then
+    printf 'SecretAgent がまだ常駐していません。'
+  else
+    printf '鍵がまだ 1 本もありません。'
+  fi
 }
 # 鍵そのものは下の検査行が言うので、ここでは**どこを見たか**だけを出す
 print_header() { # $1=local|github|all
@@ -438,7 +487,7 @@ print_summary() {
     printf '判定不能 %d 件 (全 %d 件)\n' "$UNKNOWN_COUNT" "$total"
   fi
   # まだ何も始まっていないなら手順そのものを、始まっているなら正本の在処だけを出す
-  if [ "$KEY_COUNT" -eq 0 ] && print_setup_steps; then
+  if nothing_started_yet && print_setup_steps "$(setup_steps_lead)"; then
     :
   else
     printf '手順の正本は %s の冒頭コメント\n' "$(tilde "$SSH_TASK")"
@@ -448,12 +497,16 @@ print_summary() {
 }
 
 run_checks() { # $1=local|github|all
-  select_key || true
+  load_agent_keys
   print_header "$1"
+  # agent は鍵を決める前提なので先に見る。--github では検査項目に出さない
+  # (「GitHub に聞かないと分からないこと」ではない) が、鍵の決定には要る
+  case "$1" in
+  local | all) check_agent ;;
+  esac
   check_key_selection
   case "$1" in
   local | all)
-    check_agent
     check_key_type
     check_signs_without_approval
     ;;
@@ -469,7 +522,8 @@ run_checks() { # $1=local|github|all
 
 # tasks/git.yml が署名に使う鍵を取るための口。**値以外は何も出さない**
 cmd_print_key() {
-  select_key || return 1
+  load_agent_keys
+  [ -n "$SELECTED_KEY" ] || return 1
   awk 'NR == 1' "$SELECTED_KEY"
 }
 

@@ -304,8 +304,12 @@ class GitTaskTestCase(unittest.TestCase):
         self.home = Path(self.workdir.name)
 
         self.secretive = self.home / "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"
-        (self.secretive / "PublicKeys").mkdir(parents=True)
+        self.secretive.mkdir(parents=True)
         self.addCleanup(bind_agent_socket(self.secretive).close)
+        # **鍵は agent から渡す。PublicKeys は作らない** — 本番では OS のコンテナ保護で
+        # 読めないので、写しが無いのが検査器から見た通常の状態 (issue #284)
+        self.agent_keys = self.home / "agent-keys"
+        self.agent_keys.write_text("")
 
         self.fake_bin = self.home / "fake-bin"
         self.fake_bin.mkdir()
@@ -335,6 +339,7 @@ class GitTaskTestCase(unittest.TestCase):
         env["SSH_KEY_CHECK_GH_LIMIT"] = "2"
         env["FAKE_SSH_ADD_LIST"] = agent
         env["FAKE_SSH_ADD_SIGN"] = sign
+        env["FAKE_SSH_ADD_KEYS_FILE"] = str(self.agent_keys)
         env["FAKE_GH_AUTH"] = gh_auth
         env["FAKE_GH_SIGNING"] = gh_signing
         return subprocess.run(
@@ -350,7 +355,8 @@ class GitTaskTestCase(unittest.TestCase):
         return result.stdout.strip()
 
     def place_key(self, key=ECDSA_KEY):
-        (self.secretive / "PublicKeys" / "test.pub").write_text(key + "\n")
+        """agent に鍵を 1 本持たせる (`ssh-add -L` が返す一覧)。"""
+        self.agent_keys.write_text(key + "\n")
 
     def place_checkout(self):
         """配備先の checkout を偽の HOME に作る。origin は本番と同じ HTTPS。"""

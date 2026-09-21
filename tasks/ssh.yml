@@ -18,6 +18,9 @@
 #   3. 公開鍵を GitHub に **authentication key と signing key の両方**で登録する
 #      gh api には admin:ssh_signing_key スコープが要る:
 #        gh auth refresh -h github.com -s admin:ssh_signing_key
+#      鍵は **agent から渡す** (公開鍵ファイルのパスを渡す形は落ちる。理由は下):
+#        ssh-key-check --print-key | gh ssh-key add --type authentication --title "$(scutil --get ComputerName)"
+#        ssh-key-check --print-key | gh ssh-key add --type signing --title "$(scutil --get ComputerName)"
 #   4. 済んだか確かめる:  ssh-key-check
 #      済んでいない項目だけが残るので、全部 ok になるまで 1〜3 を直す
 #   5. 設定を反映する:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
@@ -33,6 +36,22 @@
 #
 # tasks/git.yml はこの --local が通ったときだけコミット署名を設定する。名指しで
 # `--tags git` を流したときは、通らなければ失敗として止まる (issue #273)。
+#
+# **公開鍵ファイルは読めない。鍵は agent (ssh-add -L) から取る** (issue #284)。Secretive は
+# ~/Library/Containers/.../Data/PublicKeys/<md5>.pub に写しを置くが、macOS 26 のサンドボックス
+# コンテナ保護で **readdir も open も Operation not permitted** になる。stat(2) だけは通るので
+# 「在るのに読めない」という形で出る:
+#
+#   stat .../PublicKeys/<md5>.pub   → -rw-r--r-- 177 bytes   (在る)
+#   cat  .../PublicKeys/<md5>.pub   → Operation not permitted
+#   ls   .../PublicKeys/            → Operation not permitted
+#
+# フルディスクアクセスを持たないプロセス全部が該当する (ansible からも人の端末からも読めない)。
+# ここを列挙していた頃の ssh-key-check は、正しい鍵が在るのに「.pub が無い」と ng を出し、
+# tasks/git.yml がその rc を見てコミット署名を永久に入れなかった。**読めなかったことを
+# 「無い」と言っていた**のが誤りで、鍵を見る口は agent へ移した。socket は保護の外にある。
+# フルディスクアクセスを与えて解く道は採らない — TCC は GUI 操作で、マシンごとに人手が
+# 増え、このリポジトリが持つ「新しい Mac で再現できる」性質を損なうため。
 #
 # 秘密鍵は Secure Enclave の中にあり、設計上エクスポートできない。ファイルとしては
 # どこにも存在しないので、盗まれても持ち出せない代わりに **バックアップも移動もできない**。
