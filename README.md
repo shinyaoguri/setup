@@ -51,6 +51,6 @@ GUI 操作が要って自動化できない手順があるので、次の順に�
 6. **秘密のキャッシュを温める** — `secret-read --warm`。セットアップの最後にも試すが、5 が済んでいないと失敗する。温めておかないと、無人セッションが初回の読み出しで 1Password の承認を待って止まる。何をキャッシュしてよいかは [`secret-cache-allowlist`](secret-cache-allowlist)
 7. **Gyazo を手でインストールする** (3 で選んだ場合) — `gyazo` cask は手動インストーラ (artifact が `installer: manual`) で、brew は `.pkg` を Caskroom に置くだけ。`/opt/homebrew/Caskroom/gyazo/*/Gyazo-*.pkg` を開いてインストールする。**`brew list --cask gyazo` は .pkg があるだけで成功を返す**ので、セットアップは「導入済み」と報告してしまう。済ませないと Gyazo MCP が無音で未登録になり、[gyazo-capture スキル](https://github.com/shinyaoguri/claude-plugins) が使えない。済んだら `ansible-playbook playbook_sillicon_mac.yml --tags claude`
 8. **playbook が「Claude デスクトップアプリを再起動」と言ったら再起動する** — アプリは起動時の PATH を持ち続けるので、セットアップ前から開いていたアプリのセッションには `secret-read` が見えない ([#154](https://github.com/shinyaoguri/setup/issues/154))
-9. **一度ログアウトして入り直す** — キーリピート・トラックパッド・日本語入力の句読点は `defaults` に書いても動いているプロセスには届かない。効いていないように見えても再ログイン後に効く (Dock だけは playbook が入れ直すので即時)
+9. **一度ログアウトして入り直す** — キーリピート・トラックパッド・日本語入力の句読点・修飾キーの入れ替え (Caps Lock → Control / fn 無効) は `defaults` に書いても動いているプロセスには届かない。効いていないように見えても再ログイン後に効く (Dock だけは playbook が入れ直すので即時)
 10. **マシン固有のシェル設定は `~/.zshrc.local` へ置く** — `~/.zshrc` はこのリポジトリへの symlink なので、インストーラ (Unity CLI・grok など) が `~/.zshrc` へ追記した行はリポジトリの変更として現れる。`git -C ~/.setup diff zshrc` に出たら `~/.zshrc.local` へ移して元へ戻す。zshrc は最後にそれを読む ([#198](https://github.com/shinyaoguri/setup/issues/198))
 11. **確かめる** — `secret-read --check` で全件がキャッシュ済み、`ssh-key-check` が全部 ok (`ssh-add -l` は 4 つの完了条件のうち agent の常駐しか見ていない)。Claude Code のセッションで `command -v secret-read` が通る

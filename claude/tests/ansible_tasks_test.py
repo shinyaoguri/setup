@@ -8,6 +8,7 @@ ansible のタスクは「実行されなかった」と「実行して変更が
     python3 claude/tests/ansible_tasks_test.py
 """
 
+import plistlib
 import re
 import shutil
 import subprocess
@@ -635,6 +636,98 @@ class WorktreeSourceTest(unittest.TestCase):
         # 分かったうえで流す口 (HOME を一時ディレクトリへ向けた結合テストなど)
         forced = self.run_from(worktree, "-e", "allow_worktree_source=true")
         self.assertEqual(forced.returncode, 0, forced.stdout[-2000:])
+
+
+class ModifierMappingTest(unittest.TestCase):
+    """修飾キーの入れ替え (Caps Lock → Control / fn 無効。issue #276)。
+
+    この設定は書き損じが**エラーにならない**。置き場を間違えても型を間違えても
+    `defaults` は成功を返し、ただキーが効かないだけになる。タスクの形と、
+    前提にしている `defaults` の挙動の両方を固定する。
+    """
+
+    KEY = "com.apple.keyboard.modifiermapping.0-0-0"
+    # Caps Lock → 左 Control / 内蔵 fn → 無効 / 外付け fn → 無効
+    SRCS = ("30064771129", "1095216660483", "280379760050179")
+
+    def setUp(self):
+        self.body = without_comments(TASKS / "macos.yml")
+        self.block = next(
+            (b for b in re.split(r"\n(?=- name:)", self.body)
+             if self.KEY in b),
+            None,
+        )
+        self.assertIsNotNone(self.block, "修飾キーを書くタスクが見当たらない")
+
+    def test_writes_to_the_per_host_domain(self):
+        """`-currentHost` を落とすと別の場所へ書いて、黙って効かなくなる。
+
+        システム設定が読むのは ByHost の .GlobalPreferences。
+        """
+        calls = re.findall(r"/usr/bin/defaults\s+(\S+)", self.block)
+        self.assertTrue(calls, "defaults を呼んでいない")
+        self.assertEqual(
+            [c for c in calls if c != "-currentHost"], [],
+            "-currentHost の無い defaults 呼び出しがある (別の場所を読み書きする)",
+        )
+
+    def test_value_is_written_as_typed_xml(self):
+        """旧形式で書くと数字が**文字列**になり、型が食い違ったまま効かない。"""
+        self.assertIn(
+            "<integer>", self.block,
+            "値を XML plist で渡していない (旧形式は数字を文字列として書き込む)",
+        )
+        self.assertNotRegex(
+            self.block, r"HIDKeyboardModifierMappingSrc\s*=",
+            "旧形式 (Src=123;) で書いている",
+        )
+
+    def test_all_three_mappings_are_declared(self):
+        """この pref は辞書の配列ひとつ。一部だけ書くと残りが消える。
+
+        Caps Lock だけを書くタスクに縮めると、fn の 2 件が配列ごと上書きされる。
+        """
+        missing = [src for src in self.SRCS if src not in self.block]
+        self.assertEqual(
+            missing, [],
+            "3 件そろっていない (配列ごと上書きするので、書き落とした分は消える)",
+        )
+
+    def test_the_write_is_not_unconditional(self):
+        """毎回 changed を返すと、本当に変わったものが埋もれる (#174)。"""
+        self.assertRegex(
+            self.block, r"changed_when:.*stdout",
+            "書き込みの有無を changed_when で見ていない",
+        )
+
+    @unittest.skipUnless(shutil.which("defaults"), "defaults が無い環境")
+    def test_defaults_write_forms_behave_as_assumed(self):
+        """前提にしている `defaults` の型の扱いそのもの。OS 側が変われば赤くなる。"""
+        domain = "com.example.setup.ansible-tasks-test"
+        self.addCleanup(
+            subprocess.run, ["defaults", "delete", domain],
+            capture_output=True,
+        )
+
+        def written(value):
+            subprocess.run(
+                ["defaults", "write", domain, "k", value],
+                check=True, capture_output=True, env=clean_env(),
+            )
+            out = subprocess.run(
+                ["defaults", "export", domain, "-"],
+                check=True, capture_output=True, env=clean_env(),
+            )
+            return plistlib.loads(out.stdout)["k"][0]["n"]
+
+        self.assertIsInstance(
+            written("({n=1;})"), str,
+            "旧形式が数字を整数で書くようになった (タスクを見直せる)",
+        )
+        self.assertIsInstance(
+            written("<array><dict><key>n</key><integer>1</integer></dict></array>"), int,
+            "XML plist で渡しても整数にならない (書き込みの形を変える必要がある)",
+        )
 
 
 class TaskTagNamingTest(unittest.TestCase):
