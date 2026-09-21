@@ -835,6 +835,77 @@ class DiscardBackupTest(HookTestCase):
         self.assertEqual(len(refs), 1, "いま作った退避まで消えている")
 
 
+class MultiLineCommandTest(HookTestCase):
+    """改行で繋いだ後続ごと allow にしない (issue #202)。
+
+    allow はコマンド文字列**全体**に効く。1 行目が無害な git 操作でも、2 行目以降は
+    分類器も確認プロンプトも通らずに実行される。区切りの検査は `grep '[;&|…]'` で
+    行っていたが、grep は行単位なので**改行は区切りとして見えず**、`^git …` の照合も
+    語への分割 (`read -a`) も 1 行目だけを読んでいた。
+    """
+
+    TAIL = "\nrm -rf ./somewhere"
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / "tracked.txt").write_text("v1\n")
+        self.git("add", "tracked.txt")
+        self.git("commit", "-q", "-m", "init")
+        self.git("branch", "-M", "main")
+        self.git("branch", "merged")             # main と同じ先端 = -d で消せる
+        self.git("checkout", "-q", "-b", "unmerged")
+        self.commit("only here")
+        self.git("checkout", "-q", "main")
+
+    def assert_not_auto_approved(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        if not result.stdout.strip():
+            return   # 素通し。判定は permissions と分類器へ戻る
+        decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+        self.assertNotEqual(decision, "allow", "後続の行ごと allow になった")
+
+    def dirty(self):
+        (self.repo / "tracked.txt").write_text("uncommitted\n")
+
+    def forms(self):
+        """(allow を返す形, その前に作る状態)。1 行なら allow になることも併せて見る。"""
+        return [
+            ("git branch -d merged", None),
+            ("git branch -D unmerged", None),          # 先端を退避して allow
+            ("git checkout merged", None),
+            ("git checkout -b fresh", None),
+            ("git reset --hard", self.dirty),          # 変更と HEAD を退避して allow
+        ]
+
+    def test_single_line_forms_are_auto_approved(self):
+        """対照。ここが allow でなければ、下のテストは何も確かめていない。"""
+        for command, prepare in self.forms():
+            with self.subTest(command=command):
+                if prepare:
+                    prepare()
+                self.assert_auto_approved(self.run_hook(command))
+
+    def test_a_following_line_is_never_auto_approved(self):
+        for command, prepare in self.forms():
+            with self.subTest(command=command):
+                if prepare:
+                    prepare()
+                self.assert_not_auto_approved(self.run_hook(command + self.TAIL))
+
+    def test_trailing_newline_alone_does_not_change_the_decision(self):
+        """末尾の改行だけなら 1 つのコマンドのまま (trim で落ちる)。過検出にしない。"""
+        self.assert_auto_approved(self.run_hook("git branch -d merged\n"))
+
+    def test_discard_with_a_read_only_following_line_is_still_approved(self):
+        """作業ツリーの取り消しは後続を行ごとに読めているので、改行でも従来どおり。"""
+        self.dirty()
+        self.assert_auto_approved(self.run_hook("git checkout -- tracked.txt\ngit status"))
+
+    def test_discard_with_a_writing_following_line_is_not_approved(self):
+        self.dirty()
+        self.assert_not_auto_approved(self.run_hook("git checkout -- tracked.txt" + self.TAIL))
+
+
 class SafeCommandTest(HookTestCase):
     """日常の操作は止めない。"""
 

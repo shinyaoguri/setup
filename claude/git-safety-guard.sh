@@ -94,6 +94,18 @@ has() { printf '%s' "$scan" | grep -qE "$1"; }
 # 前後の空白を落とす。判定はコマンド文字列を語に分けて読むので、どの入口でも最初に通す。
 trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
 
+# コマンドが「単純コマンド 1 つ」として読めない形か。allow はコマンド文字列**全体**に
+# 効くので、allow を返す判定はどれも先にここを通す。
+#
+# **改行は grep の文字クラスでは見えない。** grep は行単位なので `[;&|…]` に改行を
+# 足しても当たらず、`^git …` の照合も `read -a` の語分割も 1 行目だけを読む。以前は
+# 区切りの検査が grep だけだったため、"git branch -d x<改行>rm -rf …" が 1 行目の形で
+# allow になり、2 行目が分類器も確認も通らずに実行できた (issue #202)。
+is_compound() { # $1=trim 済みのコマンド
+  case "$1" in *$'\n'*) return 0 ;; esac
+  printf '%s' "$1" | grep -q '[;&|<>()$`]'
+}
+
 # --- 可逆性の判定 -----------------------------------------------------------
 # いずれも「可逆と確認できたときだけ真」。リポジトリの外・判定材料が足りないときは
 # 偽を返し、呼び出し側で ask に落とす。
@@ -505,7 +517,7 @@ revision_revert_touches_agent_settings() { # REVISION_REV / REVISION_PATHS を�
 command_is_only() { # $1=先頭に一致すべき正規表現
   local trimmed
   trimmed=$(trim "$command")
-  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+  is_compound "$trimmed" && return 1
   printf '%s' "$trimmed" | grep -qE "$1"
 }
 
@@ -619,7 +631,7 @@ fi
 is_reversible_branch_cleanup() {
   local trimmed
   trimmed=$(trim "$command")
-  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+  is_compound "$trimmed" && return 1
 
   # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)。
   # ただし --force が付けば -D と等価になり git は確かめなくなるので、ここへは入れない
@@ -658,7 +670,7 @@ checkout_form_is_switch_only() {
   local trimmed count first
   trimmed=$(trim "$command")
   printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+checkout([[:space:]]|$)' || return 1
-  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+  is_compound "$trimmed" && return 1
 
   # ヒアストリングの語分割はグロブを展開しない (`set -- $trimmed` と違い、
   # コマンドに残った `*` が手元のファイル名へ化けない)
