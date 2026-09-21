@@ -2,6 +2,9 @@
 # Claude Code グローバル設定 (CLAUDE.md / settings.json / statusLine スクリプト) のリンク。
 # スキルはこのリポでは配らない: 自作・第三者とも plugin marketplace で供給する
 # (settings.json の extraKnownMarketplaces / enabledPlugins。自作は shinyaoguri/claude-plugins)
+#
+# ここに並ぶ配布物が「何をしたくて在るのか」と「本体に何が入ったらやめるのか」の索引は
+# claude/intents.json (配布はしない)。配布物を足したら台帳にも足す — テストが落とす
 
 # runcat-metrics.py は RunCat Neo の Custom Metrics 連携。上流サンプルをベースに拡張し、
 # statusLine が動かないデスクトップアプリ向けに hook 経由の入口も持たせている:
