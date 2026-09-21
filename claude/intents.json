@@ -1,0 +1,507 @@
+{
+  "version": 1,
+  "reviewed_against": {
+    "claude_code": "2.1.236",
+    "date": "2026-09-21"
+  },
+  "intents": [
+    {
+      "id": "reversible-git-without-prompt",
+      "intent": "退避を作れる git 操作は確認なしで通し、どこにも残っていないものを壊す操作だけを人に返す",
+      "why": "2 週間の実測で ask は 178 回・人が止めたのは 0 回で、確認が判断ではなく反射になっていた",
+      "rationale": ["shinyaoguri/setup#148", "shinyaoguri/setup#142", "claude/git-safety-guard.sh の冒頭コメント"],
+      "means": [
+        {"kind": "self", "ref": "claude/git-safety-guard.sh"},
+        {"kind": "native", "ref": "settings:permissions.ask"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "フックが通した操作を改めて聞き直さない"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "tool-name", "name": "Bash", "stability": "documented"},
+        {"surface": "hook-input", "name": "tool_input.command", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/git_safety_guard_test.py"],
+      "sunset": "本体の権限判定がリポジトリの状態を見て可逆な git 操作を自動で通すか、破棄の前に自動で退避を作るようになったら"
+    },
+    {
+      "id": "no-secret-commits",
+      "intent": "gitignore 済みの秘密情報・個人情報をコミットに混ぜない",
+      "why": "一度 push された秘密は消しても取り戻せず、文書ルールでは付け忘れを止められない",
+      "rationale": ["claude/git-safety-guard.sh の冒頭コメント"],
+      "means": [
+        {"kind": "self", "ref": "claude/git-safety-guard.sh"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "コミット混入は git-safety-guard フックが deny で強制ブロック"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/git_safety_guard_test.py", "claude/tests/gitignore_test.py"],
+      "sunset": "本体がコミット対象の秘密検知を標準で持ち、検知時に確実に止めるようになったら"
+    },
+    {
+      "id": "provisioning-preview",
+      "intent": "ansible を流す前に差分を予告し、実際に変わるときだけ人を呼ぶ",
+      "why": "playbook はマシン全体を書き換えるが、冪等な再実行まで毎回確認すると確認が反射になる",
+      "rationale": ["claude/provisioning-preflight.sh の冒頭コメント", "shinyaoguri/setup#127"],
+      "means": [
+        {"kind": "self", "ref": "claude/provisioning-preflight.sh"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/provisioning_preflight_test.py"],
+      "sunset": "本体に「実行前に dry-run を挟み、差分があるときだけ確認する」宣言的な口が入ったら"
+    },
+    {
+      "id": "automode-no-self-authorization",
+      "intent": "auto mode の分類器設定を Claude 自身が緩められないようにする",
+      "why": "hard_deny の Auto-Mode Self-Authorization が Edit 経由の編集では素通りした実測があり、決定論の層が要る",
+      "rationale": ["claude/automode-guard.py の docstring", "shinyaoguri/setup#210"],
+      "means": [
+        {"kind": "self", "ref": "claude/automode-guard.py"},
+        {"kind": "native", "ref": "settings:autoMode.hard_deny"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "tool-name", "name": "Edit", "stability": "documented"},
+        {"surface": "tool-name", "name": "MultiEdit", "stability": "documented"},
+        {"surface": "tool-name", "name": "Write", "stability": "documented"},
+        {"surface": "tool-name", "name": "NotebookEdit", "stability": "documented"},
+        {"surface": "settings-key", "name": "autoMode", "stability": "documented"},
+        {"surface": "model-behavior", "name": "分類器の hard_deny がファイル編集ツール経由の settings.json 変更に当たらない", "stability": "undocumented"}
+      ],
+      "verify": ["claude/tests/automode_guard_test.py", "env-doctor:7"],
+      "sunset": "分類器が Edit 系ツールでの autoMode 節の変更にも hard_deny を確実に当てるようになったら"
+    },
+    {
+      "id": "autonomy-boundary",
+      "intent": "記録が残って取り戻せる作業は指示を待たず進め、止まるのは決めた 5 つの場面だけにする",
+      "why": "押すだけの確認が増えると、本当に見るべき 1 回まで反射で押すようになる",
+      "rationale": ["claude/CLAUDE.md「全作業共通」", "shinyaoguri/setup#148"],
+      "means": [
+        {"kind": "native", "ref": "settings:permissions.defaultMode"},
+        {"kind": "native", "ref": "settings:autoMode.allow"},
+        {"kind": "native", "ref": "settings:autoMode.soft_deny"},
+        {"kind": "native", "ref": "settings:autoMode.environment"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "止まるのは次の 5 つだけ"}
+      ],
+      "depends_on": [
+        {"surface": "settings-key", "name": "autoMode", "stability": "documented"},
+        {"surface": "settings-key", "name": "$defaults", "stability": "documented"},
+        {"surface": "settings-key", "name": "defaultMode", "stability": "documented"},
+        {"surface": "settings-key", "name": "autoMode はユーザーの settings.json にしか書けない (プロジェクト設定・プラグインは対象外)", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/settings_test.py", "env-doctor:7"],
+      "sunset": "分類器の既定ルールが「記録が残って取り戻せるか」を軸に判定するようになり、独自の allow / soft_deny が要らなくなったら"
+    },
+    {
+      "id": "approval-at-the-plan",
+      "intent": "人間の確認を実装前のプラン 1 点に集約する",
+      "why": "プラン承認 201 回で新しい情報は 0 件だった一方、合意なしに編集が広がる事故は実在する",
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0017-approval-at-the-plan.md", "shinyaoguri/claude-plugins:docs/decisions/0016-agent-behavior-hooks-in-plugin.md"],
+      "means": [
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "人間の確認は「実装に入る前のプラン」1 点に集約する"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/plan-gate.sh"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/plan-gate-mark.sh"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/plan-pass.sh"}
+      ],
+      "depends_on": [
+        {"surface": "tool-name", "name": "ExitPlanMode", "stability": "documented"},
+        {"surface": "tool-name", "name": "EnterPlanMode", "stability": "documented"},
+        {"surface": "hook-event", "name": "PermissionRequest", "stability": "documented"},
+        {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
+        {"surface": "hook-event", "name": "PostToolUseFailure", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "プランを却下すると PostToolUse が発火しない", "stability": "undocumented"}
+      ],
+      "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-plan-gate.sh と scripts/test-rs-plan-pass.sh"],
+      "sunset": "プラン未承認のまま編集が広がるのを拒む permission mode か設定が本体に入ったら"
+    },
+    {
+      "id": "plan-on-github",
+      "intent": "着手時のプランを、他の人とセッションが読める GitHub 側に残す",
+      "why": "~/.claude/plans/ はローカルのマシンにしか無く、ランダムな 3 語のファイル名でリポジトリとも紐づかない",
+      "rationale": ["tasks/claude.yml 冒頭コメントの plan-record.sh の節", "claude/plan-record.sh の冒頭コメント"],
+      "means": [
+        {"kind": "self", "ref": "claude/plan-record.sh"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "着手時に立てたプランも置き場へ残す"}
+      ],
+      "depends_on": [
+        {"surface": "tool-name", "name": "ExitPlanMode", "stability": "documented"},
+        {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
+        {"surface": "hook-event", "name": "Stop", "stability": "documented"},
+        {"surface": "hook-input", "name": "tool_input.plan", "stability": "undocumented"},
+        {"surface": "hook-output", "name": "exit 2", "stability": "documented"},
+        {"surface": "file-format", "name": "~/.claude/plans/", "stability": "undocumented"}
+      ],
+      "verify": ["claude/tests/plan_record_test.py"],
+      "sunset": "本体がプランを PR / Issue に紐づけて残す機能を持ったら"
+    },
+    {
+      "id": "comment-provenance",
+      "intent": "コミットと Issue / PR コメントの出どころ (人間か、どのエージェントか) を後から辿れるようにする",
+      "why": "同じ場所に人間と複数のエージェントが書き込むが、ローカルの gh CLI からの投稿には GitHub 側の表示が出ない",
+      "rationale": ["tasks/claude.yml 冒頭コメントの gh-comment-guard.sh の節", "anthropics/claude-code#62791"],
+      "means": [
+        {"kind": "native", "ref": "settings:attribution"},
+        {"kind": "self", "ref": "claude/gh-comment-guard.sh"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "Issue / PR へのコメントは本文の末尾に署名を付けて投稿する"}
+      ],
+      "depends_on": [
+        {"surface": "settings-key", "name": "attribution", "stability": "documented"},
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "hook-output", "name": "updatedInput", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/gh_comment_guard_test.py"],
+      "sunset": "attribution が gh 経由のコメントにも効くようになったら",
+      "gap": "署名を付けるのは規約 (文書) の仕事で、フックは付け忘れを差し戻すだけなので 1 往復の無駄が出る。フックが入力を書き換えて自動で付ける形になっていない"
+    },
+    {
+      "id": "public-surface-terms",
+      "intent": "世代交代したリポジトリの公開面 (push するコミット・gh の投稿本文) に旧世界の語を出さない",
+      "why": "どの語を禁じるかというルール自体が機微情報なので、公開リポジトリには置けず機構とルールを分ける必要がある",
+      "rationale": ["tasks/claude.yml 冒頭コメントの term-guard.sh の節", "shinyaoguri/setup#121"],
+      "means": [
+        {"kind": "self", "ref": "claude/term-guard.sh"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/term_guard_test.py"],
+      "sunset": "リポジトリの外で管理する禁止語ルールを push / 投稿の前に当てる口が、本体か GitHub 側に入ったら"
+    },
+    {
+      "id": "bounded-waits",
+      "intent": "外の状態を待つループには必ず期限を付けさせ、セッションが終わるまで残る待ちを作らない",
+      "why": "停止条件が永久に真にならないポーリングがバックグラウンドで 1 時間 7 分残った (#136)",
+      "rationale": ["tasks/claude.yml 冒頭コメントの wait-deadline-guard.sh の節", "shinyaoguri/setup#136"],
+      "means": [
+        {"kind": "self", "ref": "claude/wait-deadline-guard.sh"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "run_in_background", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "フォアグラウンドの Bash は timeout の上限で殺されるが、バックグラウンドには上限が無い", "stability": "undocumented"},
+        {"surface": "tool-name", "name": "Monitor", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/wait_deadline_guard_test.py"],
+      "sunset": "バックグラウンド実行に時間上限を設定できるようになるか、待ちの公式な手段 (Monitor など) が期限を強制するようになったら"
+    },
+    {
+      "id": "signal-ownership",
+      "intent": "並行する他セッションのプロセスへシグナルを送らない",
+      "why": "同じマシンで複数のセッションが動いており、名前で選んだ kill は別セッションの作業を巻き込む",
+      "rationale": ["shinyaoguri/setup#150", "shinyaoguri/setup#153", "claude/signal-guard.py の docstring"],
+      "means": [
+        {"kind": "self", "ref": "claude/signal-guard.py"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "hook-input", "name": "session_id", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "Bash ツールのシェルとフックは、そのセッションの claude プロセスの子として起動する", "stability": "undocumented"},
+        {"surface": "harness-behavior", "name": "scratchpad のパスに session_id が入る", "stability": "undocumented"}
+      ],
+      "verify": ["claude/tests/signal_guard_test.py"],
+      "sunset": "本体がセッションごとにプロセスを隔離し、他セッションのプロセスへシグナルが届かなくなったら"
+    },
+    {
+      "id": "usage-visibility",
+      "intent": "レート制限の残りと、動いているセッションの一覧を常時見える所に出す",
+      "why": "上限への到達と、放置したままのセッションに気付けない",
+      "rationale": ["tasks/claude.yml 冒頭コメントの runcat-metrics.py の節", "claude/runcat-metrics.py の docstring"],
+      "means": [
+        {"kind": "self", "ref": "claude/runcat-metrics.py"},
+        {"kind": "native", "ref": "settings:statusLine"}
+      ],
+      "depends_on": [
+        {"surface": "statusline-input", "name": "rate_limits", "stability": "documented"},
+        {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
+        {"surface": "hook-event", "name": "Stop", "stability": "documented"},
+        {"surface": "hook-input", "name": "transcript_path", "stability": "documented"},
+        {"surface": "file-format", "name": "transcript の JSONL 形式", "stability": "undocumented"},
+        {"surface": "internal-api", "name": "api/oauth/usage", "stability": "undocumented"},
+        {"surface": "internal-api", "name": "OAuth トークンを預ける keychain のサービス名", "stability": "undocumented"},
+        {"surface": "desktop-app", "name": "デスクトップアプリでは statusLine が実行されない", "stability": "undocumented"}
+      ],
+      "verify": ["claude/tests/runcat_metrics_test.py"],
+      "sunset": "デスクトップアプリが statusLine を実行するようになったらフック経由の入口を消す。本体が使用量を外部へ出す公式の口を持ったら内部 API への依存を消す"
+    },
+    {
+      "id": "branch-worktree-hygiene",
+      "intent": "役目を終えたローカルブランチと worktree を、情報を失わないと証明できるものだけ自動で片付ける",
+      "why": "squash merge と worktree 分離の運用では、マージ済みのブランチと残骸 worktree が放っておくと溜まり続ける",
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0018-provable-branch-deletion.md", "tasks/git.yml の gone-clean の節"],
+      "means": [
+        {"kind": "native", "ref": "settings:hooks.Stop", "anchor": "git gone-clean"},
+        {"kind": "external", "ref": "tasks/git.yml", "anchor": "gone-clean"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/stale-branch-sweep.sh"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/worktree-sweep.sh"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "ローカルブランチの掃除は Stop hook が"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "Stop", "stability": "documented"},
+        {"surface": "hook-event", "name": "SessionStart", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "worktree", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "worktree 分離が worktree-agent-* のブランチを作る", "stability": "undocumented"}
+      ],
+      "verify": ["env-doctor:9", "none: フック本体の検証は claude-plugins 側の scripts/test-rs-branch-sweep.sh と scripts/test-rs-worktree-sweep.sh"],
+      "sunset": "本体の worktree 機能が、マージ済みのブランチと残骸 worktree を自分で片付けるようになったら"
+    },
+    {
+      "id": "ci-seen-through",
+      "intent": "push したら CI の結果を見届け、赤いままセッションを終わらせない",
+      "why": "push して終わると、赤くなった CI に次のセッションまで誰も気付かない",
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0016-agent-behavior-hooks-in-plugin.md"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/ci-watch-mark.sh"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/ci-watch-stop.sh"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
+        {"surface": "hook-event", "name": "Stop", "stability": "documented"},
+        {"surface": "hook-output", "name": "exit 2", "stability": "documented"},
+        {"surface": "desktop-app", "name": "PR の CI 監視 (ci-monitor / Auto-fix)", "stability": "documented"}
+      ],
+      "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-ci-watch.sh"],
+      "sunset": "本体 (デスクトップアプリの PR 監視など) が push 後の CI を見届け、赤なら作業を続けさせるようになったら"
+    },
+    {
+      "id": "frictionless-reads",
+      "intent": "読み取り専用の操作と、いつも使う場所の読み取りには確認を出さない",
+      "why": "毎回同じ承認を押している場所は、確認が判断の役を果たしていない",
+      "rationale": ["CLAUDE.md「非自明なところ」の permissions.allow と additionalDirectories の項"],
+      "means": [
+        {"kind": "native", "ref": "settings:permissions.allow"},
+        {"kind": "native", "ref": "settings:permissions.additionalDirectories"}
+      ],
+      "depends_on": [
+        {"surface": "settings-key", "name": "permissions.allow", "stability": "documented"},
+        {"surface": "settings-key", "name": "additionalDirectories", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/settings_test.py"],
+      "sunset": "auto mode の分類器が読み取り専用のコマンドを確実に無確認で通すと確かめられたら allow を畳む"
+    },
+    {
+      "id": "skill-supply",
+      "intent": "スキルとエージェント支援は実体をコピーせず、plugin marketplace から各マシンへ供給する",
+      "why": "~/.claude/skills/ へ実体や symlink を置くと、二重供給と更新漏れが起きる",
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0020-skills-ship-as-plugins.md", "shinyaoguri/claude-plugins:docs/decisions/0021-three-layer-placement.md"],
+      "means": [
+        {"kind": "native", "ref": "settings:extraKnownMarketplaces"},
+        {"kind": "native", "ref": "settings:enabledPlugins"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "スキルは用途で置き場を分ける"}
+      ],
+      "depends_on": [
+        {"surface": "settings-key", "name": "extraKnownMarketplaces", "stability": "documented"},
+        {"surface": "settings-key", "name": "enabledPlugins", "stability": "documented"},
+        {"surface": "plugin-spec", "name": "marketplace", "stability": "documented"},
+        {"surface": "plugin-spec", "name": "プラグインの更新は plugin.json の version 比較で判定される", "stability": "documented"},
+        {"surface": "plugin-spec", "name": "CLAUDE_PLUGIN_ROOT", "stability": "documented"}
+      ],
+      "verify": ["env-doctor:4"],
+      "sunset": "本体が個人のスキルをアカウントに紐づけて同期するようになり、自前の marketplace が要らなくなったら"
+    },
+    {
+      "id": "third-party-tools",
+      "intent": "第三者が配布する道具 (Swift の LSP・eli5) を、コピーせずに使う",
+      "why": "第三者のスキルを手元へ写すと、上流の更新に追従できなくなる",
+      "rationale": ["claude/CLAUDE.md「ソフトウェア開発」のスキルの置き場の項"],
+      "means": [
+        {"kind": "plugin-third", "ref": "swift-lsp@claude-plugins-official"},
+        {"kind": "plugin-third", "ref": "eli5@claude-community"}
+      ],
+      "depends_on": [
+        {"surface": "plugin-spec", "name": "marketplace", "stability": "documented"},
+        {"surface": "tool-name", "name": "LSP", "stability": "documented"}
+      ],
+      "verify": ["none: 有効化の宣言だけで、壊れても作業は止まらない"]
+    },
+    {
+      "id": "ui-preferences",
+      "intent": "応答は日本語、表示と通知は好みの形にする",
+      "why": "個人の好みで、マシンを替えても同じ形で始めたい",
+      "rationale": ["claude/CLAUDE.md「全作業共通」の 1 項目め"],
+      "means": [
+        {"kind": "native", "ref": "settings:language"},
+        {"kind": "native", "ref": "settings:tui"},
+        {"kind": "native", "ref": "settings:theme"},
+        {"kind": "native", "ref": "settings:inputNeededNotifEnabled"},
+        {"kind": "native", "ref": "settings:agentPushNotifEnabled"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "応答・説明は日本語"}
+      ],
+      "depends_on": [
+        {"surface": "settings-key", "name": "language", "stability": "documented"},
+        {"surface": "settings-key", "name": "tui", "stability": "documented"},
+        {"surface": "settings-key", "name": "theme", "stability": "documented"},
+        {"surface": "settings-key", "name": "inputNeededNotifEnabled", "stability": "undocumented"},
+        {"surface": "settings-key", "name": "agentPushNotifEnabled", "stability": "undocumented"}
+      ],
+      "verify": ["none: 好みの宣言で、壊れても気付ける"],
+      "sunset": "language 設定だけで応答の言語が確実に決まると確かめられたら、CLAUDE.md 側の 1 行を消す"
+    },
+    {
+      "id": "repo-standards-audit",
+      "intent": "自分のリポジトリを個人標準 (GitHub 設定・構成ファイル・.claude 設定) に保つ",
+      "why": "リポジトリが増えるほど設定の付け忘れと劣化が起き、手で見比べるのは続かない",
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0006-repo-standards-source-of-truth.md", "shinyaoguri/claude-plugins:docs/decisions/0012-audit-precision.md", "shinyaoguri/claude-plugins:docs/decisions/0022-repo-standards-bundled.md"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-audit"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-audit-min"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-audit-fix"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-bootstrap"},
+        {"kind": "self", "ref": "claude/repo-standards.json"}
+      ],
+      "depends_on": [
+        {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
+        {"surface": "skill-spec", "name": "SKILL.md の frontmatter", "stability": "documented"},
+        {"surface": "skill-spec", "name": "サブエージェント (agents/*.md) の model 指定", "stability": "documented"},
+        {"surface": "plugin-spec", "name": "CLAUDE_PLUGIN_ROOT", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/repo_standards_test.py"],
+      "sunset": "本体か GitHub が、リポジトリ設定を宣言した標準と突き合わせる監査を提供したら",
+      "gap": "claude/repo-standards.json は ADR 0022 でプラグイン同梱へ移る前の旧正本で、もう読まれていないのに残っている (撤去は shinyaoguri/setup#233)"
+    },
+    {
+      "id": "env-self-diagnosis",
+      "intent": "守りの各層 (symlink・フックの実体・auto mode の設定) が実際に効いているかを検査できる",
+      "why": "フックは実体が欠けても無音で効かなくなるだけなので、壊れていることに気付けない",
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0026-machine-state-out-of-repo-audit.md"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/env-doctor"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "`/env-doctor`"}
+      ],
+      "depends_on": [
+        {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
+        {"surface": "file-format", "name": "~/.claude/ の配置 (settings.json・CLAUDE.md)", "stability": "documented"},
+        {"surface": "cli", "name": "/doctor", "stability": "documented"}
+      ],
+      "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-doctor-env.sh"],
+      "sunset": "本体の診断 (/doctor) が、登録済みフックの実体欠落と auto mode の既定ルールの欠落を検査するようになったら"
+    },
+    {
+      "id": "parallel-session-task-pick",
+      "intent": "同じリポジトリで並行する他のセッションと重ならない作業を選んで着手する",
+      "why": "着手が push まで GitHub 側から見えないと、複数のセッションが同じ Issue や同じファイルを触る",
+      "rationale": ["claude/CLAUDE.md「ソフトウェア開発」の着手印の項"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/next-task"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "着手した Issue には `status: in progress` を付け"}
+      ],
+      "depends_on": [
+        {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "worktree", "stability": "documented"},
+        {"surface": "desktop-app", "name": "セッション間の連携 (セッション一覧・メッセージ)", "stability": "documented"}
+      ],
+      "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-inflight.sh"],
+      "sunset": "本体がセッション間で着手中の作業を共有し、重なる着手を避けるようになったら"
+    },
+    {
+      "id": "out-of-scope-issue-filing",
+      "intent": "本題の外で気付いた不具合と改善案は、その場で直さず適切なリポジトリへ起票する",
+      "why": "1 PR = 1 関心事を保ちつつ、気付きをチャットに書き捨てて失わないため",
+      "rationale": ["claude/CLAUDE.md「ソフトウェア開発」の 1 PR = 1 関心事の項"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/report-issue"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "本題以外のバグ・改善に気付いたら直接修正せず"}
+      ],
+      "depends_on": [
+        {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
+        {"surface": "desktop-app", "name": "spawn_task (本題外の作業を別セッションへ切り出す)", "stability": "documented"}
+      ],
+      "verify": ["none: 手順のスキルで、機械的に確かめる対象が無い"],
+      "sunset": "本体の「本題外を切り出す」機能が、GitHub Issue への起票と重複確認まで担うようになったら"
+    },
+    {
+      "id": "visual-evidence",
+      "intent": "GUI を伴う作業の証跡 (静止画・動き) を、リポジトリにコミットせず Issue / PR に添える",
+      "why": "見た目と動きは文章では正誤を判定できないが、画像をコミットするとリポジトリが太る",
+      "rationale": ["claude/CLAUDE.md「全作業共通」の視覚的な証跡の項"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/gyazo-capture"},
+        {"kind": "external", "ref": "tasks/claude.yml", "anchor": "Register Gyazo MCP server for Claude Code"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "Gyazo へ上げて URL を貼る"}
+      ],
+      "depends_on": [
+        {"surface": "cli", "name": "claude mcp add", "stability": "documented"},
+        {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"}
+      ],
+      "verify": ["none: 外部サービスへの投稿で、自動では確かめない"],
+      "sunset": "本体か GitHub が、エージェントの撮った画像を PR / Issue へ直接添付する口を持ったら"
+    },
+    {
+      "id": "unattended-secrets",
+      "intent": "無人のセッション (フック・scheduled task・バックグラウンド) でも、決めた秘密だけは読めるようにする",
+      "why": "無人のセッションは 1Password のロック解除に応えられず、黙って止まる",
+      "rationale": ["claude/CLAUDE.md「全作業共通」の secret-read の項", "shinyaoguri/setup#91", "shinyaoguri/setup#154"],
+      "means": [
+        {"kind": "self", "ref": "bin/secret-read"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "`op read` ではなく `secret-read <参照>` で読む"}
+      ],
+      "depends_on": [
+        {"surface": "harness-behavior", "name": "フックと scheduled task は非対話で走り、承認プロンプトに応えられない", "stability": "undocumented"},
+        {"surface": "desktop-app", "name": "デスクトップアプリは起動した時点の PATH を持ち続ける", "stability": "undocumented"}
+      ],
+      "verify": ["claude/tests/secret_read_test.py"],
+      "sunset": "本体が無人セッション向けの秘密の受け渡し (スコープを絞った保管庫連携) を持ったら"
+    },
+    {
+      "id": "config-distribution",
+      "intent": "グローバル設定の実体をこのリポジトリに置き、どのマシンでも同じ形に配る",
+      "why": "~/.claude/ を直接直すと実体を見失い、マシンごとに設定がずれる",
+      "rationale": ["CLAUDE.md「非自明なところ」の 1 項目め", "tasks/claude.yml"],
+      "means": [
+        {"kind": "external", "ref": "tasks/claude.yml", "anchor": "Create symlinks for global config files"}
+      ],
+      "depends_on": [
+        {"surface": "file-format", "name": "~/.claude/ の配置 (settings.json・CLAUDE.md)", "stability": "documented"}
+      ],
+      "verify": ["claude/tests/ansible_tasks_test.py", "env-doctor:1"],
+      "sunset": "本体がユーザー設定をアカウントに紐づけて同期するようになったら"
+    },
+    {
+      "id": "upstream-tracking",
+      "intent": "Claude 本体の更新に合わせて、この台帳の手段を見直す (自作は見直しのたびに存在理由を問われる)",
+      "why": "自前で組んだものが本体の標準機能に入っても、気付く経路が無い",
+      "rationale": ["shinyaoguri/setup#232"],
+      "means": [
+        {"kind": "self", "ref": "claude/intents.json"},
+        {"kind": "self", "ref": "claude/tests/intents_test.py"}
+      ],
+      "depends_on": [
+        {"surface": "cli", "name": "anthropics/claude-code の CHANGELOG.md の見出し形式", "stability": "undocumented"}
+      ],
+      "verify": ["claude/tests/intents_test.py"],
+      "sunset": "本体が、設定とフックの非推奨・置換可能性を自己診断するようになったら",
+      "gap": "台帳と被覆テストだけがあり、changelog との突き合わせ (差分スクリプト・週次の検知・判定スキル) は未実装 (#232)"
+    },
+    {
+      "id": "wish-hook-contract-against-real-claude",
+      "intent": "フックの入出力の契約を、実際の本体に対して検証する",
+      "why": "契約テストは自作スクリプトを直接叩くだけなので、本体がフックの仕様を変えても緑のままになる",
+      "rationale": ["shinyaoguri/setup#232"],
+      "means": [],
+      "depends_on": [
+        {"surface": "cli", "name": "claude -p", "stability": "documented"},
+        {"surface": "cli", "name": "フックを実際に発火させて入出力を記録する手段", "stability": "undocumented"}
+      ],
+      "verify": ["none: 未実現"]
+    },
+    {
+      "id": "wish-desktop-fresh-environment",
+      "intent": "デスクトップアプリのセッションが、起動時ではなく現在のシェル環境 (PATH) で動く",
+      "why": "セットアップ前から開いていたアプリでは PATH の追加が届かず、secret-read が見つからずに止まった (#154)",
+      "rationale": ["shinyaoguri/setup#154", "tasks/zshrc.yml の再起動の案内"],
+      "means": [],
+      "depends_on": [
+        {"surface": "desktop-app", "name": "Bash ツールのシェルスナップショットが zshenv の後で PATH を書き戻す", "stability": "undocumented"}
+      ],
+      "verify": ["none: 未実現 (いまは絶対パスで書く・アプリの再起動を促す、で回避している)"]
+    }
+  ]
+}
