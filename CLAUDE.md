@@ -41,6 +41,10 @@ python3 claude/tests/runcat_metrics_test.py
 - 編集するのは常に `claude/` 側。`~/.claude/` は symlink なので、そちらを直接直すと実体を見失う。
   既存ファイルの変更は symlink 越しに即反映されるが、**ファイルを新規追加したときだけ**
   playbook の再実行が要る
+- **playbook は本体の checkout (`~/.setup`) から流す。** symlink の先は `playbook_dir` から組むので、
+  worktree から流すと `~/.claude/*` や `~/.zshrc` が worktree を指し、掃除された時点で全部切れる
+  (フックは fail-open なので安全装置が無音で外れる)。`tasks/claude.yml` と `tasks/zshrc.yml` は
+  worktree からの実行を先頭で止める (#209)。分かったうえで流すときは `-e allow_worktree_source=true`
 - `claude/` にスクリプトを足したら `tasks/claude.yml` の `claude_config_files` にも足す。
   忘れると配布されず、`settings.json` から参照しても動かない
 - **`claude/intents.json` は「Claude まわりで何をしたいか」の台帳で、手段はその下に交換可能なものとして
