@@ -526,5 +526,63 @@ class SelectionGuardTest(unittest.TestCase):
         self.assertEqual(self.transform_decision(None), "accept")
 
 
+class SshKeyStateReportTest(unittest.TestCase):
+    """setup の最後に、鍵まわりが未完成なら**検査結果そのもの**を見せる (issue #282)。
+
+    以前の条件は `~/.ssh/git_signing_key.pub` の有無だった。あのファイルはローカルで
+    署名できれば書かれる (GitHub への登録はその前提ではない。issue #273) ので、
+    **「鍵は作った・GitHub に登録していない」状態では黙っていた** — 最後に出るのは
+    「セットアップが完了しました」だけで、push が通らないことに後で気付くことになる。
+
+    「ssh-key-check を打ってください」と案内する形にも戻さない。検査はもうできるのに
+    もう一手を要求すると、その一手を打たずに終わる。
+    """
+
+    def setUp(self):
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+        self.root = Path(self.workdir.name)
+        self.checker = self.root / "ssh-key-check"
+
+    def install_checker(self, rc, output):
+        self.checker.write_text(f'#!/usr/bin/env bash\nprintf %s "{output}"\nexit {rc}\n')
+        self.checker.chmod(self.checker.stat().st_mode | stat.S_IEXEC)
+
+    def report(self):
+        body = script_function("report_ssh_key_state")
+        return subprocess.run(
+            ["zsh", "-f", "-c", f'{body}\nreport_ssh_key_state "{self.checker}" /tmp/playbook.yml'],
+            capture_output=True, text=True, env=clean_env(), stdin=subprocess.DEVNULL, timeout=30,
+        )
+
+    def test_満たしていれば何も出さない(self):
+        """毎回 6 行出すと、本当に見るべきときに読まれなくなる。"""
+        self.install_checker(0, "問題なし (6 件)")
+        result = self.report()
+        self.assertEqual(result.stdout, "", result.stdout)
+
+    def test_未完成なら検査結果をそのまま見せる(self):
+        """打ち方を案内するのではなく、結果を出す。"""
+        self.install_checker(1, "  GitHub signing key — この鍵が一覧に無い")
+        result = self.report()
+        self.assertIn("GitHub signing key — この鍵が一覧に無い", result.stdout)
+        self.assertIn("--tags ssh,git", result.stdout, "直した後に流すものを言っていない")
+
+    def test_判定不能でも黙らない(self):
+        """gh が未認証・オフラインでも「確かめられなかった」と言う (黙るよりよい)。"""
+        self.install_checker(2, "  GitHub signing key — 判定不能 (gh が無い)")
+        self.assertIn("判定不能", self.report().stdout)
+
+    def test_検査が落ちても_setup_を止めない(self):
+        """鍵が未完成なのは setup の失敗ではない。set -e で落とさないこと。"""
+        self.install_checker(1, "ng 1 件")
+        self.assertEqual(self.report().returncode, 0)
+
+    def test_署名鍵ファイルの有無を条件にしていない(self):
+        """あのファイルは GitHub 未登録では在るので、条件にすると登録忘れを拾えない。"""
+        body = script_function("report_ssh_key_state")
+        self.assertNotIn("git_signing_key.pub", body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

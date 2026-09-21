@@ -575,18 +575,33 @@ echo "============================================================"
 echo "  ✅ セットアップが完了しました!"
 echo "============================================================"
 echo ""
-# 鍵が使えないと playbook はコミット署名の設定だけを飛ばして進む (tasks/git.yml。issue #196)。
-# 飛ばす理由は「鍵が無い」だけではなく、鍵タイプや承認要求の残りも含む (issue #273) ので、
-# 何が欠けているかは ssh-key-check に言わせる。playbook の出力は長く途中の 1 行は埋もれる
-# ので、残っていることをここでもう一度言う
-if [[ ! -s "$HOME/.ssh/git_signing_key.pub" ]]; then
-	echo "  ⚠️  コミット署名はまだ設定されていません (Secretive の鍵が要件を満たしていないため)。"
-	echo "     何が足りないかを見る:"
-	echo "       ${PLAYBOOK:h}/bin/ssh-key-check"
-	echo "     直したら、次を流してください (手順は tasks/ssh.yml の冒頭):"
-	echo "       ansible-playbook ${PLAYBOOK} --tags ssh,git"
+# 鍵まわりは GUI 操作が要るので setup では完結しない。playbook (Step 6) の中でも同じ検査が
+# 走るが、その出力は長い実行の途中に流れるので、**最後にもう一度ここで流して見せる**。
+#
+# **「ssh-key-check を打ってください」と案内するのではなく、実際に流す。** 検査はもう
+# できるのに、もう一手を要求すると、その一手を打たずに終わる (issue #282)。
+#
+# 条件を `~/.ssh/git_signing_key.pub` の有無にしていた頃は、**GitHub に登録し忘れた状態で
+# 黙っていた** — あのファイルはローカルで署名できれば書かれる (登録はその前提ではない。
+# issue #273) ので、「鍵は作った・登録していない」が「完了しました」だけで終わり、push が
+# 通らないことに後で気付くことになっていた。検査そのものを条件にすれば、そこも拾える。
+#
+# 全部満たしているマシンでは 1 行も出さない。毎回 6 行出すと、本当に見るべきときに
+# 読まれなくなる。検査の非 0 は「鍵が未完成」であって setup の失敗ではないので、
+# ここで受けて止めない (set -e で落とさない)。
+report_ssh_key_state() { # $1=検査器  $2=直した後に流す playbook
+	local report
+	report=$("$1" 2>&1) && return 0
+	echo "  ⚠️  SSH 鍵まわりがまだ完成していません。"
 	echo ""
-fi
+	printf '%s\n' "$report" | sed 's/^./     &/'
+	echo ""
+	echo "     直したら、次を流してください:"
+	echo "       ansible-playbook $2 --tags ssh,git"
+	echo ""
+}
+report_ssh_key_state "${PLAYBOOK:h}/bin/ssh-key-check" "${PLAYBOOK}"
+
 echo "  次のステップ:"
 echo "    1. ターミナルを再起動してください"
 echo "    2. 一度ログアウトして入り直してください"
