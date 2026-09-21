@@ -6,16 +6,24 @@
   - 一覧の抽出が新しいキー (required / optional) から正しく読めること
   - **非対話で止まらないこと** — CI や無人実行で fzf を出すと、待ち続けて終わらない
   - required に置いたものが optional へ落ちていないこと (落ちると playbook が壊れる)
+  - **選んでいないものが入らないこと** — ここだけは本物の fzf を pty 上で動かして見る
+    (issue #267)
 
     python3 claude/tests/bootstrap_selection_test.py
 """
 
+import fcntl
 import os
+import pty
 import re
+import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
+import time
 import unittest
 from pathlib import Path
 
@@ -26,8 +34,11 @@ SCRIPT = REPO / "sillicon_mac_setup.zsh"
 PACKAGES = REPO / "vars" / "packages.yml"
 
 def script_function(name):
-    """本体から関数の定義を切り出す (`name() {` から、行頭の `}` まで)。"""
-    match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", SCRIPT.read_text(), re.M | re.S)
+    """本体から関数の定義を切り出す (`name() {` から、行頭の `}` まで)。
+
+    定義行の後ろにコメント (`f() {  # $1=...`) が付く関数もあるので、改行までは読み飛ばす。
+    """
+    match = re.search(rf"^{name}\(\) \{{[^\n]*\n.*?^\}}\n", SCRIPT.read_text(), re.M | re.S)
     if match is None:
         raise AssertionError(f"{SCRIPT.name} に {name}() が見つからない")
     return match.group(0)
@@ -150,13 +161,13 @@ class PreviewQuotingTest(unittest.TestCase):
     """
 
     def preview_command(self, marker):
-        """スクリプトから --preview の中身を取り出す。"""
+        """スクリプトから preview コマンド (fzf_select の第 2 引数) を取り出す。"""
         for line in SCRIPT.read_text().split("\n"):
-            if "--preview" in line and marker in line:
-                m = re.search(r"--preview '(.*)' *\\?$", line)
-                self.assertIsNotNone(m, f"--preview を読み取れない: {line}")
+            if marker in line and not line.lstrip().startswith("#"):
+                m = re.search(r"'([^']*" + re.escape(marker) + r"[^']*)'", line)
+                self.assertIsNotNone(m, f"preview コマンドを読み取れない: {line}")
                 return m.group(1)
-        self.fail(f"{marker} を含む --preview が無い")
+        self.fail(f"{marker} を含む preview コマンドが無い")
 
     def test_appstore_preview_shows_no_quotes(self):
         cmd = self.preview_command("App Store ID")
@@ -364,6 +375,155 @@ class OptionalFormulaTest(unittest.TestCase):
     def test_failures_are_reported_at_the_end(self):
         tail = self.body[self.body.index("セットアップが完了しました"):]
         self.assertIn("FORMULA_FAILED", tail)
+
+
+
+FZF = shutil.which("fzf")
+
+# pty へ送るキー。矢印のエスケープ列は端末の設定に左右されるので control キーで送る
+ENTER = b"\r"
+TAB = b"\t"       # fzf では toggle+down (マークして次へ)
+DOWN = b"\x0e"    # Ctrl-N
+
+
+class SelectionDecisionTest(unittest.TestCase):
+    """**選んでいないものを入れないこと** (issue #267)。
+
+    fzf は `--multi` でも、マークが 0 件のまま Enter を押すと**カーソル位置の 1 件**を
+    返す。header は `Tab で選択` と書いているので、チェックボックスのつもりで Enter を
+    押した人に意図しないアプリが入っていた。重いものを選択式にした #191 の趣旨を
+    直接壊すので、ここは文字列の検査ではなく**本物の fzf を pty 上で動かして**見る。
+    """
+
+    def setUp(self):
+        if FZF is None:
+            # CI では .github/workflows/test.yml が fzf を入れる。入れ忘れたまま
+            # skip され続けると、この検査は在るだけで何も見ていないことになる
+            if os.environ.get("CI"):
+                self.fail("fzf が無い (.github/workflows/test.yml で入れているか確かめる)")
+            self.skipTest("fzf が無いので実挙動は見られない (brew install fzf)")
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+
+    def select(self, keys, items=("alpha", "bravo", "charlie")):
+        """本体の fzf_select() を、本物の fzf ごと pty 上で動かして選ばれたものを返す。"""
+        chosen = Path(self.workdir.name) / "chosen"
+        script = (
+            script_function("fzf_select")
+            + f'\nprintf "%s\\n" "$@" | fzf_select "任意のアプリ" "echo {{1}}" right:30%:wrap'
+            + f' > {chosen}\n'
+        )
+        env = clean_env(TERM="xterm-256color")
+        pid, fd = pty.fork()
+        if pid == 0:  # 子: pty を端末として fzf を出す
+            try:
+                os.execve("/bin/zsh", ["zsh", "-f", "-c", script, "zsh", *items], env)
+            finally:
+                os._exit(127)
+        # 端末の大きさを教える (0x0 のままだと --height の計算が成り立たない)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+        try:
+            self.wait_until_drawn(fd)
+            for key in keys:
+                os.write(fd, key)
+                time.sleep(0.3)
+            self.drain(fd, pid)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return [line for line in chosen.read_text().split("\n") if line]
+
+    def wait_until_drawn(self, fd, timeout=20):
+        """header が描かれるまで待つ。描き終わる前にキーを送ると取りこぼす。"""
+        needle = "Tab で選択".encode()
+        seen = b""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            seen += self.read_available(fd)
+            if needle in seen:
+                return
+            time.sleep(0.1)
+        self.fail(f"fzf が描画しなかった: {seen[-500:]!r}")
+
+    def drain(self, fd, pid, timeout=20):
+        """終了まで読み続ける (読まないと pty が詰まって子が止まる)。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+            if done:
+                return
+            self.read_available(fd)
+            time.sleep(0.1)
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        self.fail("fzf が終わらなかった")
+
+    @staticmethod
+    def read_available(fd):
+        try:
+            return os.read(fd, 65536)
+        except OSError:  # 子が終わると EIO
+            return b""
+
+    def test_enter_without_marks_takes_nothing(self):
+        """何もマークせず Enter — ここが報告された不具合そのもの。"""
+        self.assertEqual(self.select([ENTER]), [])
+
+    def test_moving_the_cursor_is_not_a_selection(self):
+        """カーソルを動かしただけでは選んだことにならない。"""
+        self.assertEqual(self.select([DOWN, ENTER]), [])
+
+    def test_marked_item_comes_back(self):
+        """Tab でマークしたものは、これまでどおり返る。"""
+        self.assertEqual(self.select([DOWN, TAB, ENTER]), ["bravo"])
+
+    def test_several_marks_come_back_in_order(self):
+        self.assertEqual(self.select([TAB, TAB, ENTER]), ["alpha", "bravo"])
+
+
+class SelectionGuardTest(unittest.TestCase):
+    """ガードの掛け方 (fzf が無い環境でも見られるところ)。"""
+
+    def fzf_select_body(self):
+        return script_function("fzf_select")
+
+    def test_only_fzf_select_runs_fzf(self):
+        """生の fzf 呼び出しは 1 か所だけ。
+
+        2 か所へ写すと、片方だけにガードが付いた状態が作れてしまう
+        (App Store の選択が実際にその形で写しになっていた)。
+        """
+        body = self.fzf_select_body()
+        callers = [
+            line for line in SCRIPT.read_text().split("\n")
+            if re.search(r"(?:^|\||\s)fzf\s+-", line) and not line.lstrip().startswith("#")
+        ]
+        self.assertTrue(callers, "fzf の呼び出しが見つからない")
+        for line in callers:
+            with self.subTest(line.strip()):
+                self.assertIn(line, body, "fzf_select() の外から fzf を呼んでいる")
+
+    def transform_decision(self, select_count):
+        """ガードの式だけを取り出し、fzf がするのと同じ sh で評価する。"""
+        match = re.search(r"--bind 'enter:transform:(.*)'", self.fzf_select_body())
+        self.assertIsNotNone(match, "enter のガードが無い")
+        env = clean_env(FZF_SELECT_COUNT=select_count)
+        return subprocess.run(
+            ["/bin/sh", "-c", match.group(1)], capture_output=True, text=True,
+            check=True, timeout=10, env=env,
+        ).stdout.strip()
+
+    def test_no_selection_aborts(self):
+        self.assertEqual(self.transform_decision("0"), "abort")
+
+    def test_selection_accepts(self):
+        self.assertEqual(self.transform_decision("2"), "accept")
+
+    def test_old_fzf_without_the_variable_keeps_working(self):
+        """FZF_SELECT_COUNT は fzf 0.52 以降。持たない版では Enter を殺さない。"""
+        self.assertEqual(self.transform_decision(None), "accept")
 
 
 if __name__ == "__main__":

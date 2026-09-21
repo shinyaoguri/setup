@@ -247,5 +247,214 @@ class HomebrewPathTest(unittest.TestCase):
         self.assertTrue(result.stdout.strip().endswith("/brew"), result.stdout)
 
 
+class XcodeLicenseTest(unittest.TestCase):
+    """`xcode-select -p` が通っても git が動くとは限らない (issue #266)。
+
+    新品の Mac は Xcode を一度も開いていないので、Xcode.app が選ばれていると
+    ライセンス未同意で git / clang が終了コード 69 で落ちる。Step 1 がそれを
+    素通しすると、直後の Step 1.5 で git が失敗し、理由を捨てた結果
+    「別のリポジトリです」という無関係な診断で終わる。
+
+    Step 1 の断片だけを切り出して流す (#218 — テスト側にロジックの写しを持たない)。
+    """
+
+    LICENSE_ERROR = (
+        "You have not agreed to the Xcode license agreements. "
+        "You must agree to both license agreements below in order to use Xcode."
+    )
+
+    def setUp(self):
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+        self.root = Path(self.workdir.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.git_called = self.root / "FAKE_GIT_CALLED"
+        # CLT は入っている前提にする (Step 1 の前半は issue #166 が見ている)
+        self.fake_command("xcode-select", "echo /Library/Developer/CommandLineTools\n")
+
+    def fake_command(self, name, body):
+        script = self.bin / name
+        script.write_text(f"#!/bin/sh\n{body}")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+    def fake_git(self, body):
+        """偽 git。呼ばれた痕跡を残す — 本物が先に引かれていたら気付く (issue #238)。"""
+        self.fake_command("git", f'touch "{self.git_called}"\n{body}')
+
+    def assert_fake_git_was_used(self):
+        self.assertTrue(
+            self.git_called.exists(),
+            "偽 git が呼ばれていない — 本物の git が先に引かれている可能性がある",
+        )
+
+    def run_step1(self):
+        body = STAGE2.read_text()
+        step1 = body[body.index('echo "📦 Step 1: '):body.index("# Step 1.5:")]
+        return subprocess.run(
+            # -t 0 が偽になる (端末が無い) ので、同意画面は出さず案内して止まる側を通る
+            ["zsh", "-f", "-c", "set -e\n" + step1],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30,
+            env=clean_env(HOME=str(self.root), PATH=f"{self.bin}:/usr/bin:/bin"),
+        )
+
+    def test_license_not_accepted_stops_with_the_command_to_run(self):
+        """ライセンス未同意は、同意の一手を出して止まる (今回の回帰)。"""
+        self.fake_git(f'echo "{self.LICENSE_ERROR}" >&2\nexit 69\n')
+        result = self.run_step1()
+        self.assert_fake_git_was_used()
+        self.assertNotEqual(result.returncode, 0, "git が動かないまま先へ進んだ")
+        self.assertIn("xcodebuild -license accept", result.stdout + result.stderr)
+
+    def test_other_git_failure_shows_the_reason(self):
+        """ライセンス以外の失敗も、git のメッセージをそのまま見せて止まる。"""
+        self.fake_git('echo "xcode-select: error: invalid active developer path" >&2\nexit 1\n')
+        result = self.run_step1()
+        self.assert_fake_git_was_used()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid active developer path", result.stdout + result.stderr)
+
+    def test_working_git_passes_through(self):
+        """git が動くなら何も言わずに次のステップへ進む。"""
+        self.fake_git('echo "git version 2.39.5"\n')
+        result = self.run_step1()
+        self.assert_fake_git_was_used()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class SetupRepoStateTest(unittest.TestCase):
+    """Step 1.5 は $HOME/.setup の状態を見分ける (issue #266)。
+
+    `git remote get-url origin 2>/dev/null || echo ""` が失敗理由を捨てていたため、
+    git が動かない・origin が無いといった別の事情まで「別のリポジトリです: (空)」に
+    化けていた。**空を「別のリポジトリ」と呼ばない**ことを見る。
+    """
+
+    OTHER_URL = "https://github.com/someone/other.git"
+
+    def setUp(self):
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+        self.root = Path(self.workdir.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.setup_dir = self.home / ".setup"
+        self.git_log = self.root / "GIT_LOG"
+
+    def fake_git(self, cases=""):
+        """偽 git。引数は毎回ログへ残す (本物が引かれていないかも、ここで分かる)。
+
+        clone だけは本物と同じく「最後の引数の置き場を作る」ところまで真似る。
+        そこを真似ないと、どこへクローンしているのかを見分けられない。
+        """
+        script = self.bin / "git"
+        script.write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" >> "{self.git_log}"\n'
+            'for a in "$@"; do last=$a; done\n'
+            'case "$*" in\n'
+            f"{cases}\n"
+            '  *clone*) mkdir -p "$last/.git" ;;\n'
+            "  *) exit 0 ;;\n"
+            "esac\n"
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+    def leftovers(self):
+        """$HOME に残った作りかけ (.setup.partial.<pid> など)。"""
+        return sorted(p.name for p in self.home.iterdir() if p.name.startswith(".setup."))
+
+    def git_calls(self):
+        self.assertTrue(
+            self.git_log.exists(),
+            "偽 git が呼ばれていない — 本物の git が先に引かれている可能性がある",
+        )
+        return self.git_log.read_text().splitlines()
+
+    def existing_checkout(self):
+        (self.setup_dir / ".git").mkdir(parents=True)
+
+    def run_step15(self):
+        body = STAGE2.read_text()
+        # SETUP_DIR / GITHUB_REPO_URL / localmode は変数初期化の塊が持っている
+        variables = body[body.index("localmode=false"):body.index("usage() {")]
+        step15 = body[body.index("# Step 1.5:"):body.index("# Step 2: Homebrew")]
+        code = "set -e\n" + variables + step15 + '\nprintf "%s" "$PLAYBOOK"\n'
+        return subprocess.run(
+            ["zsh", "-f", "-c", code],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30,
+            env=clean_env(HOME=str(self.home), PATH=f"{self.bin}:/usr/bin:/bin"),
+        )
+
+    def test_unreadable_repository_is_not_called_another_repository(self):
+        """リポジトリとして読めないときは、その理由を見せる (今回の回帰)。"""
+        self.existing_checkout()
+        self.fake_git('  *rev-parse*) echo "fatal: not a git repository" >&2; exit 128 ;;')
+        result = self.run_step15()
+        out = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("別のリポジトリ", out, "git の失敗を「別のリポジトリ」と誤診した")
+        self.assertIn("not a git repository", out, "git のメッセージを握り潰した")
+        self.assertFalse(
+            [c for c in self.git_calls() if "clone" in c or "pull" in c],
+            "読めない状態のまま clone / pull を走らせた",
+        )
+
+    def test_missing_origin_is_reported_as_missing_origin(self):
+        """origin が無いのは「別のリポジトリ」ではない (クローンの残骸など)。"""
+        self.existing_checkout()
+        self.fake_git('  *"remote get-url"*) exit 2 ;;')
+        result = self.run_step15()
+        out = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("別のリポジトリ", out)
+        self.assertIn("origin", out)
+
+    def test_different_remote_is_reported_with_its_url(self):
+        """本当に別のリポジトリなら、そう言う — URL 付きで。"""
+        self.existing_checkout()
+        self.fake_git(f'  *"remote get-url"*) echo "{self.OTHER_URL}" ;;')
+        result = self.run_step15()
+        out = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("別のリポジトリ", out)
+        self.assertIn(self.OTHER_URL, out)
+
+    def test_matching_remote_pulls(self):
+        """正しい checkout なら pull して先へ進む。"""
+        self.existing_checkout()
+        self.fake_git('  *"remote get-url"*) echo "https://github.com/shinyaoguri/setup.git" ;;')
+        result = self.run_step15()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue([c for c in self.git_calls() if "pull" in c], "pull していない")
+        self.assertEqual(result.stdout.splitlines()[-1], str(self.setup_dir / "playbook_sillicon_mac.yml"))
+
+    def test_missing_checkout_clones(self):
+        """何も無ければクローンする。作りかけは残さない。"""
+        self.fake_git()
+        result = self.run_step15()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue([c for c in self.git_calls() if "clone" in c], "clone していない")
+        self.assertTrue((self.setup_dir / ".git").is_dir(), "クローンしたものが配備先に無い")
+        self.assertEqual(self.leftovers(), [], "作りかけが残った")
+
+    def test_interrupted_clone_leaves_nothing_behind(self):
+        """中断したクローンは配備先を作らない (issue #269)。
+
+        配備先へ直接クローンしていると半端な `.git` が残り、次の実行は
+        `-d "$SETUP_DIR/.git"` が真になって**クローンのやり直しへ戻れない**。
+        1 行で新しいマシンを構築することが目的なので、最初の一歩の失敗が
+        手作業を要求する状態になってはいけない。
+        """
+        self.fake_git('  *clone*) mkdir -p "$last/.git"; exit 130 ;;')   # 130 = Ctrl-C
+        result = self.run_step15()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue([c for c in self.git_calls() if "clone" in c], "clone していない")
+        self.assertFalse(self.setup_dir.exists(), "中断したクローンの残骸が配備先に残った")
+        self.assertEqual(self.leftovers(), [], "作りかけが残った")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
