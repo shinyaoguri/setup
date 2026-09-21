@@ -17,6 +17,7 @@ import base64
 import fcntl
 import os
 import pty
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -123,7 +124,14 @@ class SecretReadTestCase(unittest.TestCase):
         self.value_file = self.root / "value"
         self.set_op_value("gyazo-token-abc")
 
-        self.allowlist = self.root / "secret-cache-allowlist"
+        # スクリプトは許可リストを**自分の隣** (<置き場>/../secret-cache-allowlist) からしか
+        # 読まない。差し替え口を環境変数で持つと、線引きそのものを外から動かせてしまう
+        # (issue #214)。テストは本物と同じ配置を一時ディレクトリに作り、写しを流す
+        checkout = self.root / "checkout"
+        (checkout / "bin").mkdir(parents=True)
+        self.SCRIPT_UNDER_TEST = checkout / "bin" / "secret-read"
+        shutil.copy(SCRIPT, self.SCRIPT_UNDER_TEST)
+        self.allowlist = checkout / "secret-cache-allowlist"
         self.allowlist.write_text(f"# コメント行\n\n{GYAZO_REF}\n")
 
         self.install(self.bin / "security", FAKE_SECURITY)
@@ -147,10 +155,10 @@ class SecretReadTestCase(unittest.TestCase):
         refresh_timeout=None,
         retry=None,
         controlling_tty=False,
+        extra_env=None,
     ):
         env = clean_env()
         env["PATH"] = f"{self.bin}:/usr/bin:/bin"
-        env["SECRET_CACHE_ALLOWLIST"] = str(self.allowlist)
         env["FAKE_KEYCHAIN"] = str(self.keychain)
         env["FAKE_OP_LOG"] = str(self.op_log)
         env["FAKE_OP_VALUE_FILE"] = str(self.value_file)
@@ -166,11 +174,13 @@ class SecretReadTestCase(unittest.TestCase):
             env["SECRET_CACHE_REFRESH_TIMEOUT"] = str(refresh_timeout)
         if retry is not None:
             env["SECRET_CACHE_RETRY"] = str(retry)
+        if extra_env:
+            env.update(extra_env)
         if not with_op:
             # op を PATH から外す = 1Password が使えない状況の再現
             (self.bin / "op").unlink()
         return subprocess.run(
-            [str(SCRIPT), *args],
+            [str(self.SCRIPT_UNDER_TEST), *args],
             env=env,
             capture_output=True,
             text=True,
@@ -620,6 +630,40 @@ class SecretReadTestCase(unittest.TestCase):
     #
     # 新しいマシンで、無人セッションが初回の op read (= 1Password の承認) で止まらないように、
     # 人がいるセットアップ中に許可リストの参照をまとめてキャッシュへ入れておく。
+
+    # --- 線引きを外から動かせないこと ---------------------------------------
+
+    def test_環境変数で許可リストを差し替えられない(self):
+        """等級の線引きは、このスクリプトの外から動かせない (issue #214)。
+
+        以前は SECRET_CACHE_ALLOWLIST で許可リストのパスを差し替えられた。1Password が
+        解錠されている間に、緩いリストを指して高い等級の参照を読むと、その秘密が
+        Keychain に残り続ける — 「承認プロンプトが出ること自体が防御」の秘密が、以後は
+        無確認で読める。
+        """
+        permissive = self.root / "permissive-allowlist"
+        permissive.write_text(f"{GYAZO_REF}\n{SSH_REF}\n")
+        # clean_env はこの変数を落とすので、明示して渡す (攻撃する側の再現)
+        result = self.run_script(
+            SSH_REF, extra_env={"SECRET_CACHE_ALLOWLIST": str(permissive)}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.cached_entries(), [], "許可リストに無い参照がキャッシュされた")
+
+    def test_許可リストは本体の隣のものが読まれる(self):
+        """symlink 越しに呼ばれても、リンクの置き場ではなく実体の隣を見る。"""
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (self.root / "secret-cache-allowlist").write_text(f"{SSH_REF}\n")   # 囮
+        link = elsewhere / "secret-read"
+        link.symlink_to(self.SCRIPT_UNDER_TEST)
+        original, self.SCRIPT_UNDER_TEST = self.SCRIPT_UNDER_TEST, link
+        try:
+            self.run_script(GYAZO_REF)
+            self.run_script(SSH_REF)
+        finally:
+            self.SCRIPT_UNDER_TEST = original
+        self.assertEqual(len(self.cached_entries()), 1, "実体の隣の許可リストが使われていない")
 
     # --- 制御端末がある状態 (人が端末から打つ経路) ---------------------------
 
