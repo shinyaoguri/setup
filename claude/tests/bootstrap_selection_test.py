@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hookenv import clean_env
+
 REPO = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO / "sillicon_mac_setup.zsh"
 PACKAGES = REPO / "vars" / "packages.yml"
@@ -209,6 +211,95 @@ class FnmGuardTest(unittest.TestCase):
         self.assertNotEqual(
             absent.returncode, 0, "不在を rc で伝えていない (存在確認にならない)"
         )
+
+
+class CaskInstallTest(unittest.TestCase):
+    """cask を 1 本入れる関数の振る舞い (issue #199)。
+
+    手で入れたアプリがあるマシンでは、`brew list --cask` が偽を返し (brew の管理下に
+    無い)、素の `brew install --cask` は "It seems there is already an App at …" で
+    失敗する。スクリプトは set -e なので、その 1 本で setup 全体が終わっていた。
+    required の 4 本 (1Password・Secretive・Claude Code) はどれも手で入れがちなもので、
+    新品でないマシンへ setup を流すと踏む。
+    """
+
+    def setUp(self):
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+        self.root = Path(self.workdir.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.log = self.root / "brew.log"
+        # 偽 brew。引数を控え、名前が broken-* の cask だけ失敗する
+        brew = self.bin / "brew"
+        brew.write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" >> "{self.log}"\n'
+            'for a in "$@"; do case "$a" in broken-*) exit 1 ;; esac; done\n'
+            "exit 0\n"
+        )
+        brew.chmod(brew.stat().st_mode | stat.S_IEXEC)
+
+    def run_installs(self, *pairs):
+        """本体から install_cask を切り出し、本体と同じ set -e の下で順に呼ぶ。"""
+        body = SCRIPT.read_text()
+        start = body.index("CASK_FAILED_REQUIRED=()")
+        end = body.index("# --- cask の導入ここまで")
+        calls = "\n".join(f"install_cask {name} {kind}" for name, kind in pairs)
+        report = (
+            'printf "required=%s\\n" "${CASK_FAILED_REQUIRED[*]}"\n'
+            'printf "optional=%s\\n" "${CASK_FAILED_OPTIONAL[*]}"\n'
+        )
+        env = clean_env(PATH=f"{self.bin}:/usr/bin:/bin")
+        return subprocess.run(
+            # -f: ~/.zshenv を読ませない。読むと /opt/homebrew/bin が偽 brew の前へ入り、
+            # **本物の brew を呼んでしまう** (このテストを書いているときに実際に踏んだ)
+            ["zsh", "-f", "-c", "set -e\n" + body[start:end] + "\n" + calls + "\n" + report],
+            capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30,
+        )
+
+    def test_existing_apps_are_adopted(self):
+        """既に在るアプリは brew の管理下へ取り込む (--adopt)。"""
+        self.run_installs(("secretive", "required"))
+        self.assertIn("install --cask --adopt secretive", self.log.read_text())
+
+    def test_one_failure_does_not_stop_the_rest(self):
+        """1 本の失敗で setup 全体を止めない。後ろの cask も入れ、失敗は控える。"""
+        result = self.run_installs(
+            ("broken-required", "required"),
+            ("broken-optional", "optional"),
+            ("after-the-failures", "optional"),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("after-the-failures", self.log.read_text(), "失敗の後ろが実行されていない")
+        self.assertIn("required=broken-required\n", result.stdout)
+        self.assertIn("optional=broken-optional\n", result.stdout)
+
+    def test_success_is_not_recorded_as_failure(self):
+        result = self.run_installs(("fine", "required"))
+        self.assertIn("required=\n", result.stdout)
+
+    def test_every_cask_install_goes_through_the_function(self):
+        """素の `brew install --cask` を残さない (そこだけ set -e で止まる形に戻る)。"""
+        body = SCRIPT.read_text()
+        start = body.index("CASK_FAILED_REQUIRED=()")
+        end = body.index("# --- cask の導入ここまで")
+        outside = body[:start] + body[end:]
+        bare = [
+            line.strip() for line in outside.splitlines()
+            if "brew install --cask" in line and not line.lstrip().startswith(("#", "echo"))
+        ]
+        self.assertEqual(bare, [])
+
+    def test_required_failure_makes_the_script_exit_nonzero_at_the_end(self):
+        """必須が入らなかったら、最後まで進めたうえで失敗として終わる。
+
+        途中で止めないことと、成功として終わらせないことは別。必須が欠けたまま
+        緑で終わると、鍵まわりや playbook の前提が無いことに気付けない。
+        """
+        body = SCRIPT.read_text()
+        tail = body[body.index("セットアップが完了しました"):]
+        self.assertRegex(tail, r"CASK_FAILED_REQUIRED\[@\]\} > 0[^\n]*\n(?:.*\n)*?\s*exit 1")
 
 
 if __name__ == "__main__":

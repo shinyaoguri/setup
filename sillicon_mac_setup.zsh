@@ -268,11 +268,38 @@ for c in "${CASKS_OPTIONAL[@]}"; do
 done
 echo ""
 
+# --- cask の導入 ----------------------------------------------------------
+# **1 本の失敗で setup 全体を止めない。** このスクリプトは set -e なので、素の
+# `brew install --cask` を並べると、失敗した 1 本の後ろ (残りの cask・App Store・
+# playbook・秘密のキャッシュ) が丸ごと実行されない。失敗は名前を控えて続け、最後に
+# まとめて報告する。必須が欠けたときだけ、最後まで進めたうえで非ゼロで終える。
+#
+# **--adopt は、手で入れてあるアプリを brew の管理下へ取り込む。** 公式サイトから
+# 入れたアプリは `brew list --cask` が偽を返す (brew は知らない) のに、素の install は
+# "It seems there is already an App at …" で失敗する。required の 4 本はどれも手で
+# 入れがちで、新品でないマシンへ流すとここで止まっていた (issue #199)。
+# 取り込めるのは中身が同じときだけで、版が違えば失敗する — その場合も上の扱いで続く。
+CASK_FAILED_REQUIRED=()
+CASK_FAILED_OPTIONAL=()
+install_cask() {  # $1=名前 $2=required|optional
+	if brew install --cask --adopt "$1"; then
+		return 0
+	fi
+	echo "   ⚠️  $1 を入れられませんでした。続行します (最後にまとめて報告します)"
+	if [[ "$2" == required ]]; then
+		CASK_FAILED_REQUIRED+=("$1")
+	else
+		CASK_FAILED_OPTIONAL+=("$1")
+	fi
+	return 0
+}
+# --- cask の導入ここまで ---------------------------------------------------
+
 # --- 必須を入れる ---------------------------------------------------------
 for c in "${CASKS_REQUIRED[@]}"; do
 	if ! brew list --cask "$c" >/dev/null 2>&1; then
 		echo "   → $c をインストール中 (必須)..."
-		brew install --cask "$c"
+		install_cask "$c" required
 	fi
 done
 
@@ -313,7 +340,7 @@ if (( ${#CASK_MISSING[@]} > 0 )); then
 			for c in "${SELECTED[@]}"; do
 				[[ -z "$c" ]] && continue
 				echo "   → $c をインストール中..."
-				brew install --cask "$c"
+				install_cask "$c" optional
 			done
 		fi
 	fi
@@ -434,3 +461,18 @@ echo "       再ログイン後に効きます (Dock だけは playbook が入�
 echo "    3. インストールされたアプリを起動して初期設定を行ってください"
 echo "    4. 手作業が残る項目 (Secretive の鍵・1Password の CLI 連携など) は README の「新しいマシンで」を参照"
 echo ""
+
+# 入れられなかった cask。途中で止めなかったぶん、ここで必ず見える形にする
+if (( ${#CASK_FAILED_OPTIONAL[@]} > 0 )); then
+	echo "  ⚠️  入れられなかったアプリ (任意): ${CASK_FAILED_OPTIONAL[*]}"
+	echo "     後から入れるには: brew install --cask --adopt ${CASK_FAILED_OPTIONAL[*]}"
+	echo ""
+fi
+if (( ${#CASK_FAILED_REQUIRED[@]} > 0 )); then
+	echo "  ❌ 入れられなかったアプリ (必須): ${CASK_FAILED_REQUIRED[*]}"
+	echo "     鍵まわりと playbook の前提です。手で入れてある版が cask の版と違うと --adopt は"
+	echo "     取り込めません。アプリを最新にしてから次を流してください:"
+	echo "       brew install --cask --adopt ${CASK_FAILED_REQUIRED[*]}"
+	echo ""
+	exit 1
+fi
