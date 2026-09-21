@@ -351,7 +351,21 @@ class PlanRecordTestCase(unittest.TestCase):
         self.git("checkout", "-q", "-b", "claude/batch-issue-cleanup-c936e5")
         result = self.capture("名乗りの無い計画。\n", FAKE_GH_ISSUE="936")
         self.assertIn("まだありません", result.stderr)
-        self.assertNotIn("936", result.stderr)
+        # 下のテストと同じ理由で、素の "936" では記録ファイル名に入るエポックに当たる
+        # (実際に epoch 1789989363 で落ちて、無関係な PR の CI を赤くした)
+        self.assertNotIn("gh issue comment 936", result.stderr)
+        self.assertNotIn("gh pr comment 936", result.stderr)
+
+    def test_capture_ignores_an_all_digit_hex_suffix(self):
+        # 末尾 hex がたまたま全部数字のとき。**ここだけが、末尾 hex を落とす手当てを
+        # 検証している** — c936e5 のように英字が混じる形は「区切りに接した数字だけを
+        # 拾う」判定で既に落ちるので、手当てを外しても上のテストは緑のままだった。
+        # 対象を壊しても赤くならないテストは、守っているつもりのものを守っていない
+        self.git("checkout", "-q", "-b", "claude/batch-issue-cleanup-936125")
+        result = self.capture("名乗りの無い計画。\n", FAKE_GH_ISSUE="936125")
+        self.assertIn("まだありません", result.stderr)
+        self.assertNotIn("gh issue comment 936125", result.stderr)
+        self.assertNotIn("gh pr comment 936125", result.stderr)
 
     def test_capture_ignores_digits_glued_to_letters_in_the_branch_name(self):
         # worktree の自動生成名。0127 は英字に挟まれたハッシュの断片
