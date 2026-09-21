@@ -302,5 +302,71 @@ class CaskInstallTest(unittest.TestCase):
         self.assertRegex(tail, r"CASK_FAILED_REQUIRED\[@\]\} > 0[^\n]*\n(?:.*\n)*?\s*exit 1")
 
 
+class OptionalFormulaTest(unittest.TestCase):
+    """optional の formula も、選べて入る (issue #240)。
+
+    #191 で「optional は選ばせる」形にしたとき、formula の選択が抜けた。playbook が
+    入れるのは required だけ、fzf が出すのは cask と App Store だけで、
+    `homebrew_packages_optional` (vim / neovim / fnm / direnv) は**どこからも読まれて
+    いなかった**。tasks/fnm.yml は「fnm が無ければ skip」なので、新しいマシンでは
+    Node.js が黙って入らない。
+    """
+
+    def setUp(self):
+        self.body = SCRIPT.read_text()
+
+    def test_every_optional_key_is_read_by_the_script(self):
+        """宣言だけで読み手の居ないキーを作らない。"""
+        packages = (REPO / "vars" / "packages.yml").read_text()
+        keys = re.findall(r"^([a-z_]+_optional):", packages, re.M)
+        self.assertGreaterEqual(len(keys), 3, f"optional のキーを読み取れていない: {keys}")
+        unread = [
+            key for key in keys
+            if not re.search(rf"yaml_(?:list|appstore)\s+{key}\b", self.body)
+        ]
+        self.assertEqual(unread, [], "宣言されているのに、選択肢へ出す読み手が居ない")
+
+    def test_formulae_are_offered_before_the_playbook_runs(self):
+        """fnm は tasks/fnm.yml の前に入っていないと、その回の Node.js が skip される。"""
+        offered = self.body.index("yaml_list homebrew_packages_optional")
+        playbook = self.body.index('ansible-playbook -i "localhost,"')
+        self.assertLess(offered, playbook)
+
+    def run_installs(self, *names):
+        workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(workdir.cleanup)
+        bin_dir = Path(workdir.name) / "bin"
+        bin_dir.mkdir()
+        self.log = Path(workdir.name) / "brew.log"
+        brew = bin_dir / "brew"
+        brew.write_text(
+            "#!/bin/sh\n"
+            f'echo "$*" >> "{self.log}"\n'
+            'for a in "$@"; do case "$a" in broken-*) exit 1 ;; esac; done\n'
+            "exit 0\n"
+        )
+        brew.chmod(brew.stat().st_mode | stat.S_IEXEC)
+        start = self.body.index("FORMULA_FAILED=()")
+        end = self.body.index("# --- formula の導入ここまで")
+        calls = "\n".join(f"install_formula {name}" for name in names)
+        return subprocess.run(
+            ["zsh", "-f", "-c", "set -e\n" + self.body[start:end] + "\n" + calls
+             + '\nprintf "failed=%s\\n" "${FORMULA_FAILED[*]}"\n'],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30,
+            env=clean_env(PATH=f"{bin_dir}:/usr/bin:/bin"),
+        )
+
+    def test_one_failure_does_not_stop_the_rest(self):
+        """cask と同じ扱い。1 本の失敗で setup 全体を止めず、控えて続ける (#199)。"""
+        result = self.run_installs("broken-formula", "fnm")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("install fnm", self.log.read_text(), "失敗の後ろが実行されていない")
+        self.assertIn("failed=broken-formula\n", result.stdout)
+
+    def test_failures_are_reported_at_the_end(self):
+        tail = self.body[self.body.index("セットアップが完了しました"):]
+        self.assertIn("FORMULA_FAILED", tail)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

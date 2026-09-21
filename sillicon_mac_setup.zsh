@@ -348,6 +348,62 @@ fi
 echo ""
 
 ##########
+# Step 5.5b: コマンドラインツール (optional の formula)
+#   required の formula は playbook (tasks/homebrew.yml) が入れる。optional はここで選ばせる。
+#   #191 で「optional は選ばせる」形にしたとき formula の選択が抜け、
+#   homebrew_packages_optional はどこからも読まれていなかった (issue #240)。
+#   **playbook より前に置く** — fnm が入っていないと、その回の tasks/fnm.yml は
+#   「fnm が無ければ skip」へ倒れ、Node.js が黙って入らない。
+##########
+echo "🧰 Step 5.5b: コマンドラインツール"
+banner "インストール状況"
+
+FORMULAE_OPTIONAL=( $(yaml_list homebrew_packages_optional) )
+echo "   [任意] — 要るものだけ選べます"
+FORMULA_MISSING=()
+for f in "${FORMULAE_OPTIONAL[@]}"; do
+	if brew list --formula "$f" >/dev/null 2>&1; then
+		echo "     ✓ $f"
+	else
+		echo "     · $f (未導入)"
+		FORMULA_MISSING+=("$f")
+	fi
+done
+echo ""
+
+# --- formula の導入 -------------------------------------------------------
+# cask と同じ扱い。1 本の失敗で setup 全体を止めず、名前を控えて続ける (issue #199)
+FORMULA_FAILED=()
+install_formula() {  # $1=名前
+	if brew install "$1"; then
+		return 0
+	fi
+	echo "   ⚠️  $1 を入れられませんでした。続行します (最後にまとめて報告します)"
+	FORMULA_FAILED+=("$1")
+	return 0
+}
+# --- formula の導入ここまで ------------------------------------------------
+
+if (( ${#FORMULA_MISSING[@]} > 0 )); then
+	if [[ "$OPTIONAL_MODE" == none ]]; then
+		echo "   ℹ️  任意のツールは入れません。要るときは次で入れられます:"
+		echo "      brew install ${FORMULA_MISSING[*]}"
+	else
+		SELECTED=( ${(f)"$(select_optional '任意のコマンドラインツール (未導入のみ)' "${FORMULA_MISSING[@]}")"} )
+		if (( ${#SELECTED[@]} == 0 )); then
+			echo "   ℹ️  任意のツールは選ばれませんでした"
+		else
+			for f in "${SELECTED[@]}"; do
+				[[ -z "$f" ]] && continue
+				echo "   → $f をインストール中..."
+				install_formula "$f"
+			done
+		fi
+	fi
+fi
+echo ""
+
+##########
 # Step 5.6: App Store アプリ (mas)
 #   必須は無い。RunCatNeo も選択式でよい — tasks/claude.yml の seed はカードの JSON を
 #   書くだけで、RunCat が入っていなくても失敗しない (issue #191)。
@@ -463,6 +519,11 @@ echo "    4. 手作業が残る項目 (Secretive の鍵・1Password の CLI 連�
 echo ""
 
 # 入れられなかった cask。途中で止めなかったぶん、ここで必ず見える形にする
+if (( ${#FORMULA_FAILED[@]} > 0 )); then
+	echo "  ⚠️  入れられなかったツール (任意): ${FORMULA_FAILED[*]}"
+	echo "     後から入れるには: brew install ${FORMULA_FAILED[*]}"
+	echo ""
+fi
 if (( ${#CASK_FAILED_OPTIONAL[@]} > 0 )); then
 	echo "  ⚠️  入れられなかったアプリ (任意): ${CASK_FAILED_OPTIONAL[*]}"
 	echo "     後から入れるには: brew install --cask --adopt ${CASK_FAILED_OPTIONAL[*]}"
