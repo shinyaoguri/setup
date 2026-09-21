@@ -46,6 +46,33 @@
     state: link
     force: true
 
+# zprofile はログインシェルでだけ読まれる。/etc/zprofile の path_helper が Homebrew を
+# /usr/bin の後ろへ並べ替えるのを、その直後に戻す (issue #197)。
+#
+# **~/.zprofile は既に在ることが多い。** Homebrew のインストーラ自身が
+# `eval "$(brew shellenv)"` をここへ追記するよう案内するので、setup より先に brew を
+# 入れたマシンには実ファイルがある。symlink の force は中身ごと置き換えるので、
+# 先に退避する (tasks/claude.yml と同じ形。issue #175 の考え方)。
+- name: Check existing zprofile
+  ansible.builtin.stat:
+    path: "{{ ansible_facts['env']['HOME'] }}/.zprofile"
+  register: zprofile_stat
+
+- name: Back up existing zprofile if it is a regular file
+  ansible.builtin.copy:
+    src: "{{ ansible_facts['env']['HOME'] }}/.zprofile"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.zprofile.bak-{{ ansible_facts['date_time']['date'] }}"
+    remote_src: true
+    mode: preserve
+  when: zprofile_stat.stat.exists and not zprofile_stat.stat.islnk
+
+- name: Create symlink for zprofile
+  ansible.builtin.file:
+    src: "{{ playbook_dir }}/zprofile"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.zprofile"
+    state: link
+    force: true
+
 # Claude デスクトップアプリは起動した時点のシェル環境 (PATH) を持ち続け、Bash ツールの
 # シェルスナップショットが zshenv の後でそれを書き戻す。zshenv を張る・変える前から動いて
 # いたアプリのセッションでは、変数は届くのに PATH だけが古く、secret-read が見つからずに

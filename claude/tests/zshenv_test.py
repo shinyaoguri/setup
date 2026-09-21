@@ -15,11 +15,13 @@ zshenv は「人が打つとき以外にも要るもの」の置き場。zshrc �
 
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 ZSHENV = REPO / "zshenv"
+ZPROFILE = REPO / "zprofile"
 SECRETIVE_SOCK = "com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
 
 
@@ -151,6 +153,56 @@ class CommandWithoutPathTest(unittest.TestCase):
 
     def test_gyazo_token_command_resolves_without_setup_bin_on_path(self):
         self.assert_resolves_without_setup_bin_on_path("MOKUME_GYAZO_TOKEN_CMD")
+
+
+class LoginShellPathOrderTest(unittest.TestCase):
+    """ログインシェルでも Homebrew がシステムのパスより前に来る (issue #197)。
+
+    macOS の /etc/zprofile は path_helper を呼び、zshenv が組んだ PATH を「システムの
+    パスを先頭、残りを後ろ」に並べ替える。Homebrew の PATH を zshenv へ移した (#170) のは
+    非対話シェルへ届かせるための正しい修正だが、ログインシェル (Terminal.app が開く形) では
+    /opt/homebrew/bin が /usr/bin の後ろへ回り、`git` が Apple のものを指していた。
+    人が打つ端末と無人セッションで、同じ名前が別の実行ファイルになる。
+
+    配備と同じ形 (~/.zshenv と ~/.zprofile が setup への symlink) を ZDOTDIR の下に作り、
+    本物の /etc/zprofile を通したうえで順序を見る。
+    """
+
+    def login_shell_path(self):
+        with tempfile.TemporaryDirectory() as zdotdir:
+            (Path(zdotdir) / ".zshenv").symlink_to(ZSHENV)
+            if ZPROFILE.exists():
+                (Path(zdotdir) / ".zprofile").symlink_to(ZPROFILE)
+            env = {k: v for k, v in os.environ.items()}
+            env["ZDOTDIR"] = zdotdir
+            # 呼び出し元の PATH に Homebrew が居ると、並べ替えの前後が紛れる
+            env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+            result = subprocess.run(
+                ["zsh", "-l", "-c", "print -l $path"],
+                env=env, capture_output=True, text=True, check=True,
+            )
+        return result.stdout.split("\n")
+
+    def test_path_helper_is_in_play(self):
+        """対照。path_helper が無い環境では、下のテストは何も確かめていない。"""
+        if not Path("/usr/libexec/path_helper").exists():
+            self.skipTest("path_helper が無い環境")
+        self.assertIn("path_helper", Path("/etc/zprofile").read_text())
+
+    def test_homebrew_comes_before_system_paths_in_a_login_shell(self):
+        path = self.login_shell_path()
+        self.assertIn("/opt/homebrew/bin", path)
+        self.assertLess(
+            path.index("/opt/homebrew/bin"), path.index("/usr/bin"),
+            "ログインシェルで /opt/homebrew/bin が /usr/bin の後ろにある "
+            "(brew で入れた git などが使われない)",
+        )
+        self.assertLess(path.index("/opt/homebrew/sbin"), path.index("/usr/sbin"))
+
+    def test_homebrew_is_listed_once(self):
+        """先頭へ入れ直しても重複させない (typeset -U が効いていること)。"""
+        path = self.login_shell_path()
+        self.assertEqual(path.count("/opt/homebrew/bin"), 1)
 
 
 if __name__ == "__main__":

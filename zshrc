@@ -77,7 +77,8 @@ alias ...='cd ../..'
 alias bd="cd .."
 alias rmt='trash'
 
-# Homebrew の PATH は zshenv が通す (非対話シェルからも op を引くため。#170)
+# Homebrew の PATH は zshenv が通す (非対話シェルからも op を引くため。#170)。
+# ログインシェルでは /etc/zprofile の path_helper が後ろへ並べ替えるので、zprofile が先頭へ戻す (#197)
 
 # Add local bin to PATH
 export PATH="$HOME/.local/bin:$PATH"

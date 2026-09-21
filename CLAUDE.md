@@ -16,7 +16,9 @@ macOS の環境構築 (Ansible) と、Claude Code のグローバル設定の実
   (無いと playbook か鍵まわりが成立しないもの)、`*_optional` は `sillicon_mac_setup.zsh` が
   fzf で選ばせるもの。required へ足すのは「無いと壊れる」ことを言えるときだけ
 - `claude/` — Claude Code のグローバル設定の実体。`tasks/claude.yml` が `~/.claude/` へ symlink する
-- `zshrc` — `~/.zshrc` の実体
+- `zshrc` / `zshenv` / `zprofile` — `~/.zshrc` などの実体 (`tasks/zshrc.yml` が symlink する)。
+  対話シェル向けは zshrc、非対話シェル (hook・cron) にも要るものは zshenv、zprofile は
+  ログインシェルで path_helper が並べ替えた PATH を戻すだけ
 - `.github/workflows/test.yml` — `claude/tests/` を macOS runner で流す唯一の CI
 
 ## コマンド
