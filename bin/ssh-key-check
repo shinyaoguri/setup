@@ -415,6 +415,7 @@ check_github() { # $1=エンドポイント  $2=ラベル  $3=足りないスコ
 # **登録も標準入力から渡す。** 公開鍵ファイルのパスを渡す形は、そのまま打つと gh が
 # 同じコンテナ保護で落ちる (冒頭)
 register_hint() { # $1=authentication|signing
+  # shellcheck disable=SC2016 # 人が打つ文面。$(scutil ...) はここで展開してはいけない
   printf 'ssh-key-check --print-key | gh ssh-key add --type %s --title "$(scutil --get ComputerName)"' "$1"
 }
 
