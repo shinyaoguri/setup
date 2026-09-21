@@ -37,6 +37,10 @@ MLDSA_KEY = f"ssh-mldsa65@openssh.com AAAAMLDSAKeyBody {KEY_COMMENT}"
 # 偽 ssh-add。呼ばれた引数と、そのとき見えていた SSH_AUTH_SOCK をログに残す
 # (**環境から socket を取っていないこと**の検証に使う)。
 #
+# **鍵の一覧は -L で返す。-l は実装しない** — 検査器が公開鍵ファイルではなく agent から
+# 鍵を取っていること (issue #284) を、偽物の側からも動かなくしておく。-l しか無かった頃は
+# 「agent が何か持っている」しか分からず、鍵の本体はファイルから読むほかなかった。
+#
 # FAKE_SSH_ADD_SIGN=hang は "Require Authentication" が付いたまま = agent が承認
 # ダイアログを出したまま返らない状態の再現。**SIGALRM では死なない**作りにしてある:
 # ここを素の sleep にすると `perl -e 'alarm N; exec'` だけの弱い実装が緑になってしまう
@@ -45,9 +49,10 @@ FAKE_SSH_ADD = r"""#!/usr/bin/env bash
 set -u
 printf '%s SOCK=%s\n' "$*" "${SSH_AUTH_SOCK:-}" >> "$FAKE_SSH_ADD_LOG"
 case "${1:-}" in
-  -l)
+  -L)
     case "${FAKE_SSH_ADD_LIST:-ok}" in
-      ok) echo "256 SHA256:AbC test-key (ECDSA)"; exit 0 ;;
+      # 本物と同じく、鍵が無ければ stdout に断り書きを出して 1 で終わる
+      ok) cat "$FAKE_SSH_ADD_KEYS_FILE"; exit 0 ;;
       nokeys) echo "The agent has no identities."; exit 1 ;;
       *) echo "Error connecting to agent: No such file or directory" >&2; exit 2 ;;
     esac
@@ -133,13 +138,16 @@ class SshKeyCheckTestCase(unittest.TestCase):
 
         self.home = self.root / "home"
         self.data = self.home / "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"
+        self.data.mkdir(parents=True)
+        # **PublicKeys は既定では作らない。** 本番では OS のコンテナ保護で読めないので、
+        # 「無い」のが検査器から見た通常の状態 (issue #284)
         self.public_keys = self.data / "PublicKeys"
-        self.public_keys.mkdir(parents=True)
 
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.ssh_add_log = self.root / "ssh-add.log"
         self.ssh_add_log.write_text("")
+        self.agent_keys = self.root / "agent-keys"
         self.gh_log = self.root / "gh.log"
         self.gh_log.write_text("")
 
@@ -155,8 +163,15 @@ class SshKeyCheckTestCase(unittest.TestCase):
         install_fake(path, body)
 
     def place_key(self, *keys):
-        for existing in self.public_keys.glob("*.pub"):
-            existing.unlink()
+        """agent が持っている鍵を決める (`ssh-add -L` が返す一覧)。"""
+        self.agent_keys.write_text("".join(f"{key}\n" for key in keys))
+
+    def place_key_file(self, *keys):
+        """公開鍵ファイルの写しを置く。**検査器はこれを見てはいけない**。
+
+        本番では OS が読ませないので、ここに何が在っても結果は変わらないのが正しい。
+        """
+        self.public_keys.mkdir(parents=True, exist_ok=True)
         for index, key in enumerate(keys):
             (self.public_keys / f"{index:032x}.pub").write_text(key + "\n")
 
@@ -176,6 +191,7 @@ class SshKeyCheckTestCase(unittest.TestCase):
         env["FAKE_SSH_ADD_LOG"] = str(self.ssh_add_log)
         env["FAKE_SSH_ADD_SIGN"] = sign
         env["FAKE_SSH_ADD_LIST"] = agent
+        env["FAKE_SSH_ADD_KEYS_FILE"] = str(self.agent_keys)
         env["FAKE_GH_LOG"] = str(self.gh_log)
         env["FAKE_GH_AUTH"] = gh_auth
         env["FAKE_GH_SIGNING"] = gh_signing
@@ -224,7 +240,14 @@ class LocalChecksTest(SshKeyCheckTestCase):
         self.place_key()
         result = self.run_script("--local")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertReports(result, "公開鍵", ".pub が無い")
+        self.assertReports(result, "公開鍵", "鍵を 1 本も持っていない")
+
+    def test_agent_が鍵を持っていないと答えても_ng(self):
+        """空の一覧を返す形と、1 で断る形の両方が同じ結論に着くこと。"""
+        result = self.run_script("--local", agent="nokeys")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertReports(result, "公開鍵", "鍵を 1 本も持っていない")
+        self.assertReports(result, "SecretAgent", "常駐していて応答する")
 
     def test_鍵が_2_本あれば_ng(self):
         """どれで署名するか決まらない。以前の `head -1` はここで任意の 1 本を拾っていた。"""
@@ -245,10 +268,13 @@ class LocalChecksTest(SshKeyCheckTestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertReports(result, "SecretAgent", "応答しない")
 
-    def test_agent_が鍵を持っていなければ_ng(self):
-        result = self.run_script("--local", agent="nokeys")
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertReports(result, "SecretAgent", "鍵を 1 本も持っていない")
+    def test_agent_が応えなければ鍵の選択は_ng_ではなく判定不能(self):
+        """**これが issue #284 の本体。** 見られなかったことを「無い」と言うと、
+        tasks/git.yml が rc で判断してコミット署名が永久に入らない。"""
+        result = self.run_script("--local", agent="noagent")
+        self.assertReports(result, "公開鍵", "判定不能")
+        self.assertNotIn("鍵を 1 本も持っていない", result.stdout)
+        self.assertNotIn("Secretive.app の「+」で鍵を 1 本作る", result.stdout)
 
     def test_socket_が無ければ_ng(self):
         (self.data / "socket.ssh").unlink()
@@ -317,6 +343,46 @@ class LocalChecksTest(SshKeyCheckTestCase):
         self.assertEqual(self.gh_calls(), [], "--local がネットワークを使った")
 
 
+class PublicKeyFilesIgnoredTest(SshKeyCheckTestCase):
+    """issue #284 の回帰。**検査器は公開鍵ファイルを見ない**。
+
+    Secretive は ~/Library/Containers/.../PublicKeys/<md5>.pub に写しを置くが、
+    macOS 26 のコンテナ保護で readdir も open も Operation not permitted になる
+    (stat(2) だけが通るので「在るのに読めない」)。ここを列挙していた頃は、正しい鍵が
+    在るのに ng を出し、tasks/git.yml が rc で判断してコミット署名が入らなかった。
+
+    tmp ディレクトリではその保護を再現できないので、**読めない状態を 2 通りで近似する**
+    (ディレクトリごと無い / 権限で読めない) うえ、**写しが agent と食い違っていても
+    agent の側が勝つ**ことを見る。列挙に戻れば、どれかが必ず落ちる。
+    """
+
+    def test_公開鍵ファイルが無くても緑(self):
+        self.assertFalse(self.public_keys.exists())
+        result = self.run_script("--local")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_公開鍵ファイルが読めなくても緑(self):
+        if os.geteuid() == 0:
+            self.skipTest("root は権限を無視して読めてしまう")
+        self.place_key_file(ECDSA_KEY)
+        self.public_keys.chmod(0o000)
+        self.addCleanup(self.public_keys.chmod, 0o700)
+        result = self.run_script("--local")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_写しが別の鍵でも_agent_の鍵を使う(self):
+        """ファイルを読んでいれば、ここで別人の鍵を署名鍵として書き出してしまう。"""
+        self.place_key_file(OTHER_KEY)
+        result = self.run_script("--print-key")
+        self.assertEqual(result.stdout.strip(), ECDSA_KEY)
+
+    def test_写しが_2_本あっても_agent_が_1_本なら緑(self):
+        """「2 本ある」は agent の一覧で数える。写しの本数は関係ない。"""
+        self.place_key_file(ECDSA_KEY, OTHER_KEY)
+        result = self.run_script("--local")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class SetupStepsTest(SshKeyCheckTestCase):
     """まだ何も始まっていない人に、手順の全体を出す (issue #278)。
 
@@ -353,8 +419,24 @@ class SetupStepsTest(SshKeyCheckTestCase):
         self.place_key()
         self.assertNotIn("**", self.run_script("--local").stdout)
 
-    def test_鍵があるときは手順を出さない(self):
-        """既に始めている人に毎回 5 手順を読ませると、見るべき 1 行がその中に埋もれる。"""
+    def test_agent_が一度も常駐していなければ手順の全体が出る(self):
+        """新しいマシンでは Secretive.app が入っただけで一度も起動していない。
+
+        鍵は agent から取るので、この状態では鍵の有無すら確かめられない。ここで手順を
+        出さないと、**issue #278 が狙った場面をまるごと外す**。
+        """
+        (self.data / "socket.ssh").unlink()
+        out = self.run_script("--local").stdout
+        self.assertIn("次の順に進めます", out)
+        self.assertNotIn(
+            "鍵がまだ 1 本もありません", out, "確かめていないことを断定している"
+        )
+
+    def test_始めた人が_agent_を落としているだけなら手順を出さない(self):
+        """既に始めている人に毎回 5 手順を読ませると、見るべき 1 行がその中に埋もれる。
+
+        socket が在る = 一度は常駐していた = 始めている。次の 1 手は検査行が言う。
+        """
         out = self.run_script("--local", agent="noagent").stdout
         self.assertNotIn("次の順に進めます", out)
         self.assertIn("手順の正本は", out)
