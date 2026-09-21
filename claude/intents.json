@@ -471,14 +471,17 @@
       "rationale": ["shinyaoguri/setup#232"],
       "means": [
         {"kind": "self", "ref": "claude/intents.json"},
-        {"kind": "self", "ref": "claude/tests/intents_test.py"}
+        {"kind": "self", "ref": "claude/tests/intents_test.py"},
+        {"kind": "self", "ref": ".github/scripts/claude-changelog-diff.py"},
+        {"kind": "self", "ref": ".claude/skills/claude-upstream-review/SKILL.md"}
       ],
       "depends_on": [
-        {"surface": "cli", "name": "anthropics/claude-code の CHANGELOG.md の見出し形式", "stability": "undocumented"}
+        {"surface": "cli", "name": "anthropics/claude-code の CHANGELOG.md の見出し形式", "stability": "undocumented"},
+        {"surface": "skill-spec", "name": "SKILL.md の frontmatter", "stability": "documented"}
       ],
-      "verify": ["claude/tests/intents_test.py"],
+      "verify": ["claude/tests/intents_test.py", "claude/tests/changelog_diff_test.py"],
       "sunset": "本体が、設定とフックの非推奨・置換可能性を自己診断するようになったら",
-      "gap": "台帳と被覆テストだけがあり、changelog との突き合わせ (差分スクリプト・週次の検知・判定スキル) は未実装 (#232)"
+      "gap": "見直しは人かセッションが思い出して起こす必要がある。新しい版を週次で検知して知らせる workflow は未実装 (#232)"
     },
     {
       "id": "wish-hook-contract-against-real-claude",
