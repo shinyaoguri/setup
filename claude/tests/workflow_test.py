@@ -124,5 +124,54 @@ class ActionFreshnessTest(unittest.TestCase):
         self.assertEqual(loose, [], "追従先が動くバージョン指定になっている")
 
 
+def code_lines(path):
+    """コメント行を落とした本文。コメントは機構の名前を引用するので、素で探すと常に当たる。"""
+    return "\n".join(
+        line for line in path.read_text().split("\n")
+        if not line.lstrip().startswith("#")
+    )
+
+
+class UpstreamDetectionTest(unittest.TestCase):
+    """Claude 本体の更新の検知が、置いただけで動いていない状態にならないこと (#232)。
+
+    差分スクリプトと台帳が在っても、定期的に流す口が無ければ見直しは「思い出したとき」に
+    戻る。逆に口だけ在ってスクリプトを呼んでいなければ、緑のまま何も検知しない。
+    """
+
+    WORKFLOW = WORKFLOWS / "claude-upstream.yml"
+    SCRIPT = REPO / ".github" / "scripts" / "claude-changelog-diff.py"
+
+    def setUp(self):
+        self.assertTrue(self.WORKFLOW.exists(), "claude-upstream.yml が無い")
+        self.code = code_lines(self.WORKFLOW)
+
+    def test_runs_on_a_schedule_and_by_hand(self):
+        self.assertRegex(self.code, r"(?m)^  schedule:\n\s+- cron:", "定期実行の口が無い")
+        self.assertRegex(self.code, r"(?m)^  workflow_dispatch:", "手で流して確かめる口が無い")
+
+    def test_calls_the_script_with_the_real_ledger(self):
+        self.assertTrue(self.SCRIPT.exists())
+        self.assertIn(".github/scripts/claude-changelog-diff.py", self.code)
+        self.assertIn("--intents claude/intents.json", self.code)
+
+    def test_issue_is_gated_on_the_script_verdict(self):
+        """起票の要否を決めるのはスクリプト。workflow 側で条件を足したり外したりしない。"""
+        self.assertIn("steps.diff.outputs.issue_needed == 'true'", self.code)
+
+    def test_one_issue_is_kept_by_exact_title(self):
+        """版ごとに起票したりコメントで追記したりすると、累積の差分が重複して積もる。"""
+        self.assertIn("select(.title == env.ISSUE_TITLE)", self.code)
+        self.assertIn("gh issue edit", self.code)
+        self.assertNotIn("gh issue comment", self.code)
+
+    def test_write_permission_is_on_the_job_only(self):
+        self.assertRegex(self.code, r"(?m)^    permissions:\n(?:      .*\n)*      issues: write")
+
+    def test_fetch_failure_is_not_silenced(self):
+        """curl が落ちたら step ごと赤くなるのではなく、読めない changelog としてスクリプトへ渡す。"""
+        self.assertRegex(self.code, r'curl -fsSL[^\n]*\\\n\s+\|\| : > "\$RUNNER_TEMP/CHANGELOG\.md"')
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

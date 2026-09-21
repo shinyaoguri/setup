@@ -1,0 +1,66 @@
+name: claude-upstream
+
+# Claude Code 本体の新しい版を週次で検知し、意図の台帳 (claude/intents.json) と突き合わせた
+# レポートを Issue に置く (shinyaoguri/setup#232)。
+#
+# ここがやるのは検知だけで、判定はしない — 非推奨化の告知に決まった形式が無く、文字列では
+# 「自作の手段をやめられるか」は決まらない。判定は claude-upstream-review スキルが Issue を
+# 起点に行い、終えたら台帳の reviewed_against を進める PR がこの Issue を閉じる。
+#
+# 起票するのは、新しい版が在り、かつ「台帳が依存する本体の仕様語に当たった」か「最後の
+# 見直しから 30 日を超えた」ときだけ (判定は .github/scripts/claude-changelog-diff.py)。
+# 差が在るたびに知らせると、確認が反射になって誰も読まなくなる (#148 と同じ理由)。
+on:
+  schedule:
+    - cron: '0 0 * * 1' # 毎週月曜 09:00 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # レポートを Issue に置くこの job にだけ
+    env:
+      CHANGELOG_URL: https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
+      ISSUE_TITLE: 'claude-upstream: 本体の更新を意図の台帳と突き合わせる'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: CHANGELOG を取得する
+        # 取れなかったら空のファイルを渡す。スクリプトは見出しを読めない changelog を
+        # 「差なし」とは読まず parse_failed として起票が要る側へ倒すので、検知が黙って死なない
+        run: |
+          curl -fsSL --retry 3 --max-time 60 "$CHANGELOG_URL" -o "$RUNNER_TEMP/CHANGELOG.md" \
+            || : > "$RUNNER_TEMP/CHANGELOG.md"
+
+      - name: 台帳と突き合わせる
+        id: diff
+        run: |
+          summary=$(python3 .github/scripts/claude-changelog-diff.py \
+            --changelog "$RUNNER_TEMP/CHANGELOG.md" \
+            --intents claude/intents.json \
+            --report "$RUNNER_TEMP/report.md")
+          echo "$summary"
+          echo "issue_needed=$(jq -r '.issue_needed' <<<"$summary")" >> "$GITHUB_OUTPUT"
+
+      - name: レポートを Issue に置く
+        if: steps.diff.outputs.issue_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '\n\n---\nworkflow run: %s\n' "$RUN_URL" >> "$RUNNER_TEMP/report.md"
+          gh label create claude-upstream --description "Claude 本体の更新と意図の台帳の突き合わせ" --color 5319E7 --force
+          # 差分は reviewed_against からの累積なので、版ごとに起票したりコメントで追記したり
+          # すると同じ中身が積もる。タイトルの完全一致で 1 本に保ち、本文を上書きする
+          existing=$(gh issue list --label claude-upstream --state open --json number,title \
+            --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file "$RUNNER_TEMP/report.md"
+          else
+            gh issue create --title "$ISSUE_TITLE" --label claude-upstream --body-file "$RUNNER_TEMP/report.md"
+          fi

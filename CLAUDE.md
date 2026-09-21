@@ -19,7 +19,9 @@ macOS の環境構築 (Ansible) と、Claude Code のグローバル設定の実
 - `zshrc` / `zshenv` / `zprofile` — `~/.zshrc` などの実体 (`tasks/zshrc.yml` が symlink する)。
   対話シェル向けは zshrc、非対話シェル (hook・cron) にも要るものは zshenv、zprofile は
   ログインシェルで path_helper が並べ替えた PATH を戻すだけ
-- `.github/workflows/test.yml` — `claude/tests/` を macOS runner で流す唯一の CI
+- `.github/workflows/test.yml` — PR ごとの CI。`claude/tests/` を macOS runner で流す
+- `.github/workflows/claude-upstream.yml` — 週次。Claude Code の新しい版を `claude/intents.json` と
+  突き合わせ、見直しが要るときだけ Issue に置く (判定は `.claude/skills/claude-upstream-review`)
 
 ## コマンド
 
