@@ -47,6 +47,10 @@ SYSTEM_VARIABLES = frozenset(
 # ${VAR:-既定値} / ${VAR:=既定値} と、python の os.environ.get("VAR") / os.environ["VAR"]
 _SHELL_DEFAULT = re.compile(r"\$\{([A-Z][A-Z0-9_]*):[-=]")
 _PY_ENVIRON = re.compile(r"environ(?:\.get)?[\(\[]\s*[\"']([A-Z][A-Z0-9_]*)[\"']")
+# bin/secret-read は数値の設定を `numeric_env NAME 既定値` で読む (中は eval)。上の 2 つの
+# 綴りに掛からないので、SECRET_CACHE_TTL などが呼び出し元のセッションからテストへ
+# 継承されていた (#218)。関数の定義行 (`numeric_env() {`) は大文字で始まらないので当たらない
+_NUMERIC_ENV = re.compile(r"numeric_env\s+([A-Z][A-Z0-9_]*)")
 
 
 def script_files():
@@ -62,7 +66,11 @@ def script_files():
 def raw_variables_read_by(path):
     """そのスクリプトが既定値つきで読んでいる変数 (除外前)。"""
     text = path.read_text(errors="replace")
-    return set(_SHELL_DEFAULT.findall(text)) | set(_PY_ENVIRON.findall(text))
+    return (
+        set(_SHELL_DEFAULT.findall(text))
+        | set(_PY_ENVIRON.findall(text))
+        | set(_NUMERIC_ENV.findall(text))
+    )
 
 
 def variables_read_by(path):
