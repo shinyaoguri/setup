@@ -26,14 +26,17 @@
   failed_when: false
   when: fnm_present.rc | default(1) == 0
 
-- name: Install latest Node.js via fnm
+# **既定は LTS。** 以前は `fnm ls-remote | tail -n 1` で選んでいたが、それは「その時点の
+# 最新版」で、奇数メジャー (Current) のことがある。立てた時期によって既定の Node が LTS
+# だったり、半年で EOL になる系列だったりした (issue #223)。
+# `--lts` で入れると fnm が `lts-latest` の別名を張るので、版番号を自前で引かなくてよい。
+- name: Install the latest LTS Node.js via fnm
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
       eval "$(fnm env --shell zsh)"
-      latest=$(fnm ls-remote | tail -n 1 | awk '{print $1}')
-      fnm install "$latest"
-      fnm default "$latest"
+      fnm install --lts
+      fnm default lts-latest
     executable: /bin/zsh
   when:
     - fnm_present.rc | default(1) == 0

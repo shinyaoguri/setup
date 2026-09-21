@@ -341,6 +341,27 @@ class FirstRunWithoutKeyTest(unittest.TestCase):
         self.assertIn(self.FAKE_KEY, (self.home / ".config/git/allowed_signers").read_text())
 
 
+class NodeVersionTest(unittest.TestCase):
+    """新しいマシンの既定の Node.js は LTS にする (issue #223)。
+
+    `fnm ls-remote | tail -n 1` は**その時点の最新版**で、奇数メジャー (Current) のことが
+    ある。立てた時期によって既定が LTS だったり半年で EOL になる系列だったりし、実際に
+    このマシンの既定は v25 系になっていた。ネットワークが要るので実行はせず、形を見る。
+    """
+
+    def setUp(self):
+        self.body = without_comments(TASKS / "fnm.yml")
+
+    def test_installs_the_latest_lts(self):
+        self.assertIn("fnm install --lts", self.body)
+        # --lts で入れると fnm が lts-latest の別名を張る。版番号を自前で引かない
+        self.assertIn("fnm default lts-latest", self.body)
+
+    def test_does_not_pick_the_newest_release(self):
+        self.assertNotIn("ls-remote", self.body, "最新版 (非 LTS でありうる) を選んでいる")
+        self.assertNotIn("--latest", self.body)
+
+
 class TaskTagNamingTest(unittest.TestCase):
     """CLAUDE.md の「tag 名はファイル名と同じ」を守る。
 
