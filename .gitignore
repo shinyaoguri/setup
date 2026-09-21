@@ -50,5 +50,10 @@ __pycache__/
 .env.*
 # 雛形は追跡する (値ではなく変数名だけを置く場所)
 !.env.example
+# 秘密鍵のファイル。値は 1Password に在ってファイルにはしない建前だが、GitHub App の PEM を
+# 取り出して確かめる場面でファイルができうる (issue #226)。公開鍵 (*.pub) は対象外
+*.pem
+*.key
+*.p12
 # マシンごとに違う許可。コミットすると他マシンの挙動を汚す
 .claude/settings.local.json
