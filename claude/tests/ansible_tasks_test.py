@@ -11,8 +11,11 @@ ansible のタスクは「実行されなかった」と「実行して変更が
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 TASKS = Path(__file__).resolve().parent.parent.parent / "tasks"
 
@@ -226,6 +229,92 @@ class DeclaredDependencyTest(unittest.TestCase):
         self.assertIn("gyazo_cask_installed", claude)
         readme = (TASKS.parent / "README.md").read_text()
         self.assertIn("Gyazo を手でインストールする", readme)
+
+
+class FirstRunWithoutKeyTest(unittest.TestCase):
+    """新しいマシンの初回実行が、Secretive の鍵が無いことで止まらない (issue #196)。
+
+    Secretive は同じ実行の中で入ったばかりで、鍵を作るのは GUI 操作 — つまり初回は
+    **必ず**鍵が無い。tasks/git.yml がそこで fail していたため、playbook は順序で後ろに
+    ある fonts / terminal / zshrc / claude / fnm を一切適用せず、bootstrap も set -e で
+    Step 7 と最後の案内へ届かなかった。「鍵がまだ無い」は途中経過であって失敗ではない。
+
+    when の条件を文字列で見ても、実際に止まらないことは分からない。HOME を一時
+    ディレクトリへ向けて tasks/git.yml を本当に流す (git config --global も鍵の探索も
+    HOME の下で完結する)。ansible が無い環境では skip — CI で流す件は issue #220。
+    """
+
+    PLAYBOOK = TASKS.parent / "playbook_sillicon_mac.yml"
+    FAKE_KEY = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY= test@secretive"
+
+    def setUp(self):
+        if shutil.which("ansible-playbook") is None:
+            self.skipTest("ansible が無い環境")
+        self.workdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workdir.cleanup)
+        self.home = Path(self.workdir.name)
+
+    def other_tags(self):
+        tags = re.findall(r"^\s*tags:\s*(\S+)", self.PLAYBOOK.read_text(), re.M)
+        self.assertIn("git", tags)
+        return [t for t in tags if t != "git"]
+
+    def run_git_tasks(self, explicit):
+        """explicit=True は `--tags git` (人が名指しで流した)。False は全体実行の再現で、
+        git 以外を --skip-tags で外す (重い brew / cask を流さないため)。どちらの形でも
+        走るのは tasks/git.yml だけだが、ansible_run_tags は前者が ['git']、後者が ['all']。
+        """
+        selection = ["--tags", "git"] if explicit else ["--skip-tags", ",".join(self.other_tags())]
+        return subprocess.run(
+            ["ansible-playbook", "-i", "localhost,", str(self.PLAYBOOK), *selection],
+            capture_output=True, text=True, timeout=300, cwd=self.home,
+            env=clean_env(HOME=str(self.home), XDG_CONFIG_HOME=None, ANSIBLE_NOCOLOR="1"),
+        )
+
+    def git_config(self, key):
+        result = subprocess.run(
+            ["git", "config", "--file", str(self.home / ".gitconfig"), "--get", key],
+            capture_output=True, text=True, env=clean_env(HOME=str(self.home)),
+        )
+        return result.stdout.strip()
+
+    def place_key(self):
+        keys = self.home / "Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/PublicKeys"
+        keys.mkdir(parents=True)
+        (keys / "test.pub").write_text(self.FAKE_KEY + "\n")
+
+    def test_full_run_without_a_key_does_not_stop(self):
+        """全体実行では止まらず、鍵と無関係な設定は入り、署名だけが入らない。"""
+        result = self.run_git_tasks(explicit=False)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-1000:])
+        self.assertEqual(self.git_config("user.name"), "Shinya Oguri")
+        self.assertTrue(self.git_config("alias.gone"), "鍵と無関係な alias まで skip された")
+        # 鍵が無いのに署名を有効にすると、以後のコミットがすべて失敗する
+        self.assertEqual(self.git_config("commit.gpgsign"), "")
+        self.assertEqual(self.git_config("user.signingkey"), "")
+        # 何が残っているかと、済ませた後に打つコマンドを出していること
+        self.assertIn("--tags ssh,git", result.stdout)
+
+    def test_explicit_git_tag_without_a_key_still_fails(self):
+        """名指しで流したのに鍵が無いなら、それは失敗 (README 手順 3 の「済んだら」の後)。
+
+        ここまで skip にすると、署名が未適用のまま緑で終わる — 1Password 版が
+        そうなっていて、tasks/git.yml が fail を置いた元々の理由。
+        """
+        result = self.run_git_tasks(explicit=True)
+        self.assertNotEqual(result.returncode, 0, "鍵が無いのに成功として終わった")
+        self.assertEqual(self.git_config("commit.gpgsign"), "")
+
+    def test_signing_is_configured_once_the_key_exists(self):
+        """鍵があれば署名まで入る (skip の条件が永久に真になっていないこと)。"""
+        self.place_key()
+        result = self.run_git_tasks(explicit=False)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-1000:])
+        self.assertEqual(self.git_config("commit.gpgsign"), "true")
+        self.assertEqual(self.git_config("gpg.format"), "ssh")
+        signing_key = self.home / ".ssh/git_signing_key.pub"
+        self.assertEqual(signing_key.read_text().strip(), self.FAKE_KEY)
+        self.assertIn(self.FAKE_KEY, (self.home / ".config/git/allowed_signers").read_text())
 
 
 class TaskTagNamingTest(unittest.TestCase):

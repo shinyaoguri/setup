@@ -43,7 +43,7 @@ GUI 操作が要って自動化できない手順があるので、次の順に�
 
 1. **App Store にサインインしておく** — mas は CLI からサインインできない
 2. **setup を流す** — 上の「使い方」。途中で「何を入れるか」を聞かれる (選ばなかったものは後から入れられる)
-3. **Secretive で鍵を作り、GitHub に登録する** — 手順は [`tasks/ssh.yml`](tasks/ssh.yml) の冒頭。済んだら `ansible-playbook playbook_sillicon_mac.yml --tags ssh,git`
+3. **Secretive で鍵を作り、GitHub に登録する** — 手順は [`tasks/ssh.yml`](tasks/ssh.yml) の冒頭。済んだら `ansible-playbook playbook_sillicon_mac.yml --tags ssh,git`。2 の時点では鍵がまだ無いので、setup は**コミット署名の設定だけを飛ばして**最後まで進む (他の設定は適用済み)。ここで流し直すと署名が入る — 名指しで流したこの実行では、鍵が無ければ失敗として止まる ([#196](https://github.com/shinyaoguri/setup/issues/196))
 4. **1Password にサインインし、設定 > 開発者 の「1Password CLI と連携」を有効にする**
 5. **秘密のキャッシュを温める** — `secret-read --warm`。セットアップの最後にも試すが、4 が済んでいないと失敗する。温めておかないと、無人セッションが初回の読み出しで 1Password の承認を待って止まる。何をキャッシュしてよいかは [`secret-cache-allowlist`](secret-cache-allowlist)
 6. **Gyazo を手でインストールする** (2 で選んだ場合) — `gyazo` cask は手動インストーラ (artifact が `installer: manual`) で、brew は `.pkg` を Caskroom に置くだけ。`/opt/homebrew/Caskroom/gyazo/*/Gyazo-*.pkg` を開いてインストールする。**`brew list --cask gyazo` は .pkg があるだけで成功を返す**ので、セットアップは「導入済み」と報告してしまう。済ませないと Gyazo MCP が無音で未登録になり、[gyazo-capture スキル](https://github.com/shinyaoguri/claude-plugins) が使えない。済んだら `ansible-playbook playbook_sillicon_mac.yml --tags claude`
