@@ -78,14 +78,19 @@
   # 無ければ、allow で通った時点で復元先はどこにも残らず、本人が辿れない。
   # 「多少のリスクを許容する」の対価がこれ。
   #
-  #   git discarded          退避の一覧 (新しい順。ref 名をそのまま復元に使える)
+  #   git discarded          退避の一覧 (退避した時刻の新しい順。ref 名をそのまま復元に使える)
   #   git discarded <ref>    その退避の中身
   #
   # 復元は退避の種類で違う: 作業ツリーは git checkout <ref> -- <path>、
   # ブランチは git branch <名前> <ref>、HEAD は git reset --hard <ref>。
+  #
+  # 並べる基準は **ref 名の末尾に埋めてある退避の時刻**で、コミットの日付ではない。
+  # ブランチの先端と HEAD の退避は既存のコミットをそのまま固定するので、committerdate で
+  # 並べると「きのう消した 2 年前のブランチ」が一覧の底へ沈む (issue #201。prune の基準も
+  # 同じ理由で ref 名に寄せてある — claude/git-safety-guard.sh の prune_backups)。
   community.general.git_config:
     name: alias.discarded
-    value: '!f() { if [ -n "$1" ]; then git show --stat "$1"; else git for-each-ref --sort=-committerdate --format="%(committerdate:relative)  %(refname)" refs/claude/discarded | grep . || echo "(退避なし)"; fi; }; f'  # noqa: yaml[line-length]
+    value: '!f() { if [ -n "$1" ]; then git show --stat "$1"; else git for-each-ref --format="%(refname)" refs/claude/discarded | sed -E "s|^(.*[-/])([0-9]{8}-[0-9]{6})(-[0-9]+){1,2}$|\2  &|" | sort -r | grep . || echo "(退避なし)"; fi; }; f'  # noqa: yaml[line-length]
     scope: global
 
 - name: Add git alias `stale` (list local branches already contained in the default branch)

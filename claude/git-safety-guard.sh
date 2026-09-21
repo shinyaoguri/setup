@@ -314,7 +314,7 @@ pin_object() { # $1=ラベル $2=リビジョン → ref 名
   PIN_SEQ=$((PIN_SEQ + 1))
   ref="${BACKUP_NS}/$1-$(date +%Y%m%d-%H%M%S)-$$-$PIN_SEQ"
   git update-ref "$ref" "$sha" 2>/dev/null || return 1
-  prune_backups
+  prune_backups "$ref"
   printf '%s' "$ref"
 }
 
@@ -367,13 +367,38 @@ backup_worktree() {
 
 # 役目を終えた退避を落とす。放っておくと ref が際限なく増えるので、退避を作った直後に
 # だけ掃除する (取り消しは頻度が低く、毎回の Bash で回すほどのものではない)。
-prune_backups() {
-  local now ref stamp
-  now=$(date +%s)
-  git for-each-ref --format='%(refname) %(committerdate:unix)' "$BACKUP_NS" 2>/dev/null |
-    while read -r ref stamp; do
-      [ -n "$stamp" ] || continue
-      [ "$((now - stamp))" -gt "$BACKUP_TTL" ] && git update-ref -d "$ref" 2>/dev/null
+#
+# **古さは ref 名に埋めた退避の時刻で決める。固定したコミットの日付では決めない。**
+# 作業ツリーの退避は `git stash create` がいま作ったコミットなので両者は一致するが、
+# ブランチの先端と HEAD は**既存のコミットをそのまま固定する**。committerdate で測ると、
+# 先端が 30 日より古いブランチは「退避済み」と allow を返した直後に退避が消える
+# (issue #201) — 放置していたブランチこそ、消した後で惜しくなる対象である。
+#
+# 時刻を読めない名前は落とさない。判定できないものを消す側へ倒さない。
+# いま作った ref も名指しで外す (時刻で外れるはずだが、時計が狂っていても消さない)。
+backup_stamp() { # $1=ref 名 → YYYYmmddHHMMSS。読めなければ失敗
+  # 末尾は pin_object が付ける `-<日付>-<時刻>-<PID>-<連番>`。連番が付く前の命名
+  # (`<日付>-<時刻>-<PID>`) も読む。末尾に固定するので、ブランチ名の中に時刻らしき
+  # 並びがあってもそちらは読まない。
+  [[ "${1##*/}" =~ (^|-)([0-9]{8})-([0-9]{6})-[0-9]+(-[0-9]+)?$ ]] || return 1
+  printf '%s%s' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+}
+
+prune_backups() { # $1=いま作った ref (落とさない)
+  local keep="${1:-}" cutoff_epoch cutoff ref stamp
+  cutoff_epoch=$(($(date +%s) - BACKUP_TTL))
+  # BSD date (macOS) は -r <epoch>、GNU date は -d @<epoch>。ref 名の時刻は pin_object が
+  # ローカル時刻で付けているので、こちらもローカル時刻のまま比べる
+  cutoff=$(date -r "$cutoff_epoch" +%Y%m%d%H%M%S 2>/dev/null ||
+    date -d "@$cutoff_epoch" +%Y%m%d%H%M%S 2>/dev/null) || return 0
+  [[ "$cutoff" =~ ^[0-9]{14}$ ]] || return 0
+
+  git for-each-ref --format='%(refname)' "$BACKUP_NS" 2>/dev/null |
+    while read -r ref; do
+      [ "$ref" != "$keep" ] || continue
+      stamp=$(backup_stamp "$ref") || continue
+      # 同じ桁数の数字列なので、文字列の比較がそのまま時刻の比較になる
+      [[ "$stamp" < "$cutoff" ]] && git update-ref -d "$ref" 2>/dev/null
     done
   return 0
 }
