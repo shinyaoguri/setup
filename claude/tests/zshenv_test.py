@@ -37,7 +37,7 @@ def source_zshenv(**overrides):
         else:
             env[key] = value
     result = subprocess.run(
-        ["zsh", "-c", f'source "{ZSHENV}"; printf "%s\\n%s\\n%s\\n" "$SSH_AUTH_SOCK" "$GYAZO_TOKEN_REF" "$PATH"'],
+        ["zsh", "-f", "-c", f'source "{ZSHENV}"; printf "%s\\n%s\\n%s\\n" "$SSH_AUTH_SOCK" "$GYAZO_TOKEN_REF" "$PATH"'],
         env=env,
         capture_output=True,
         text=True,
@@ -52,7 +52,7 @@ def read_var(name):
     env = {k: v for k, v in os.environ.items()}
     env.pop(name, None)
     return subprocess.run(
-        ["zsh", "-c", f'source "{ZSHENV}"; printf "%s" "${name}"'],
+        ["zsh", "-f", "-c", f'source "{ZSHENV}"; printf "%s" "${name}"'],
         env=env,
         capture_output=True,
         text=True,

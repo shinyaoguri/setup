@@ -41,7 +41,7 @@ awk -v key="$1" '
 
 def yaml_list(key):
     r = subprocess.run(
-        ["zsh", "-c", YAML_LIST, "zsh", key, str(PACKAGES)],
+        ["zsh", "-f", "-c", YAML_LIST, "zsh", key, str(PACKAGES)],
         capture_output=True, text=True, check=True,
     )
     return [l for l in r.stdout.split("\n") if l]
@@ -120,9 +120,9 @@ class NonInteractiveTest(unittest.TestCase):
         body = SCRIPT.read_text()
         start = body.index("OPTIONAL_MODE=ask")
         end = body.index('echo "============================================================"')
-        env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}")
+        env = clean_env(PATH=f"{self.bin}:{os.environ['PATH']}")
         return subprocess.run(
-            ["zsh", "-c", body[start:end] + '\nprintf "%s" "$OPTIONAL_MODE"', "zsh", *args],
+            ["zsh", "-f", "-c", body[start:end] + '\nprintf "%s" "$OPTIONAL_MODE"', "zsh", *args],
             capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=30,
         )
 
@@ -165,7 +165,7 @@ class PreviewQuotingTest(unittest.TestCase):
         # fzf がするのと同じ引用をして実行する
         cmd = cmd.replace("{2..}", "'RunCatNeo'").replace("{1}", "'6757801838'")
         out = subprocess.run(
-            ["zsh", "-c", cmd], capture_output=True, text=True, check=True
+            ["zsh", "-f", "-c", cmd], capture_output=True, text=True, check=True
         ).stdout
         self.assertIn("RunCatNeo", out)
         self.assertIn("6757801838", out)

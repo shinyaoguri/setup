@@ -20,8 +20,11 @@ issue #138 では mokume を主として開いたセッション (`.claude/setti
 この方針が守られているかは claude/tests/env_isolation_test.py が見る。
 """
 
+import atexit
 import os
 import re
+import shutil
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -76,12 +79,28 @@ def switch_variables():
     return frozenset(found)
 
 
+@lru_cache(maxsize=1)
+def empty_zdotdir():
+    """空のディレクトリ。ZDOTDIR をここへ向けると、子の zsh は利用者の rc ファイルを読まない。"""
+    path = tempfile.mkdtemp(prefix="claude-tests-zdotdir-")
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
+
+
 def clean_env(**overrides):
     """呼び出し元のスイッチを落とした環境に、テストが明示した値を載せて返す。
 
     値に None を渡した変数は環境から落とす (未設定の再現)。
+
+    **環境変数を落としても、子の zsh が ~/.zshenv を読めば戻ってくる。** このリポジトリの
+    zshenv は /opt/homebrew/bin と setup の bin/ を PATH の先頭へ足すので、偽コマンドを
+    PATH の先頭へ置いたつもりでも、Homebrew に同名があれば本物が先に引かれる (偽 brew の
+    つもりで本物の `brew install` が走った。issue #238)。ZDOTDIR を空のディレクトリへ
+    向けて読ませない。`-f` と違って環境変数なので、テスト対象のスクリプトが起動する
+    孫の zsh にも届く。rc ファイルそのものを試すテストは ZDOTDIR を明示して上書きする。
     """
     env = {k: v for k, v in os.environ.items() if k not in switch_variables()}
+    env["ZDOTDIR"] = empty_zdotdir()
     for key, value in overrides.items():
         if value is None:
             env.pop(key, None)
