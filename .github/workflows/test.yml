@@ -28,6 +28,12 @@ jobs:
         # discover はテストが 0 件でも成功するので、拾い漏れをここで落とす
         run: ls claude/tests/*_test.py
 
+      # 選択 UI の実挙動テスト (bootstrap_selection_test) は本物の fzf を pty で動かす。
+      # runner には同梱されていないので入れる — 無いとその検査だけ落ちる (fzf が無いのに
+      # CI なら skip ではなく fail にしてあるので、この step を消すと気付ける)
+      - name: fzf を入れる (選択 UI の実挙動テストに要る)
+        run: brew install fzf
+
       - name: claude/tests を流す
         run: python3 -m unittest discover -s claude/tests -p '*_test.py' -v
 
