@@ -112,17 +112,57 @@ class ActionFreshnessTest(unittest.TestCase):
         body = DEPENDABOT.read_text()
         self.assertIn("package-ecosystem: github-actions", body)
 
-    def test_actions_are_pinned_to_a_major_version(self):
-        """裸の @main / @master を使わない (いつ変わるか分からない)。"""
+    def test_actions_are_pinned_to_a_commit(self):
+        """action は commit の SHA で固定し、版はコメントで添える (issue #219)。
+
+        `@v7` は可動タグで、上流が付け替えれば同じ指定のまま別のコードが走る。job の
+        トークンと checkout した中身に触れるコードなので、走るものを commit で確定させる。
+        dependabot は SHA 固定でもコメントの版を読んで追従する。
+        """
         loose = []
         for path in workflow_files():
-            for ref in re.findall(r"uses:\s*(\S+)", path.read_text()):
-                if "@" not in ref:
-                    loose.append(f"{path.name}: {ref} (バージョン指定が無い)")
-                elif ref.split("@")[1] in ("main", "master", "latest"):
-                    loose.append(f"{path.name}: {ref}")
+            for line in path.read_text().splitlines():
+                match = re.match(r"\s*-?\s*uses:\s*(\S+)(.*)", line)
+                if not match:
+                    continue
+                ref, rest = match.groups()
+                if ref.startswith("./"):
+                    continue   # リポジトリ内の action は同じ commit で走る
+                if not re.search(r"@[0-9a-f]{40}$", ref):
+                    loose.append(f"{path.name}: {ref} (commit の SHA で固定されていない)")
+                elif not re.search(r"#\s*v\d+\.\d+\.\d+", rest):
+                    loose.append(f"{path.name}: {ref} (版のコメントが無い — 何の版か読めない)")
         self.assertEqual(loose, [], "追従先が動くバージョン指定になっている")
 
+    def test_uses_lines_are_found(self):
+        """対照。uses を 1 つも読めていなければ、上は何も確かめていない。"""
+        count = sum(
+            len(re.findall(r"^\s*-?\s*uses:", path.read_text(), re.M)) for path in workflow_files()
+        )
+        self.assertGreaterEqual(count, 4)
+
+
+class DownloadedToolsAreVerifiedTest(unittest.TestCase):
+    """CI が外から取ってくる道具は、版と中身を固定する (issue #219)。"""
+
+    def setUp(self):
+        self.body = code_lines(WORKFLOWS / "test.yml")
+
+    def test_shellcheck_tarball_is_checked_against_a_known_hash(self):
+        """取得した tarball を、展開する前に既知の sha256 と突き合わせる。
+
+        curl の出力をそのまま tar へ流す形だと、配布物が差し替わっても気付けない。
+        """
+        self.assertRegex(self.body, r"SHELLCHECK_SHA256:\s*[0-9a-f]{64}")
+        self.assertRegex(self.body, r"sha256sum\s+(-c|--check)")
+        self.assertNotRegex(
+            self.body, r"curl[^\n]*\\?\n?[^\n]*\|\s*tar",
+            "検証の前に展開している (curl の出力を tar へ直接流している)",
+        )
+
+    def test_ansible_lint_version_is_pinned(self):
+        """shellcheck と同じ理由 — 版が上がった日に、無関係な PR が赤くなる。"""
+        self.assertRegex(self.body, r"pip install ['\"]?ansible-lint==\d+\.\d+")
 
 def code_lines(path):
     """コメント行を落とした本文。コメントは機構の名前を引用するので、素で探すと常に当たる。"""

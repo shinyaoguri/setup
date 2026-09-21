@@ -28,7 +28,7 @@ jobs:
       CHANGELOG_URL: https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md
       ISSUE_TITLE: 'claude-upstream: 本体の更新を意図の台帳と突き合わせる'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: CHANGELOG を取得する
         # 取れなかったら空のファイルを渡す。スクリプトは見出しを読めない changelog を
