@@ -14,6 +14,7 @@ zshenv は「人が打つとき以外にも要るもの」の置き場。zshrc �
 """
 
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -203,6 +204,53 @@ class LoginShellPathOrderTest(unittest.TestCase):
         """先頭へ入れ直しても重複させない (typeset -U が効いていること)。"""
         path = self.login_shell_path()
         self.assertEqual(path.count("/opt/homebrew/bin"), 1)
+
+
+class AllowlistConsistencyTest(unittest.TestCase):
+    """zshenv が渡す参照は、どれも secret-cache-allowlist に載っている (issue #215)。
+
+    zshenv の参照は無人セッション (hook・scheduled task) のために置いてある。許可リストに
+    無い参照は secret-read がキャッシュせず、素の `op read` へ落ちる — つまり 1Password の
+    承認を待って止まる。このリポジトリが繰り返し踏んできた症状で、原因が「2 か所の
+    不一致」だとは気付きにくい。
+
+    mokume の鍵の参照は日付入りのファイル名で、鍵を差し替えるたびに zshenv と許可リストの
+    両方を直す必要がある。片方だけ直した変更を CI で落とす。
+    """
+
+    ALLOWLIST = REPO / "secret-cache-allowlist"
+
+    def allowed(self):
+        lines = (line.strip() for line in self.ALLOWLIST.read_text().splitlines())
+        return {line for line in lines if line and not line.startswith("#")}
+
+    def exported_references(self):
+        """zshenv を実際に source し、export された変数の値から op:// の参照を拾う。
+
+        ファイルを正規表現で読まないのは、`$GYAZO_TOKEN_REF` のように**別の変数を経由して
+        渡している参照**を展開後の形で見るためと、コメントの中の例を拾わないため。
+        """
+        output = subprocess.run(
+            ["zsh", "-f", "-c", f'source "{ZSHENV}"; export -p'],
+            env={"HOME": os.environ["HOME"], "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, check=True,
+        ).stdout
+        # 参照は空白を含む (op://Automation/Gyazo API/credential)。引用符か行末まで
+        return set(re.findall(r"op://[^\"'$\\\n]+", output))
+
+    def test_references_are_found(self):
+        """対照。1 つも拾えていなければ、下は何も確かめていない。"""
+        references = self.exported_references()
+        self.assertIn("op://Automation/Gyazo API/credential", references)
+        self.assertGreaterEqual(len(references), 2, references)
+
+    def test_every_exported_reference_is_allowlisted(self):
+        missing = self.exported_references() - self.allowed()
+        self.assertEqual(
+            missing, set(),
+            "zshenv が渡している参照が secret-cache-allowlist に無い "
+            "(キャッシュされず、無人セッションが 1Password の承認待ちで止まる)",
+        )
 
 
 if __name__ == "__main__":
