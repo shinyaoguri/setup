@@ -1,7 +1,7 @@
 {
   "version": 1,
   "reviewed_against": {
-    "claude_code": "2.1.236",
+    "claude_code": "2.1.278",
     "date": "2026-09-21"
   },
   "intents": [
@@ -35,7 +35,9 @@
       ],
       "depends_on": [
         {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
-        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"},
+        {"surface": "settings-key", "name": "sandbox.credentials", "stability": "documented"},
+        {"surface": "settings-key", "name": "denyRead", "stability": "documented"}
       ],
       "verify": ["claude/tests/git_safety_guard_test.py", "claude/tests/gitignore_test.py"],
       "sunset": "本体がコミット対象の秘密検知を標準で持ち、検知時に確実に止めるようになったら"
@@ -71,10 +73,11 @@
         {"surface": "tool-name", "name": "Write", "stability": "documented"},
         {"surface": "tool-name", "name": "NotebookEdit", "stability": "documented"},
         {"surface": "settings-key", "name": "autoMode", "stability": "documented"},
-        {"surface": "model-behavior", "name": "分類器の hard_deny がファイル編集ツール経由の settings.json 変更に当たらない", "stability": "undocumented"}
+        {"surface": "model-behavior", "name": "分類器の hard_deny がファイル編集ツール経由の settings.json 変更に当たらない", "stability": "undocumented"},
+        {"surface": "harness-behavior", "name": "protected paths", "stability": "documented"}
       ],
       "verify": ["claude/tests/automode_guard_test.py", "env-doctor:7"],
-      "sunset": "分類器が Edit 系ツールでの autoMode 節の変更にも hard_deny を確実に当てるようになったら"
+      "sunset": "autoMode 節を持つ設定ファイルへの書き込みを、本体が分類器を介さず決定論的に人へ返すようになったら (protected paths 相当の扱いが、~/.claude の外に置いた実体にも及んだら)"
     },
     {
       "id": "autonomy-boundary",
@@ -92,10 +95,12 @@
         {"surface": "settings-key", "name": "autoMode", "stability": "documented"},
         {"surface": "settings-key", "name": "$defaults", "stability": "documented"},
         {"surface": "settings-key", "name": "defaultMode", "stability": "documented"},
-        {"surface": "settings-key", "name": "autoMode はユーザーの settings.json にしか書けない (プロジェクト設定・プラグインは対象外)", "stability": "documented"}
+        {"surface": "settings-key", "name": "autoMode はユーザーの settings.json にしか書けない (プロジェクト設定・プラグインは対象外)", "stability": "documented"},
+        {"surface": "cli", "name": "auto-mode defaults", "stability": "documented"},
+        {"surface": "settings-key", "name": "blockReadsOutsideWorkingDirectories", "stability": "documented"}
       ],
       "verify": ["claude/tests/settings_test.py", "env-doctor:7"],
-      "sunset": "分類器の既定ルールが「記録が残って取り戻せるか」を軸に判定するようになり、独自の allow / soft_deny が要らなくなったら"
+      "sunset": "`claude auto-mode defaults` が出す既定ルールだけで、独自の allow / soft_deny の各エントリが冗長だと言えるようになったら"
     },
     {
       "id": "approval-at-the-plan",
@@ -113,17 +118,21 @@
         {"surface": "tool-name", "name": "EnterPlanMode", "stability": "documented"},
         {"surface": "hook-event", "name": "PermissionRequest", "stability": "documented"},
         {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
-        {"surface": "hook-event", "name": "PostToolUseFailure", "stability": "documented"},
         {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"},
-        {"surface": "harness-behavior", "name": "プランを却下すると PostToolUse が発火しない", "stability": "undocumented"}
+        {"surface": "harness-behavior", "name": "プランを却下すると PostToolUse が発火しない", "stability": "undocumented"},
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "hook-input", "name": "tool_input.plan", "stability": "documented"},
+        {"surface": "hook-input", "name": "planFilePath", "stability": "documented"},
+        {"surface": "hook-output", "name": "decision.behavior", "stability": "documented"}
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-plan-gate.sh と scripts/test-rs-plan-pass.sh"],
-      "sunset": "プラン未承認のまま編集が広がるのを拒む permission mode か設定が本体に入ったら"
+      "sunset": "プラン未承認のまま編集が広がるのを拒む permission mode か設定が本体に入ったら",
+      "gap": "plan-pass.sh がプラン本文を、文書化されていない transcript の形式から逆引きしている。tool_input.plan で足りる (shinyaoguri/claude-plugins#176)"
     },
     {
       "id": "plan-on-github",
       "intent": "着手時のプランを、他の人とセッションが読める GitHub 側に残す",
-      "why": "~/.claude/plans/ はローカルのマシンにしか無く、ランダムな 3 語のファイル名でリポジトリとも紐づかない",
+      "why": "~/.claude/plans/ はローカルのマシンにしか無く 30 日で消え、ランダムな 3 語のファイル名でリポジトリとも紐づかない",
       "rationale": ["tasks/claude.yml 冒頭コメントの plan-record.sh の節", "claude/plan-record.sh の冒頭コメント"],
       "means": [
         {"kind": "self", "ref": "claude/plan-record.sh"},
@@ -133,9 +142,11 @@
         {"surface": "tool-name", "name": "ExitPlanMode", "stability": "documented"},
         {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
         {"surface": "hook-event", "name": "Stop", "stability": "documented"},
-        {"surface": "hook-input", "name": "tool_input.plan", "stability": "undocumented"},
+        {"surface": "hook-input", "name": "tool_input.plan", "stability": "documented"},
         {"surface": "hook-output", "name": "exit 2", "stability": "documented"},
-        {"surface": "file-format", "name": "~/.claude/plans/", "stability": "undocumented"}
+        {"surface": "file-format", "name": "~/.claude/plans/", "stability": "documented"},
+        {"surface": "settings-key", "name": "plansDirectory", "stability": "documented"},
+        {"surface": "settings-key", "name": "cleanupPeriodDays", "stability": "documented"}
       ],
       "verify": ["claude/tests/plan_record_test.py"],
       "sunset": "本体がプランを PR / Issue に紐づけて残す機能を持ったら"
@@ -158,7 +169,7 @@
       ],
       "verify": ["claude/tests/gh_comment_guard_test.py"],
       "sunset": "attribution が gh 経由のコメントにも効くようになったら",
-      "gap": "署名を付けるのは規約 (文書) の仕事で、フックは付け忘れを差し戻すだけなので 1 往復の無駄が出る。フックが入力を書き換えて自動で付ける形になっていない"
+      "gap": "署名を付けるのは規約 (文書) の仕事で、フックは付け忘れを差し戻すだけなので 1 往復の無駄が出る。updatedInput で自動で付けられると docs で確かめた (shinyaoguri/setup#248)"
     },
     {
       "id": "public-surface-terms",
@@ -186,11 +197,14 @@
       "depends_on": [
         {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
         {"surface": "harness-behavior", "name": "run_in_background", "stability": "documented"},
-        {"surface": "harness-behavior", "name": "フォアグラウンドの Bash は timeout の上限で殺されるが、バックグラウンドには上限が無い", "stability": "undocumented"},
-        {"surface": "tool-name", "name": "Monitor", "stability": "documented"}
+        {"surface": "tool-name", "name": "Monitor", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "timeout に達した Bash は殺されずバックグラウンドへ移り、バックグラウンドの実行には時間上限が無い", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "background command", "stability": "documented"},
+        {"surface": "env-var", "name": "BASH_MAX_TIMEOUT_MS", "stability": "documented"}
       ],
       "verify": ["claude/tests/wait_deadline_guard_test.py"],
-      "sunset": "バックグラウンド実行に時間上限を設定できるようになるか、待ちの公式な手段 (Monitor など) が期限を強制するようになったら"
+      "sunset": "Bash のバックグラウンド実行 (timeout 後の自動の移行を含む) に時間上限を設定できるようになったら",
+      "gap": "ガードは機能しているが、冒頭コメントの前提 2 点 (Monitor は無期限にできる・フォアグラウンドは timeout で殺される) が本体の仕様と食い違い、差し戻しが Monitor を勧めていない (shinyaoguri/setup#244)"
     },
     {
       "id": "signal-ownership",
@@ -226,10 +240,13 @@
         {"surface": "file-format", "name": "transcript の JSONL 形式", "stability": "undocumented"},
         {"surface": "internal-api", "name": "api/oauth/usage", "stability": "undocumented"},
         {"surface": "internal-api", "name": "OAuth トークンを預ける keychain のサービス名", "stability": "undocumented"},
-        {"surface": "desktop-app", "name": "デスクトップアプリでは statusLine が実行されない", "stability": "undocumented"}
+        {"surface": "desktop-app", "name": "デスクトップアプリでは statusLine が実行されない", "stability": "undocumented"},
+        {"surface": "desktop-app", "name": "デスクトップアプリは CLI 用の keychain 項目のトークンを更新しない", "stability": "undocumented"},
+        {"surface": "statusline-input", "name": "spend_limit", "stability": "documented"}
       ],
       "verify": ["claude/tests/runcat_metrics_test.py"],
-      "sunset": "デスクトップアプリが statusLine を実行するようになったらフック経由の入口を消す。本体が使用量を外部へ出す公式の口を持ったら内部 API への依存を消す"
+      "sunset": "デスクトップアプリが statusLine を実行するようになったらフック経由の入口を消す。statusLine か公式の API がモデル別の週間制限を出すようになったら内部 API への依存を消す",
+      "gap": "使用量の取得が 2026-09-16 から失敗し続け、レート制限カードが古い値を無音で出している (shinyaoguri/setup#247)"
     },
     {
       "id": "branch-worktree-hygiene",
@@ -247,10 +264,12 @@
         {"surface": "hook-event", "name": "Stop", "stability": "documented"},
         {"surface": "hook-event", "name": "SessionStart", "stability": "documented"},
         {"surface": "harness-behavior", "name": "worktree", "stability": "documented"},
-        {"surface": "harness-behavior", "name": "worktree 分離が worktree-agent-* のブランチを作る", "stability": "undocumented"}
+        {"surface": "harness-behavior", "name": "worktree 分離が worktree-agent-* のブランチを作る", "stability": "undocumented"},
+        {"surface": "settings-key", "name": "cleanupPeriodDays", "stability": "documented"},
+        {"surface": "desktop-app", "name": "Auto-archive", "stability": "documented"}
       ],
       "verify": ["env-doctor:9", "none: フック本体の検証は claude-plugins 側の scripts/test-rs-branch-sweep.sh と scripts/test-rs-worktree-sweep.sh"],
-      "sunset": "本体の worktree 機能が、マージ済みのブランチと残骸 worktree を自分で片付けるようになったら"
+      "sunset": "worktree 側: 本体の sweep が残骸 worktree と既定ブランチを掴んだ worktree を片付けるようになったら worktree-sweep を消す。ブランチ側: squash merge 済みのローカルブランチを本体が情報を失わずに消すようになったら残りを消す"
     },
     {
       "id": "ci-seen-through",
@@ -265,10 +284,11 @@
         {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
         {"surface": "hook-event", "name": "Stop", "stability": "documented"},
         {"surface": "hook-output", "name": "exit 2", "stability": "documented"},
-        {"surface": "desktop-app", "name": "PR の CI 監視 (ci-monitor / Auto-fix)", "stability": "documented"}
+        {"surface": "desktop-app", "name": "PR の CI 監視 (ci-monitor / Auto-fix)", "stability": "documented"},
+        {"surface": "cli", "name": "/autofix-pr", "stability": "documented"}
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-ci-watch.sh"],
-      "sunset": "本体 (デスクトップアプリの PR 監視など) が push 後の CI を見届け、赤なら作業を続けさせるようになったら"
+      "sunset": "push 後の CI の見届けが、端末と無人を含む全種別のセッションで、既定か settings の宣言で有効になり、赤のあいだセッションを続行させるようになったら"
     },
     {
       "id": "frictionless-reads",
@@ -281,10 +301,14 @@
       ],
       "depends_on": [
         {"surface": "settings-key", "name": "permissions.allow", "stability": "documented"},
-        {"surface": "settings-key", "name": "additionalDirectories", "stability": "documented"}
+        {"surface": "settings-key", "name": "additionalDirectories", "stability": "documented"},
+        {"surface": "settings-key", "name": "classifyAllShell", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "auto mode は allow の規則 → 組み込みの read-only の自動承認 → 分類器 の順に判定する", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "組み込みの read-only コマンド集合の中身", "stability": "undocumented"}
       ],
       "verify": ["claude/tests/settings_test.py"],
-      "sunset": "auto mode の分類器が読み取り専用のコマンドを確実に無確認で通すと確かめられたら allow を畳む"
+      "sunset": "allow に残した各コマンドについて「組み込みの read-only 判定に入っておらず、外すと確認が出る」と言えなくなったら畳む",
+      "gap": "git の読み取りが組み込みの read-only 判定と重複している見込みで、git fetch は allow に当たるため分類器を素通りする (shinyaoguri/setup#245)"
     },
     {
       "id": "skill-supply",
@@ -302,10 +326,13 @@
         {"surface": "settings-key", "name": "enabledPlugins", "stability": "documented"},
         {"surface": "plugin-spec", "name": "marketplace", "stability": "documented"},
         {"surface": "plugin-spec", "name": "プラグインの更新は plugin.json の version 比較で判定される", "stability": "documented"},
-        {"surface": "plugin-spec", "name": "CLAUDE_PLUGIN_ROOT", "stability": "documented"}
+        {"surface": "plugin-spec", "name": "CLAUDE_PLUGIN_ROOT", "stability": "documented"},
+        {"surface": "settings-key", "name": "syncClaudeAiSkills", "stability": "documented"},
+        {"surface": "settings-key", "name": "syncClaudeAiPlugins", "stability": "documented"},
+        {"surface": "file-format", "name": "~/.claude/skills/synced/", "stability": "documented"}
       ],
       "verify": ["env-doctor:4"],
-      "sunset": "本体が個人のスキルをアカウントに紐づけて同期するようになり、自前の marketplace が要らなくなったら"
+      "sunset": "本体のアカウント同期が、git 管理の正本・PR と CI での検証・/login 以外の認証 (無人セッション) への供給を満たしたら"
     },
     {
       "id": "third-party-tools",
@@ -339,11 +366,11 @@
         {"surface": "settings-key", "name": "language", "stability": "documented"},
         {"surface": "settings-key", "name": "tui", "stability": "documented"},
         {"surface": "settings-key", "name": "theme", "stability": "documented"},
-        {"surface": "settings-key", "name": "inputNeededNotifEnabled", "stability": "undocumented"},
-        {"surface": "settings-key", "name": "agentPushNotifEnabled", "stability": "undocumented"}
+        {"surface": "settings-key", "name": "inputNeededNotifEnabled", "stability": "documented"},
+        {"surface": "settings-key", "name": "agentPushNotifEnabled", "stability": "documented"}
       ],
       "verify": ["none: 好みの宣言で、壊れても気付ける"],
-      "sunset": "language 設定だけで応答の言語が確実に決まると確かめられたら、CLAUDE.md 側の 1 行を消す"
+      "sunset": "サブエージェントにも language 設定が届くと確かめられたら、CLAUDE.md 側の 1 行を消す (shinyaoguri/setup#246)"
     },
     {
       "id": "repo-standards-audit",
@@ -379,10 +406,12 @@
       "depends_on": [
         {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
         {"surface": "file-format", "name": "~/.claude/ の配置 (settings.json・CLAUDE.md)", "stability": "documented"},
-        {"surface": "cli", "name": "/doctor", "stability": "documented"}
+        {"surface": "cli", "name": "/doctor", "stability": "documented"},
+        {"surface": "file-format", "name": "~/.claude/skills/synced/", "stability": "documented"}
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-doctor-env.sh"],
-      "sunset": "本体の診断 (/doctor) が、登録済みフックの実体欠落と auto mode の既定ルールの欠落を検査するようになったら"
+      "sunset": "本体の診断 (/doctor) が、登録済みフックの実体欠落と auto mode の既定ルールの欠落を検査するようになったら",
+      "gap": "~/.claude/skills の検査が、本体が同期する synced/ を管理外のスキルとして誤検出する見込み (shinyaoguri/claude-plugins#177)"
     },
     {
       "id": "parallel-session-task-pick",
@@ -396,7 +425,9 @@
       "depends_on": [
         {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
         {"surface": "harness-behavior", "name": "worktree", "stability": "documented"},
-        {"surface": "desktop-app", "name": "セッション間の連携 (セッション一覧・メッセージ)", "stability": "documented"}
+        {"surface": "desktop-app", "name": "セッション間の連携 (セッション一覧・メッセージ)", "stability": "documented"},
+        {"surface": "tool-name", "name": "ListAgents", "stability": "documented"},
+        {"surface": "tool-name", "name": "SendMessage", "stability": "documented"}
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-inflight.sh"],
       "sunset": "本体がセッション間で着手中の作業を共有し、重なる着手を避けるようになったら"
@@ -445,7 +476,8 @@
       ],
       "depends_on": [
         {"surface": "harness-behavior", "name": "フックと scheduled task は非対話で走り、承認プロンプトに応えられない", "stability": "undocumented"},
-        {"surface": "desktop-app", "name": "デスクトップアプリは起動した時点の PATH を持ち続ける", "stability": "undocumented"}
+        {"surface": "desktop-app", "name": "デスクトップアプリは起動した時点の PATH を持ち続ける", "stability": "documented"},
+        {"surface": "settings-key", "name": "apiKeyHelper", "stability": "documented"}
       ],
       "verify": ["claude/tests/secret_read_test.py"],
       "sunset": "本体が無人セッション向けの秘密の受け渡し (スコープを絞った保管庫連携) を持ったら"
@@ -478,7 +510,8 @@
       ],
       "depends_on": [
         {"surface": "cli", "name": "anthropics/claude-code の CHANGELOG.md の見出し形式", "stability": "undocumented"},
-        {"surface": "skill-spec", "name": "SKILL.md の frontmatter", "stability": "documented"}
+        {"surface": "skill-spec", "name": "SKILL.md の frontmatter", "stability": "documented"},
+        {"surface": "desktop-app", "name": "デスクトップアプリは独自の claude バイナリを同梱し、PATH 上の CLI と版がずれる", "stability": "undocumented"}
       ],
       "verify": ["claude/tests/intents_test.py", "claude/tests/changelog_diff_test.py", "claude/tests/workflow_test.py"],
       "sunset": "本体が、設定とフックの非推奨・置換可能性を自己診断するようになったら",
@@ -488,13 +521,14 @@
       "id": "wish-hook-contract-against-real-claude",
       "intent": "フックの入出力の契約を、実際の本体に対して検証する",
       "why": "契約テストは自作スクリプトを直接叩くだけなので、本体がフックの仕様を変えても緑のままになる",
-      "rationale": ["shinyaoguri/setup#232"],
+      "rationale": ["shinyaoguri/setup#232", "shinyaoguri/setup#249"],
       "means": [],
       "depends_on": [
         {"surface": "cli", "name": "claude -p", "stability": "documented"},
-        {"surface": "cli", "name": "フックを実際に発火させて入出力を記録する手段", "stability": "undocumented"}
+        {"surface": "cli", "name": "--include-hook-events", "stability": "documented"},
+        {"surface": "cli", "name": "claude plugin eval", "stability": "documented"}
       ],
-      "verify": ["none: 未実現"]
+      "verify": ["none: 未実現 (手段になる口は本体に揃った。smoke test の実装は shinyaoguri/setup#249)"]
     },
     {
       "id": "wish-desktop-fresh-environment",
@@ -503,7 +537,8 @@
       "rationale": ["shinyaoguri/setup#154", "tasks/zshrc.yml の再起動の案内"],
       "means": [],
       "depends_on": [
-        {"surface": "desktop-app", "name": "Bash ツールのシェルスナップショットが zshenv の後で PATH を書き戻す", "stability": "undocumented"}
+        {"surface": "desktop-app", "name": "Bash ツールのシェルスナップショットが zshenv の後で PATH を書き戻す", "stability": "undocumented"},
+        {"surface": "desktop-app", "name": "デスクトップアプリは起動時にシェルの profile から PATH を抜き出し、読み直すのは再起動だけ", "stability": "documented"}
       ],
       "verify": ["none: 未実現 (いまは絶対パスで書く・アプリの再起動を促す、で回避している)"]
     }
