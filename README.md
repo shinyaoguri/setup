@@ -14,6 +14,8 @@ zsh -c "$(curl -fsSL https://raw.githubusercontent.com/shinyaoguri/setup/main/se
 新しいマシンを立てるたびに待つ理由が無い ([#191](https://github.com/shinyaoguri/setup/issues/191))。
 
 選択は fzf のチェックボックス (Tab で選び、Enter で確定、ESC で何も入れずに続行)。
+**Tab で選んでいなければ、Enter を押しても何も入らない** — カーソルを合わせただけの
+ものが入らないようにしてある ([#267](https://github.com/shinyaoguri/setup/issues/267))。
 右のペインに `brew info` が出るので、何なのか分からないものはそこで確かめられる。
 
 選択を出したくないときはフラグで決め打てる。**端末が無いとき (CI・パイプ経由) は

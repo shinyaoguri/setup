@@ -356,6 +356,24 @@ for c in "${CASKS_REQUIRED[@]}"; do
 done
 
 # --- 任意を選ばせる -------------------------------------------------------
+# 選択 UI は**ここ 1 か所**から出す。見た目と決定の作法を 2 か所へ写すと、片方だけ
+# 直した瞬間に挙動が分かれる (App Store の選択がそうなっていた)。
+#
+# **fzf は --multi でも、マークが 0 件のまま Enter を押すとカーソル位置の 1 件を返す。**
+# チェックボックスのつもりで押しただけで、選んでいないアプリが入っていた (issue #267)。
+# 選択数を見て 0 件なら abort (= Esc と同じ「何も入れずに進む」) へ倒す。
+# FZF_SELECT_COUNT は fzf 0.52 以降。持たない版では空 → `:-1` で accept へ倒れ、
+# 従来どおり動く (キーが無反応になる側へは倒さない)。
+fzf_select() {  # $1=見出し, $2=preview コマンド, $3=preview-window。候補は標準入力から
+	fzf --multi \
+		--height=80% --border=rounded --layout=reverse \
+		--marker='◉ ' --pointer='▸' \
+		--header=$''"$1"$'\n Tab で選択 / Enter で決定 (選んでいなければ何も入れません) / Esc で何も入れずに進む' \
+		--bind 'enter:transform:[ "${FZF_SELECT_COUNT:-1}" -eq 0 ] && echo abort || echo accept' \
+		--preview "$2" \
+		--preview-window="${3:-right:55%:wrap}" || true
+}
+
 # 選ばれたものを install_selected へ入れる。fzf は行の 1 語目を名前として渡し、
 # preview に brew info を出す (版・説明・ホームページ・auto_updates が読める)
 select_optional() {  # $1=見出し, 残り=候補
@@ -368,12 +386,8 @@ select_optional() {  # $1=見出し, 残り=候補
 		none) return 0 ;;
 	esac
 
-	printf '%s\n' "${candidates[@]}" | fzf --multi \
-		--height=80% --border=rounded --layout=reverse \
-		--marker='◉ ' --pointer='▸' \
-		--header=$''"$title"$'\n Tab で選択 / Enter で決定 / Esc で何も入れずに進む' \
-		--preview 'brew info --cask {1} 2>/dev/null || brew info {1} 2>/dev/null' \
-		--preview-window=right:55%:wrap || true
+	printf '%s\n' "${candidates[@]}" | fzf_select "$title" \
+		'brew info --cask {1} 2>/dev/null || brew info {1} 2>/dev/null' right:55%:wrap
 }
 
 if (( ${#CASK_MISSING[@]} > 0 )); then
@@ -498,12 +512,10 @@ else
 			MAS_SELECTED=( "${MAS_MISSING[@]}" )
 		else
 			# 行は "<id> <名前>"。fzf には名前ごと見せ、選ばれた行から id を取る
-			MAS_SELECTED=( ${(f)"$(printf '%s\n' "${MAS_LABELS[@]}" | fzf --multi \
-				--height=80% --border=rounded --layout=reverse \
-				--marker='◉ ' --pointer='▸' \
-				--header=$'App Store アプリ (未導入のみ)\n Tab で選択 / Enter で決定 / Esc で何も入れずに進む' \
-				--preview 'printf "%s\n\nApp Store ID: %s\n" {2..} {1}' \
-				--preview-window=right:40%:wrap | awk '{print $1}')"} )
+			MAS_SELECTED=( ${(f)"$(printf '%s\n' "${MAS_LABELS[@]}" | fzf_select \
+				'App Store アプリ (未導入のみ)' \
+				'printf "%s\n\nApp Store ID: %s\n" {2..} {1}' right:40%:wrap \
+				| awk '{print $1}')"} )
 		fi
 
 		if (( ${#MAS_SELECTED[@]} == 0 )) && [[ "$OPTIONAL_MODE" != none ]]; then
