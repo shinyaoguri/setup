@@ -121,11 +121,17 @@ if command -v direnv >/dev/null 2>&1; then
   eval "$(direnv hook zsh)"
 fi
 
-# >>> grok installer >>>
-export PATH="$HOME/.grok/bin:$PATH"
-fpath=(~/.grok/completions/zsh $fpath)
-autoload -Uz compinit && compinit -C
-# <<< grok installer <<<
-
-# Unity CLI
-. "$HOME/.unity/env"
+# マシン固有の設定は ~/.zshrc.local へ置く (リポジトリには入れない)。
+#
+# ~/.zshrc はこのリポジトリへの symlink なので、**インストーラが ~/.zshrc へ追記した行は
+# そのままリポジトリの変更になる**。そのマシンにしか無い道具の設定が紛れ込むと、他の
+# マシンではシェルを開くたびにエラーが出る (Unity CLI の env を存在チェック無しで読んで
+# いた。issue #198)。追記されたら ~/.zshrc.local へ移す — claude/tests/zshrc_test.py が
+# 追記ブロックの残りを落とす。
+#
+# 最後に読むので、上の設定をマシン単位で上書きすることもできる。
+# `[[ -f … ]] && source …` とは書かない。ファイルが無いと zshrc 全体が 1 で終わり、
+# 最初のプロンプトの $? が失敗になる
+if [[ -f "$HOME/.zshrc.local" ]]; then
+  source "$HOME/.zshrc.local"
+fi
