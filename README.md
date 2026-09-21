@@ -8,7 +8,7 @@
 zsh -c "$(curl -fsSL https://raw.githubusercontent.com/shinyaoguri/setup/main/setup.zsh)"
 ```
 
-無条件に入るのは**土台だけ** (git / mas / fzf / gum と、1Password・Secretive・Claude Code・フォント)。
+無条件に入るのは**土台だけ** (git / mas / fzf / gum / gh と、1Password・Secretive・Claude Code・フォント)。
 それ以外は導入状況を報告したうえで、**入れるものをその場で選ぶ** — エディタや Office、
 スキャナのソフト、App Store のアプリは「要るときに入れれば自分で更新される」もので、
 新しいマシンを立てるたびに待つ理由が無い ([#191](https://github.com/shinyaoguri/setup/issues/191))。
