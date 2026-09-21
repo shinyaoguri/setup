@@ -140,7 +140,18 @@ else
 		exit 1
 	else
 		echo "   📦 リポジトリをクローンします..."
-		git clone "$GITHUB_REPO_URL" "$SETUP_DIR"
+		# **配備先へ直接クローンしない。** 中断 (Ctrl-C・ネットワーク断) で半端な
+		# .git が残ると、次の実行は `-d "$SETUP_DIR/.git"` が真になってクローンの
+		# やり直しへ戻れない — 1 行で新しいマシンを構築するのが目的なので、最初の
+		# 一歩の失敗が手作業を要求してはいけない (issue #269)。
+		# 別の置き場へ作ってから移し、後始末は trap に寄せる (set -e があるので、
+		# 失敗したときは後ろに並べた rm へ届かない。issue #195 と同じ形)。
+		clone_tmp="$SETUP_DIR.partial.$$"
+		rm -rf "$clone_tmp"
+		trap 'rm -rf "$clone_tmp"' EXIT INT TERM
+		git clone "$GITHUB_REPO_URL" "$clone_tmp"
+		mv "$clone_tmp" "$SETUP_DIR"
+		trap - EXIT INT TERM
 	fi
 	PLAYBOOK="$SETUP_DIR/playbook_sillicon_mac.yml"
 	echo ""

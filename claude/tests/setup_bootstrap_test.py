@@ -344,17 +344,27 @@ class SetupRepoStateTest(unittest.TestCase):
         self.git_log = self.root / "GIT_LOG"
 
     def fake_git(self, cases=""):
-        """偽 git。引数は毎回ログへ残す (本物が引かれていないかも、ここで分かる)。"""
+        """偽 git。引数は毎回ログへ残す (本物が引かれていないかも、ここで分かる)。
+
+        clone だけは本物と同じく「最後の引数の置き場を作る」ところまで真似る。
+        そこを真似ないと、どこへクローンしているのかを見分けられない。
+        """
         script = self.bin / "git"
         script.write_text(
             "#!/bin/sh\n"
             f'echo "$*" >> "{self.git_log}"\n'
+            'for a in "$@"; do last=$a; done\n'
             'case "$*" in\n'
             f"{cases}\n"
+            '  *clone*) mkdir -p "$last/.git" ;;\n'
             "  *) exit 0 ;;\n"
             "esac\n"
         )
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+    def leftovers(self):
+        """$HOME に残った作りかけ (.setup.partial.<pid> など)。"""
+        return sorted(p.name for p in self.home.iterdir() if p.name.startswith(".setup."))
 
     def git_calls(self):
         self.assertTrue(
@@ -422,11 +432,28 @@ class SetupRepoStateTest(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines()[-1], str(self.setup_dir / "playbook_sillicon_mac.yml"))
 
     def test_missing_checkout_clones(self):
-        """何も無ければクローンする。"""
+        """何も無ければクローンする。作りかけは残さない。"""
         self.fake_git()
         result = self.run_step15()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue([c for c in self.git_calls() if "clone" in c], "clone していない")
+        self.assertTrue((self.setup_dir / ".git").is_dir(), "クローンしたものが配備先に無い")
+        self.assertEqual(self.leftovers(), [], "作りかけが残った")
+
+    def test_interrupted_clone_leaves_nothing_behind(self):
+        """中断したクローンは配備先を作らない (issue #269)。
+
+        配備先へ直接クローンしていると半端な `.git` が残り、次の実行は
+        `-d "$SETUP_DIR/.git"` が真になって**クローンのやり直しへ戻れない**。
+        1 行で新しいマシンを構築することが目的なので、最初の一歩の失敗が
+        手作業を要求する状態になってはいけない。
+        """
+        self.fake_git('  *clone*) mkdir -p "$last/.git"; exit 130 ;;')   # 130 = Ctrl-C
+        result = self.run_step15()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue([c for c in self.git_calls() if "clone" in c], "clone していない")
+        self.assertFalse(self.setup_dir.exists(), "中断したクローンの残骸が配備先に残った")
+        self.assertEqual(self.leftovers(), [], "作りかけが残った")
 
 
 if __name__ == "__main__":
