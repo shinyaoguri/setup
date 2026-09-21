@@ -21,6 +21,10 @@ TASKS = Path(__file__).resolve().parent.parent.parent / "tasks"
 
 ABSENT_PKG = "com.example.definitely.not.installed"
 
+# 配備先の checkout の経路。クローン (fetch) は HTTPS、push だけ SSH (issue #272)
+HTTPS_URL = "https://github.com/shinyaoguri/setup.git"
+SSH_URL = "git@github.com:shinyaoguri/setup.git"
+
 
 def without_comments(path):
     """コメント行を落とした本文。
@@ -320,6 +324,24 @@ class FirstRunWithoutKeyTest(unittest.TestCase):
         keys.mkdir(parents=True)
         (keys / "test.pub").write_text(self.FAKE_KEY + "\n")
 
+    def place_checkout(self):
+        """配備先の checkout を偽の HOME に作る。origin は本番と同じ HTTPS。"""
+        checkout = self.home / ".setup"
+        env = clean_env(HOME=str(self.home))
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True, env=env)
+        subprocess.run(
+            ["git", "-C", str(checkout), "remote", "add", "origin", HTTPS_URL],
+            check=True, env=env,
+        )
+        return checkout
+
+    def repo_config(self, checkout, key):
+        result = subprocess.run(
+            ["git", "-C", str(checkout), "config", "--get", key],
+            capture_output=True, text=True, env=clean_env(HOME=str(self.home)),
+        )
+        return result.stdout.strip()
+
     def test_full_run_without_a_key_does_not_stop(self):
         """全体実行では止まらず、鍵と無関係な設定は入り、署名だけが入らない。"""
         result = self.run_git_tasks(explicit=False)
@@ -352,6 +374,29 @@ class FirstRunWithoutKeyTest(unittest.TestCase):
         signing_key = self.home / ".ssh/git_signing_key.pub"
         self.assertEqual(signing_key.read_text().strip(), self.FAKE_KEY)
         self.assertIn(self.FAKE_KEY, (self.home / ".config/git/allowed_signers").read_text())
+
+    def test_the_setup_checkout_pushes_over_ssh(self):
+        """配備先の push だけ SSH へ寄せる (issue #272)。
+
+        `~/.setup` は配備先と開発用の checkout を兼ねている (issue #222) ので、
+        ここで push するのは例外ではなく日常。クローンは HTTPS なので push が OAuth
+        トークン経由になり、`workflow` スコープを持たないトークンでは `.github/workflows`
+        に触れていないブランチまで弾かれる。fetch の経路は初回クローンが成立している
+        HTTPS のまま残す。
+        """
+        checkout = self.place_checkout()
+        self.place_key()
+        result = self.run_git_tasks(explicit=False)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-1000:])
+        self.assertEqual(self.repo_config(checkout, "remote.origin.pushurl"), SSH_URL)
+        self.assertEqual(self.repo_config(checkout, "remote.origin.url"), HTTPS_URL)
+
+    def test_a_missing_checkout_is_not_an_error(self):
+        """配備先がそこに無い環境でも止まらない (別の場所から流したとき)。"""
+        self.place_key()
+        result = self.run_git_tasks(explicit=False)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-1000:])
+        self.assertFalse((self.home / ".setup").exists(), "無いはずの配備先が作られた")
 
 
 class NodeVersionTest(unittest.TestCase):
