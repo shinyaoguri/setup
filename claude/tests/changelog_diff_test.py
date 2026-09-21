@@ -22,6 +22,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hookenv import clean_env
+
 REPO = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO / ".github" / "scripts" / "claude-changelog-diff.py"
 
@@ -203,7 +205,7 @@ class CommandLineTest(unittest.TestCase):
                 [sys.executable, str(SCRIPT), "--changelog", str(tmp / "CHANGELOG.md"),
                  "--intents", str(tmp / "intents.json"), "--today", "2026-09-02",
                  "--report", str(tmp / "report.md")],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True, check=True, env=clean_env(),
             )
             summary = json.loads(result.stdout)
             self.assertEqual((summary["latest"], summary["versions"], summary["issue_needed"]), ("2.1.100", 2, True))
