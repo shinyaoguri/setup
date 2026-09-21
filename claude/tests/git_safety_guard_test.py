@@ -11,6 +11,7 @@ git add したうえで走らせる。
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -816,24 +817,109 @@ class DiscardBackupTest(HookTestCase):
 
     # --- 退避の後始末 -------------------------------------------------------
 
-    def test_old_backups_are_pruned(self):
-        """放っておくと ref が際限なく増えるので、退避を作った直後に古いものを落とす。"""
-        stale = f"{self.BACKUP_NS}/20200101-000000-1"
-        old_date = "2020-01-01T00:00:00 +0000"
-        sha = subprocess.run(
-            ["git", "commit-tree", "-m", "old", "HEAD^{tree}"],
+    OLD_DATE = "2020-01-01T00:00:00 +0000"
+
+    def old_commit(self, message="old"):
+        """日付の古いコミットを作って sha を返す (放置されていたブランチの先端の再現)。"""
+        return subprocess.run(
+            ["git", "commit-tree", "-m", message, "HEAD^{tree}", "-p", "HEAD"],
             cwd=self.repo, check=True, capture_output=True, text=True,
-            env=dict(os.environ, GIT_COMMITTER_DATE=old_date, GIT_AUTHOR_DATE=old_date),
+            env=dict(os.environ, GIT_COMMITTER_DATE=self.OLD_DATE, GIT_AUTHOR_DATE=self.OLD_DATE),
         ).stdout.strip()
-        self.git("update-ref", stale, sha)
+
+    def test_old_backups_are_pruned(self):
+        """放っておくと ref が際限なく増えるので、退避を作った直後に古いものを落とす。
+
+        古さは **ref 名に埋めた退避の時刻**で決まる。コミットの日付は新しくても、
+        退避してから 30 日を過ぎていれば落とす。
+        """
+        stale = [
+            f"{self.BACKUP_NS}/worktree-20200101-000000-4242-1",   # いまの命名
+            f"{self.BACKUP_NS}/20200101-000000-4242",              # ラベルと連番が付く前の命名
+        ]
+        for ref in stale:
+            self.git("update-ref", ref, "HEAD")   # コミット自体はいま作ったもの
 
         self.modify()
         self.assert_auto_approved(self.run_hook("git checkout -- f.txt"))
 
         refs = self.backups()
-        self.assertNotIn(stale, refs, "期限切れの退避が残っている")
+        for ref in stale:
+            self.assertNotIn(ref, refs, "期限切れの退避が残っている")
         self.assertEqual(len(refs), 1, "いま作った退避まで消えている")
 
+    def test_backup_of_an_old_branch_tip_survives(self):
+        """放置していたブランチを消したとき、退避が作った直後に消えない (issue #201)。
+
+        prune の基準が固定したコミットの committerdate だったため、先端が 30 日より古い
+        ブランチは「退避済み」と allow を返した直後に退避が消えていた。放置していた
+        ブランチこそ、消した後で惜しくなる対象である。
+        """
+        sha = self.old_commit("abandoned work")
+        self.git("update-ref", "refs/heads/abandoned", sha)
+
+        reason = self.assert_auto_approved(self.run_hook("git branch -D abandoned"))
+        self.assertIn("退避済み", reason)
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, f"退避が残っていない: {refs}")
+        pinned = self.git("rev-parse", refs[0]).stdout.strip()
+        self.assertEqual(pinned, sha, "退避が別のコミットを指している")
+
+    def test_backup_of_an_old_head_survives_reset_hard(self):
+        """同じことが reset --hard の前の HEAD にも起きていた。"""
+        sha = self.old_commit("old head")
+        self.git("reset", "-q", "--hard", sha)
+        self.modify()
+
+        self.assert_auto_approved(self.run_hook("git reset --hard"))
+
+        pinned = {self.git("rev-parse", ref).stdout.strip() for ref in self.backups()}
+        self.assertIn(sha, pinned, "古い HEAD の退避が消えている")
+
+    def test_backups_with_an_unreadable_name_are_kept(self):
+        """時刻を読めない名前は落とさない (判定できないものを消す側へ倒さない)。"""
+        odd = f"{self.BACKUP_NS}/renamed-by-hand"
+        sha = self.old_commit()
+        self.git("update-ref", odd, sha)
+
+        self.modify()
+        self.assert_auto_approved(self.run_hook("git checkout -- f.txt"))
+        self.assertIn(odd, self.backups())
+
+    def test_a_timestamp_inside_a_branch_name_is_not_mistaken_for_the_backup_time(self):
+        """ブランチ名に時刻らしき並びがあっても、読むのは末尾 (退避の時刻) だけ。"""
+        name = "wip-20200101-000000-1"
+        self.git("update-ref", f"refs/heads/{name}", self.old_commit())
+
+        self.assert_auto_approved(self.run_hook(f"git branch -D {name}"))
+        self.assertEqual(len(self.backups()), 1, "ブランチ名の中の日付で期限切れと誤認した")
+
+    def test_git_discarded_lists_by_backup_time_not_commit_date(self):
+        """`git discarded` は退避した時刻の新しい順に並べる (issue #201)。
+
+        committerdate で並べると、きのう消した 2 年前のブランチが一覧の底へ沈む。
+        エイリアスは tasks/git.yml が配る実物を読んで、そのまま流す。
+        """
+        tasks = (SCRIPT.parent.parent / "tasks/git.yml").read_text()
+        match = re.search(r"name: alias\.discarded\n\s+value: '(.*)'  # noqa", tasks)
+        self.assertIsNotNone(match, "tasks/git.yml から alias.discarded を読み取れなかった")
+        self.git("config", "alias.discarded", match.group(1))
+
+        self.assertIn("退避なし", self.git("discarded").stdout)
+
+        old_tip = self.old_commit("abandoned")
+        # 名前の時刻は recent のほうが新しいが、指しているコミットは 2020 年のもの
+        recent = f"{self.BACKUP_NS}/branch-abandoned-20260920-100000-11-1"
+        older = f"{self.BACKUP_NS}/worktree-20260901-100000-22-1"
+        legacy = f"{self.BACKUP_NS}/20260801-100000-33"
+        self.git("update-ref", recent, old_tip)
+        self.git("update-ref", older, "HEAD")
+        self.git("update-ref", legacy, "HEAD")
+
+        lines = self.git("discarded").stdout.splitlines()
+        self.assertEqual([line.split()[-1] for line in lines], [recent, older, legacy])
+        self.assertTrue(lines[0].startswith("20260920-100000"), lines[0])
 
 class MultiLineCommandTest(HookTestCase):
     """改行で繋いだ後続ごと allow にしない (issue #202)。
