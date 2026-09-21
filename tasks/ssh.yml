@@ -13,6 +13,17 @@
 #        gh auth refresh -h github.com -s admin:ssh_signing_key
 # 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
 #
+# **済んだかどうかは bin/ssh-key-check が見る。** 上の 3 つはどれも、欠けたときの症状が
+# 原因から遠いところに出る (承認要求が残っていれば無人セッションが無言に止まり、鍵タイプが
+# ML-DSA なら署名が理由不明に落ち、GitHub 未登録なら push だけが通らない)。4 つのどれが
+# 欠けているかを名指しで言い、そのまま打てる次の手を出す:
+#
+#   ssh-key-check            全部見る
+#   ssh-key-check --local    ネットワーク無しで分かるところだけ
+#
+# tasks/git.yml はこの --local が通ったときだけコミット署名を設定する。名指しで
+# `--tags git` を流したときは、通らなければ失敗として止まる (issue #273)。
+#
 # 秘密鍵は Secure Enclave の中にあり、設計上エクスポートできない。ファイルとしては
 # どこにも存在しないので、盗まれても持ち出せない代わりに **バックアップも移動もできない**。
 # マシンを替えたら新しい鍵を作って登録し直す (認証鍵は元々マシンごとに別鍵なので運用は同じ)。

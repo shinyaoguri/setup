@@ -93,9 +93,29 @@ jobs:
           sudo install "$tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
           shellcheck --version
 
-      - name: 対象が 1 本以上あることを確かめる
-        # 対象ゼロでも shellcheck は成功するので、拾い漏れをここで落とす
-        run: test "$(find claude bin -name '*.sh' -o -name 'secret-read' | wc -l)" -gt 0
+      # 対象は**名前ではなく shebang で拾う**。一覧を手で並べると、足した人が忘れた瞬間に
+      # 検査から外れる — `-name 'secret-read'` がまさにその形で、bin/ に拡張子の無い
+      # スクリプトを足すと黙って漏れていた (issue #273)。
+      # 見るのは 1 行目だけ。ファイル全体を grep すると、テストが持つ偽スクリプトの
+      # ヒアドキュメント (#!/usr/bin/env bash を含む .py) まで拾ってしまう。
+      # bash に絞るのは、zsh が shellcheck の対象外で "unsupported shell" になるため。
+      - name: 対象を拾う
+        run: |
+          set -euo pipefail
+          find claude bin -type f -perm -u+x | sort | while read -r f; do
+            case "$(head -n 1 "$f")" in
+              '#!'*bash*) printf '%s\n' "$f" ;;
+            esac
+          done > "$RUNNER_TEMP/shellcheck-targets"
+
+      - name: 対象が拾えていることを確かめる
+        # 対象ゼロでも shellcheck は成功する。既知の 1 本を名指しの番人にして、
+        # 拾い方が壊れたときに「何も検査していない緑」にならないようにする
+        run: |
+          set -euo pipefail
+          grep -qx 'bin/secret-read' "$RUNNER_TEMP/shellcheck-targets"
+          test "$(wc -l < "$RUNNER_TEMP/shellcheck-targets")" -gt 1
+          cat "$RUNNER_TEMP/shellcheck-targets"
 
       - name: shellcheck
-        run: find claude bin -name '*.sh' -o -name 'secret-read' | xargs shellcheck
+        run: xargs shellcheck < "$RUNNER_TEMP/shellcheck-targets"

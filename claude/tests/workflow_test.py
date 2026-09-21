@@ -12,9 +12,14 @@ CI は「文書ルールではなく決定論的に拾う」ための仕組み�
     python3 claude/tests/workflow_test.py
 """
 
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+from hookenv import clean_env
 
 REPO = Path(__file__).resolve().parent.parent.parent
 WORKFLOWS = REPO / ".github" / "workflows"
@@ -23,6 +28,48 @@ DEPENDABOT = REPO / ".github" / "dependabot.yml"
 
 def workflow_files():
     return sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
+
+
+def run_block(body, step_name):
+    """workflow の 1 step が持つ `run: |` ブロックを、そのまま流せる形で取り出す。
+
+    yaml パーサは使わない (PyYAML は macOS の system python に無く、このテストだけの
+    ために依存を増やす理由が無い)。見るのはインデントだけ。
+    """
+    lines = body.splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}"),
+        None,
+    )
+    assert start is not None, f"step が無い: {step_name}"
+    for i in range(start, len(lines)):
+        if lines[i].strip() == "run: |":
+            indent = len(lines[i]) - len(lines[i].lstrip()) + 2
+            block = []
+            for line in lines[i + 1:]:
+                if line.strip() and len(line) - len(line.lstrip()) < indent:
+                    break
+                block.append(line[indent:])
+            return "\n".join(block)
+    raise AssertionError(f"step に run: | が無い: {step_name}")
+
+
+def bash_scripts():
+    """claude/ と bin/ にある bash スクリプト (リポジトリからの相対パス)。
+
+    workflow とは**独立に**数え直すためのもの。同じ選び方を写すと、両方が同時に
+    間違っていても一致してしまう。
+    """
+    found = set()
+    for directory in ("claude", "bin"):
+        for path in sorted((REPO / directory).rglob("*")):
+            if not path.is_file() or not os.access(path, os.X_OK):
+                continue
+            with path.open("rb") as handle:
+                shebang = handle.readline()
+            if shebang.startswith(b"#!") and b"bash" in shebang:
+                found.add(str(path.relative_to(REPO)))
+    return found
 
 
 class LeastPrivilegeTest(unittest.TestCase):
@@ -68,12 +115,45 @@ class DeclaredChecksActuallyRunTest(unittest.TestCase):
         bodies = "\n".join(p.read_text() for p in workflow_files())
         self.assertIn("shellcheck", bodies, "shellcheck を流す job が CI に無い")
 
-    def test_shellcheck_targets_are_discovered(self):
-        """対象を一覧で並べない。足した人が忘れた瞬間に検査から外れる。"""
-        bodies = "\n".join(p.read_text() for p in workflow_files())
-        if "shellcheck" not in bodies:
+    def test_shellcheck_covers_every_bash_script(self):
+        """CI が実際に拾う一覧と、独立に数え直した一覧が一致すること。
+
+        対象を名前で並べていると、bin/ にスクリプトを足した日に検査から黙って外れる
+        (`-name 'secret-read'` が実際にその形で、拡張子の無いスクリプトを落としていた。
+        issue #273)。**形だけを見る検査では、一覧に 1 行足す形へ戻っても気付けない**ので、
+        workflow の選び方をそのまま実行して突き合わせる。
+        """
+        path = WORKFLOWS / "test.yml"
+        body = path.read_text()
+        if "shellcheck" not in body:
             self.skipTest("shellcheck の job が無い")
-        self.assertIn("find claude bin", bodies, "対象を find で拾っていない")
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                ["bash", "-c", run_block(body, "対象を拾う")],
+                cwd=REPO, capture_output=True, text=True,
+                env=clean_env(RUNNER_TEMP=tmp),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            picked = set(Path(tmp, "shellcheck-targets").read_text().split())
+        self.assertEqual(
+            picked, bash_scripts(),
+            "CI が shellcheck に掛ける一覧が、claude/ と bin/ の bash スクリプトと違う",
+        )
+
+    def test_shellcheck_notices_when_it_picks_up_nothing(self):
+        """対象ゼロでも shellcheck は成功する。拾い方が壊れた緑を作らせない。"""
+        body = (WORKFLOWS / "test.yml").read_text()
+        if "shellcheck" not in body:
+            self.skipTest("shellcheck の job が無い")
+        guard = run_block(body, "対象が拾えていることを確かめる")
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "shellcheck-targets").write_text("")
+            result = subprocess.run(
+                ["bash", "-c", guard],
+                cwd=REPO, capture_output=True, text=True,
+                env=clean_env(RUNNER_TEMP=tmp),
+            )
+            self.assertNotEqual(result.returncode, 0, "空の一覧を通してしまった")
 
     def test_shellcheck_version_is_pinned(self):
         """手元と CI で版が違うと「手元で通るのに CI で落ちる」が起きる。
