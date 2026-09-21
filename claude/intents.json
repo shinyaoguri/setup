@@ -130,6 +130,23 @@
       "gap": "plan-pass.sh がプラン本文を、文書化されていない transcript の形式から逆引きしている。tool_input.plan で足りる (shinyaoguri/claude-plugins#176)"
     },
     {
+      "id": "durable-work-record",
+      "intent": "決定・経過・中間所見を、記憶ゼロのセッションや他の人が読める恒久的な置き場 (Issue・PR・docs) に残す",
+      "why": "セッションの記憶はいつでも消える前提で、本体の記憶はそのマシンのその利用者にしか見えない",
+      "rationale": ["claude/CLAUDE.md「全作業共通」の記録の 2 項目", "shinyaoguri/setup#246"],
+      "means": [
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "セッションの記憶 (auto-memory 含む) はいつでもリセットされる前提"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "複数ステップの作業は着手時に計画を宣言し"}
+      ],
+      "depends_on": [
+        {"surface": "settings-key", "name": "autoMemoryDirectory", "stability": "documented"},
+        {"surface": "file-format", "name": "MEMORY.md", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "auto-memory", "stability": "documented"}
+      ],
+      "verify": ["none: 規約 (文書) だけが手段で、機械的に確かめる対象が無い"],
+      "sunset": "本体の記憶が、マシンと利用者を跨いで他の人・他のエージェントからも読める場所に、作業 (Issue・PR) と紐づいて残るようになったら"
+    },
+    {
       "id": "plan-on-github",
       "intent": "着手時のプランを、他の人とセッションが読める GitHub 側に残す",
       "why": "~/.claude/plans/ はローカルのマシンにしか無く 30 日で消え、ランダムな 3 語のファイル名でリポジトリとも紐づかない",
