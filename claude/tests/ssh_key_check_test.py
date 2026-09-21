@@ -13,6 +13,7 @@
 """
 
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -169,7 +170,7 @@ class SshKeyCheckTestCase(unittest.TestCase):
         self.signing_keys.write_text("".join(f"{k}\n" for k in (signing or [])))
 
     def run_script(self, *args, sign="ok", agent="ok", gh_auth="ok", gh_signing="ok",
-                   limit=3, fast=500, gh_limit=1, with_gh=True):
+                   limit=3, fast=500, gh_limit=1, with_gh=True, script=SCRIPT):
         env = clean_env(HOME=str(self.home))
         env["PATH"] = f"{self.bin}:/usr/bin:/bin"
         env["FAKE_SSH_ADD_LOG"] = str(self.ssh_add_log)
@@ -189,7 +190,7 @@ class SshKeyCheckTestCase(unittest.TestCase):
         if not with_gh:
             (self.bin / "gh").unlink()
         return subprocess.run(
-            [str(SCRIPT), *args],
+            [str(script), *args],
             env=env,
             capture_output=True,
             text=True,
@@ -314,6 +315,73 @@ class LocalChecksTest(SshKeyCheckTestCase):
     def test_local_は_gh_を呼ばない(self):
         self.run_script("--local")
         self.assertEqual(self.gh_calls(), [], "--local がネットワークを使った")
+
+
+class SetupStepsTest(SshKeyCheckTestCase):
+    """まだ何も始まっていない人に、手順の全体を出す (issue #278)。
+
+    検査が出すのは「壊れている 1 箇所を直す次の 1 手」で、それだけでは**鍵が無い間は
+    GitHub 登録の手順が判定不能に倒れて出てこない**。やる順番も、なぜそうするのか
+    (ML-DSA を選ばない理由・Require Authentication を外す理由) も見えない。
+
+    手順の文面はリポジトリに 1 箇所しか置かない。正本は tasks/ssh.yml の冒頭コメントで、
+    スクリプトはそこを読んで出すだけ — 2 箇所に書くと片方が古びたことに誰も気付けない。
+    """
+
+    def test_鍵が無ければ手順の全体が出る(self):
+        self.place_key()
+        out = self.run_script("--local").stdout
+        self.assertIn("次の順に進めます", out)
+        for step in ("1. ", "2. ", "3. ", "4. ", "5. "):
+            self.assertIn(step, out, f"手順 {step.strip()} が出ていない")
+
+    def test_手順には鍵が無い間は検査できないものも載る(self):
+        """GitHub 登録は、鍵が無い間ずっと「判定不能」で、次の手が出てこない。"""
+        self.place_key()
+        out = self.run_script("--local").stdout
+        self.assertIn("authentication key と signing key の両方", out)
+        self.assertIn("gh auth refresh -h github.com -s admin:ssh_signing_key", out)
+
+    def test_手順には理由も載る(self):
+        """「外していいのか」を判断するには、外さないとどうなるかが要る。"""
+        self.place_key()
+        out = self.run_script("--local").stdout
+        self.assertIn("無人セッションが承認待ちで止まる", out)
+        self.assertIn("ML-DSA-65", out)
+
+    def test_端末で読めない強調は落とす(self):
+        self.place_key()
+        self.assertNotIn("**", self.run_script("--local").stdout)
+
+    def test_鍵があるときは手順を出さない(self):
+        """既に始めている人に毎回 5 手順を読ませると、見るべき 1 行がその中に埋もれる。"""
+        out = self.run_script("--local", agent="noagent").stdout
+        self.assertNotIn("次の順に進めます", out)
+        self.assertIn("手順の正本は", out)
+
+    def test_正本が読めない場所から流しても落ちない(self):
+        """tasks/ が隣に無い写しを流す (配布の形が変わったときの倒れ方)。"""
+        elsewhere = self.root / "elsewhere" / "bin"
+        elsewhere.mkdir(parents=True)
+        copy = elsewhere / "ssh-key-check"
+        shutil.copy(SCRIPT, copy)
+        self.place_key()
+        result = self.run_script("--local", script=copy)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("次の順に進めます", result.stdout)
+        self.assertIn("手順の正本は", result.stdout)
+
+
+class SetupStepsSourceTest(unittest.TestCase):
+    """手順の正本そのものの形 (印が消えたらここで落ちる)。"""
+
+    def test_印の内側に手順がある(self):
+        body = (Path(__file__).resolve().parent.parent.parent / "tasks" / "ssh.yml").read_text()
+        self.assertIn("setup-steps:begin", body, "手順の範囲を示す印が無い")
+        self.assertIn("setup-steps:end", body)
+        inside = body.split("setup-steps:begin", 1)[1].split("setup-steps:end", 1)[0]
+        for step in ("1.", "2.", "3.", "4.", "5."):
+            self.assertIn(step, inside, f"印の内側に手順 {step} が無い")
 
 
 class GithubChecksTest(SshKeyCheckTestCase):

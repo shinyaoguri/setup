@@ -41,6 +41,19 @@
 
 set -euo pipefail
 
+# セットアップ手順の正本は tasks/ssh.yml の冒頭コメント。鍵がまだ 1 本も無いときは
+# そこを読んでそのまま出す (手順を 2 箇所に書くと片方が古びる。issue #278)。
+# symlink 経由で呼ばれても見失わないよう実体まで辿る (bin/secret-read と同じ形)
+source_path="${BASH_SOURCE[0]}"
+while [ -L "$source_path" ]; do
+  link_dir=$(cd -P "$(dirname "$source_path")" && pwd)
+  source_path=$(readlink "$source_path")
+  case "$source_path" in /*) ;; *) source_path="$link_dir/$source_path" ;; esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$source_path")" && pwd)
+readonly SCRIPT_DIR
+readonly SSH_TASK="${SCRIPT_DIR%/*}/tasks/ssh.yml"
+
 readonly SECRETIVE_DATA="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data"
 readonly PUBLIC_KEYS="$SECRETIVE_DATA/PublicKeys"
 
@@ -386,6 +399,20 @@ check_github_signing() {
 }
 
 # --- 組み立て -----------------------------------------------------------------
+#
+# **手順の全体を出すのは、まだ何も始まっていないときだけ。** 既に鍵がある人に毎回 5 手順を
+# 読ませると、本当に見るべき 1 行 (どれが欠けているか) がその中に埋もれる。
+# 出せたら 0、正本が読めなければ 1 (呼び出し側が在処の案内へ倒す)。
+print_setup_steps() {
+  local steps
+  [ -r "$SSH_TASK" ] || return 1
+  # 印の内側を取り、コメント記号と、端末では読めない Markdown の強調を落とす
+  steps=$(sed -n '/setup-steps:begin/,/setup-steps:end/p' "$SSH_TASK" |
+    sed '1d;$d' | sed -e 's/^#//' -e 's/\*\*//g')
+  [ -n "$steps" ] || return 1
+  printf '\n鍵がまだ 1 本もありません。次の順に進めます (%s より):\n%s\n' \
+    "$(tilde "$SSH_TASK")" "$steps"
+}
 # 鍵そのものは下の検査行が言うので、ここでは**どこを見たか**だけを出す
 print_header() { # $1=local|github|all
   printf 'Secretive: %s\n' "$(tilde "$SECRETIVE_DATA")"
@@ -410,7 +437,12 @@ print_summary() {
   else
     printf '判定不能 %d 件 (全 %d 件)\n' "$UNKNOWN_COUNT" "$total"
   fi
-  printf '手順の正本は tasks/ssh.yml の冒頭コメント\n'
+  # まだ何も始まっていないなら手順そのものを、始まっているなら正本の在処だけを出す
+  if [ "$KEY_COUNT" -eq 0 ] && print_setup_steps; then
+    :
+  else
+    printf '手順の正本は %s の冒頭コメント\n' "$(tilde "$SSH_TASK")"
+  fi
   [ "$NG_COUNT" -eq 0 ] || return 1
   return 2
 }
