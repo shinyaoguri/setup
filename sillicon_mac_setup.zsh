@@ -64,27 +64,79 @@ else
 	echo "   ⏸️  インストールが完了したら、このスクリプトを再実行してください"
 	exit 0
 fi
+
+# **パスが通っていても git が動くとは限らない。** 新品の Mac は Xcode を一度も開いて
+# いないので、Xcode.app が選ばれているとライセンス未同意で git / clang がまとめて
+# 終了コード 69 で落ちる (`sudo xcode-select -s` で切り替えた直後も同じ)。
+# `xcode-select -p` はパスを返すだけなのでここを素通りし、直後の Step 1.5 で git が
+# 失敗して「別のリポジトリです」という無関係な診断になっていた (issue #266)。
+# 以降はすべて git が前提なので、動くことをここで実測する。
+if ! git_error=$(git --version 2>&1 >/dev/null); then
+	if [[ "$git_error" == *license* ]]; then
+		echo "   ⚠️  Xcode のライセンスに同意していません"
+		if [[ -t 0 ]]; then
+			# 同意そのものは本人がする。読ませずに accept で通さない
+			echo "   同意画面を開きます (スペースで読み進め、最後に agree と入力)..."
+			sudo xcodebuild -license
+			if ! git_error=$(git --version 2>&1 >/dev/null); then
+				echo "   ❌ 同意した後も git を実行できません"
+				echo "      $git_error"
+				exit 1
+			fi
+			echo "   ✓ ライセンスに同意しました"
+		else
+			# 端末が無ければ同意画面を出せない (CI・パイプ経由)
+			echo "   ❌ 次を実行して同意してから、このスクリプトを再実行してください"
+			echo "      sudo xcodebuild -license accept"
+			exit 1
+		fi
+	else
+		echo "   ❌ git を実行できません"
+		echo "      $git_error"
+		exit 1
+	fi
+fi
 echo ""
 
 ##########
 # Step 1.5: Playbook パス設定 (cloud モードはリポジトリをクローン)
 ##########
+# 手が付けられない状態から抜ける道。**消させない** — 何が入っているか分からないものを
+# rm させる案内は、直せたはずの状態まで消す
+setup_rescue_hint() {
+	echo "      → 中身に心当たりが無ければ、退避してからやり直してください:"
+	echo "        mv \"$SETUP_DIR\" \"$SETUP_DIR.broken.\$(date +%Y%m%d%H%M%S)\""
+}
 if [[ "$localmode" == true ]]; then
 	SCRIPT_DIR="${0:A:h}"
 	PLAYBOOK="$SCRIPT_DIR/playbook_sillicon_mac.yml"
 else
 	echo "📥 Step 1.5: setup リポジトリの準備 ($SETUP_DIR)"
 	if [[ -d "$SETUP_DIR/.git" ]]; then
-		REMOTE_URL=$(git -C "$SETUP_DIR" remote get-url origin 2>/dev/null || echo "")
-		if [[ "$REMOTE_URL" == *"shinyaoguri/setup"* ]]; then
-			echo "   ✓ 既存リポジトリを更新します..."
-			git -C "$SETUP_DIR" pull --ff-only || echo "   ⚠️  pull に失敗しました (ローカル変更がある可能性)"
-		else
+		# **git の失敗理由を捨てない。** 以前は `2>/dev/null || echo ""` で空文字へ
+		# 畳んでから URL を照合していたため、ライセンス未同意・所有権の食い違い・
+		# クローンの残骸まで「別のリポジトリです: (空)」になっていた。名指しされた
+		# 原因が実際の原因と違うと、人はそこから先へ進めない (issue #266)。
+		if ! git_error=$(git -C "$SETUP_DIR" rev-parse --git-dir 2>&1 >/dev/null); then
+			echo "   ❌ $SETUP_DIR を Git リポジトリとして読めません"
+			echo "      $git_error"
+			setup_rescue_hint
+			exit 1
+		fi
+		REMOTE_URL=$(git -C "$SETUP_DIR" remote get-url origin 2>/dev/null || true)
+		if [[ -z "$REMOTE_URL" ]]; then
+			echo "   ❌ $SETUP_DIR に origin がありません (クローンが途中で終わった可能性)"
+			setup_rescue_hint
+			exit 1
+		elif [[ "$REMOTE_URL" != *"shinyaoguri/setup"* ]]; then
 			echo "   ❌ $SETUP_DIR は別のリポジトリです: $REMOTE_URL"
 			exit 1
 		fi
+		echo "   ✓ 既存リポジトリを更新します..."
+		git -C "$SETUP_DIR" pull --ff-only || echo "   ⚠️  pull に失敗しました (ローカル変更がある可能性)"
 	elif [[ -e "$SETUP_DIR" ]]; then
 		echo "   ❌ $SETUP_DIR が既に存在します (Git リポジトリではない)"
+		setup_rescue_hint
 		exit 1
 	else
 		echo "   📦 リポジトリをクローンします..."
