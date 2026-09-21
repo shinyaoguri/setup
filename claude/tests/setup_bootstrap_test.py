@@ -52,8 +52,17 @@ class DownloadFailureTest(unittest.TestCase):
                 "done\n"
                 f'[ -n "$out" ] && printf %s {body!r} > "$out"\n'
             )
-        script.write_text(f"#!/bin/sh\n{write}exit {exit_code}\n")
+        # 呼ばれた痕跡を残す。偽物より前に本物の curl が引かれると、テストは本物の
+        # bootstrap を落として実行する (issue #238) — 「偽物が呼ばれた」を必ず確かめる
+        called = f'touch "{self.root / "FAKE_CURL_CALLED"}"\n'
+        script.write_text(f"#!/bin/sh\n{called}{write}exit {exit_code}\n")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+    def assert_fake_curl_was_used(self):
+        self.assertTrue(
+            (self.root / "FAKE_CURL_CALLED").exists(),
+            "偽 curl が呼ばれていない — 本物の curl が先に引かれている可能性がある",
+        )
 
     def run_setup(self):
         env = clean_env()
@@ -67,6 +76,7 @@ class DownloadFailureTest(unittest.TestCase):
         """取得に失敗したら止まる。空のスクリプトを実行して黙って終わらない。"""
         self.fake_curl(exit_code=22)
         result = self.run_setup()
+        self.assert_fake_curl_was_used()
         self.assertNotEqual(result.returncode, 0, "取得失敗が成功として素通りした")
         self.assertIn("取得できませんでした", result.stdout + result.stderr)
 
@@ -79,6 +89,7 @@ class DownloadFailureTest(unittest.TestCase):
         marker = self.root / "PARTIAL_RAN"
         self.fake_curl(exit_code=18, body=f"touch {marker}\n")   # 18 = 転送が途中で終わった
         result = self.run_setup()
+        self.assert_fake_curl_was_used()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(marker.exists(), "部分的に取得したスクリプトを実行した")
 
@@ -228,7 +239,8 @@ class HomebrewPathTest(unittest.TestCase):
             self.skipTest("Homebrew が無い環境")
         env = {"HOME": os.environ["HOME"], "PATH": "/usr/bin:/bin"}
         result = subprocess.run(
-            ["zsh", "-c", 'eval "$(/opt/homebrew/bin/brew shellenv)"; command -v brew'],
+            # -f: ~/.zshenv が先に /opt/homebrew/bin を通すと、eval が無くても緑になる
+            ["zsh", "-f", "-c", 'eval "$(/opt/homebrew/bin/brew shellenv)"; command -v brew'],
             capture_output=True, text=True, env=env, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
