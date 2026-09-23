@@ -29,9 +29,10 @@
 # テストは claude/tests/*_test.py (python3 で直接実行)
 #
 # worktree-path-guard.sh はここには無い。同じリポジトリの別 worktree への書き込みを
-# 止めるフックで、守る場面がリポジトリの中にしか無いため mokume 側へ移した
-# (mokume-metal/mokume#499・claude-plugins の ADR-0021)。他のリポジトリへは
-# 必要が示されてから配る
+# 止めるフックで、守る場面がリポジトリの中にしか無いため一度 mokume 側へ移し
+# (mokume-metal/mokume#499)、どのリポジトリでも同じ判定になる道具なので repo-standards
+# プラグインの worktree-guard.sh へ移した (mokume-metal/mokume#1362・claude-plugins の
+# ADR-0021 決定 2)
 #
 # plan-record.sh は着手時のプランを GitHub (PR / Issue のコメント) 側に残すためのフック。
 # プランは ~/.claude/plans/ にも溜まるが、そこはローカルのマシンにしか無く、ランダムな

@@ -289,6 +289,23 @@
       "sunset": "worktree 側: 本体の sweep が残骸 worktree と既定ブランチを掴んだ worktree を片付けるようになったら worktree-sweep を消す。ブランチ側: squash merge 済みのローカルブランチを本体が情報を失わずに消すようになったら残りを消す"
     },
     {
+      "id": "worktree-write-guard",
+      "intent": "エージェントが同じリポジトリの別 worktree を取り違えて書き込まない",
+      "why": "worktree を常用すると同名のファイルが同じ相対パスで何本も並び、メイン作業ツリーの絶対パスで編集すると変更がブランチではなく別のツリーへ落ちる。Read 済みの確認では取り違えを検知できない (mokume-metal/mokume#499)",
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0021-three-layer-placement.md", "mokume-metal/mokume:docs/decisions/0017-agent-support-locality.md"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/worktree-guard.sh"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"},
+        {"surface": "hook-input", "name": "tool_input.file_path", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "worktree", "stability": "documented"}
+      ],
+      "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-worktree-guard.sh"],
+      "sunset": "本体が、セッションの worktree の外にある同じリポジトリの作業ツリーへの書き込みを止めるか警告するようになったら"
+    },
+    {
       "id": "ci-seen-through",
       "intent": "push したら CI の結果を見届け、赤いままセッションを終わらせない",
       "why": "push して終わると、赤くなった CI に次のセッションまで誰も気付かない",
