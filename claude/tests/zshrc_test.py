@@ -59,6 +59,43 @@ class FreshMachineTest(unittest.TestCase):
         self.assertTrue(marker.exists(), "~/.zshrc.local が読まれていない")
 
 
+class SetupBinBeforeNodeTest(unittest.TestCase):
+    """setup の bin が、fnm の入れる node の bin より前に来る (issue #289)。
+
+    bin/cosense は npm の global に入る本物の cosense を包むラッパーで、名前で呼ばれる。
+    fnm env は node の bin を PATH の先頭へ入れるので、後から入れ直さないと本物に負け、
+    1Password の PAT が渡らないまま settings.json の平文へ戻る。
+    """
+
+    def test_setup_bin_comes_before_the_fnm_node_bin(self):
+        with tempfile.TemporaryDirectory() as workdir:
+            root = Path(workdir)
+            home = root / "home"
+            (home / ".oh-my-zsh").mkdir(parents=True)
+            (home / ".oh-my-zsh" / "oh-my-zsh.sh").write_text("")
+            node_bin = root / "fnm-node" / "bin"
+            node_bin.mkdir(parents=True)
+            # 偽 fnm。`fnm env` が出すのと同じく、node の bin を先頭へ入れる行を出す
+            tools = root / "tools"
+            tools.mkdir()
+            fnm = tools / "fnm"
+            fnm.write_text(f'#!/bin/sh\necho \'export PATH="{node_bin}:$PATH"\'\n')
+            fnm.chmod(0o755)
+
+            env = clean_env(HOME=str(home), PATH=f"{tools}:/usr/bin:/bin", ZDOTDIR=None)
+            result = subprocess.run(
+                ["zsh", "-f", "-c", f'source "{ZSHRC}"; print -l $path'],
+                env=env, capture_output=True, text=True, cwd=home, timeout=30,
+            )
+        path = result.stdout.splitlines()
+        self.assertIn(str(node_bin), path, "対照: 偽 fnm の bin が入っていない")
+        self.assertIn(str(REPO / "bin"), path)
+        self.assertLess(
+            path.index(str(REPO / "bin")), path.index(str(node_bin)),
+            "setup の bin が node の bin より後ろにある (bin/cosense が本物に負ける)",
+        )
+
+
 class NoInstallerResidueTest(unittest.TestCase):
     """インストーラの追記がリポジトリに残っていないこと。
 

@@ -88,6 +88,13 @@ if command -v fnm >/dev/null 2>&1; then
   eval "$(fnm env --use-on-cd --shell zsh)"
 fi
 
+# setup の bin を、fnm が先頭へ入れた node の bin より前へ入れ直す。bin/cosense は
+# 1Password の PAT を持たせて本物の cosense (npm の global) を起動するラッパーで、名前で
+# 呼ばれるので PATH で前に居ないと本物に負ける (issue #289)。Claude デスクトップアプリも
+# 起動時にこの並びを抜き出して持ち続けるので、ここで決まる順番がアプリのセッションにも効く
+# (変えたらアプリの再起動が要る。#154)。zshenv の typeset -U で重複は前の方だけが残る
+path=("${${(%):-%N}:A:h}/bin" $path)
+
 # Firebase環境をプロンプトに表示
 firebase_prompt_info() {
   if [[ -f .firebaserc ]]; then

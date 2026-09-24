@@ -566,8 +566,9 @@ echo "🔑 Step 7: 秘密のキャッシュを温める (1Password の承認が�
 if "${PLAYBOOK:h}/bin/secret-read" --warm; then
 	echo "   ✓ キャッシュ済み"
 else
-	echo "   ⚠️  温められなかった参照があります。1Password にサインインして"
-	echo "      設定 > 開発者 の「1Password CLI と連携」を有効にしてから打ち直してください:"
+	echo "   ⚠️  温められなかった役割があります。1Password にサインインして"
+	echo "      設定 > 開発者 の「1Password CLI と連携」を有効にし、使う役割の項目に"
+	echo "      タグ secret-read/<役割> を付けてから打ち直してください (使わない役割は放っておいてよい):"
 	echo "        ${PLAYBOOK:h}/bin/secret-read --warm"
 fi
 echo ""

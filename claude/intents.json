@@ -503,17 +503,18 @@
       "id": "unattended-secrets",
       "intent": "無人のセッション (フック・scheduled task・バックグラウンド) でも、決めた秘密だけは読めるようにする",
       "why": "無人のセッションは 1Password のロック解除に応えられず、黙って止まる",
-      "rationale": ["claude/CLAUDE.md「全作業共通」の secret-read の項", "shinyaoguri/setup#91", "shinyaoguri/setup#154"],
+      "rationale": ["claude/CLAUDE.md「全作業共通」の secret-read の項", "shinyaoguri/setup#91", "shinyaoguri/setup#154", "shinyaoguri/setup#289"],
       "means": [
         {"kind": "self", "ref": "bin/secret-read"},
-        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "`op read` ではなく `secret-read <参照>` で読む"}
+        {"kind": "self", "ref": "bin/cosense"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "`op read` ではなく `secret-read <役割>` で読む"}
       ],
       "depends_on": [
         {"surface": "harness-behavior", "name": "フックと scheduled task は非対話で走り、承認プロンプトに応えられない", "stability": "undocumented"},
         {"surface": "desktop-app", "name": "デスクトップアプリは起動した時点の PATH を持ち続ける", "stability": "documented"},
         {"surface": "settings-key", "name": "apiKeyHelper", "stability": "documented"}
       ],
-      "verify": ["claude/tests/secret_read_test.py"],
+      "verify": ["claude/tests/secret_read_test.py", "claude/tests/cosense_wrapper_test.py"],
       "sunset": "本体が無人セッション向けの秘密の受け渡し (スコープを絞った保管庫連携) を持ったら"
     },
     {

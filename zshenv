@@ -27,9 +27,13 @@ export PATH
 # 使う側: secret-read "$GYAZO_TOKEN_REF" — 1Password がロックされていても読めるよう
 # Keychain をキャッシュに使う。手順は gyazo-capture スキル、線引きは secret-cache-allowlist
 #
+# 参照は `op://` ではなく secret-read の**役割名**で渡す (issue #289)。どの項目を充てるかは
+# 各自の 1Password のタグ (secret-read/gyazo-token) で決まるので、保管庫や項目の名前を
+# 公開リポジトリに書かずに済み、他の人の環境でもそのまま意味を持つ。
+#
 # **参照の literal はここ 1 つ。** 下の MOKUME_GYAZO_TOKEN_CMD もこの変数を読む形にして
 # あり、参照を書き換えるときに直す場所が 2 つに割れないようにしている。
-export GYAZO_TOKEN_REF="op://Automation/Gyazo API/credential"
+export GYAZO_TOKEN_REF="gyazo-token"
 
 # mokume のエージェントが push と PR 作成に使う GitHub App の秘密鍵を、**読むコマンド**
 # として置く (値は持たせない)。mokume の scripts/gh-app-token.sh が eval して PEM を得る。
@@ -50,7 +54,11 @@ export GYAZO_TOKEN_REF="op://Automation/Gyazo API/credential"
 # スナップショットがこのファイルの後でそれを書き戻す (セットアップ前に起動していたアプリで
 # 実際に踏んだ。#154)。書き戻されるのは PATH だけで変数は残るので、裸の secret-read だと
 # 「変数はあるのにコマンドが無い」になり、エージェントは 1Password の承認待ちへ落ちる。
-export MOKUME_APP_PRIVATE_KEY_CMD="${(q)_setup_root}/bin/secret-read \"op://Automation/mokume-agent/mokume-agent.2026-08-26.private-key.pem\""
+#
+# 鍵を差し替えても、ここは直さない。1Password のタグ (secret-read/mokume-app-key) を新しい
+# 項目へ付け替えれば、キャッシュの取り直しで追いつく (以前は日付入りのファイル名を
+# ここと許可リストの 2 か所に書いていた)
+export MOKUME_APP_PRIVATE_KEY_CMD="${(q)_setup_root}/bin/secret-read mokume-app-key"
 
 # Gyazo のトークンも、mokume へは**読むコマンド**として渡す (受け取る口が
 # MOKUME_GYAZO_TOKEN_CMD で、`bash -c` / `eval` で実行される)。上の GYAZO_TOKEN_REF は
