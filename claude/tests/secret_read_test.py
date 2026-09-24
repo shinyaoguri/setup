@@ -7,14 +7,19 @@ preflight のテストと同じ型)。検証したいのは「どの参照をキ
 いつ op を呼ばずに済ませるか」であって、op や security の挙動ではない。
 
 このスクリプトの肝は **op を呼ばずに値が返せること** (= 1Password がロックされていても
-無人セッションが止まらない) と、**許可リストに無い参照を Keychain に残さないこと**
-(= 等級の線引き) の 2 点なので、そこを厚く見る。
+無人セッションが止まらない) と、**許可リストに無い役割や、直接渡された参照を Keychain に
+残さないこと** (= 等級の線引き) の 2 点なので、そこを厚く見る。
+
+キャッシュは役割 (gyazo-token など) を通したときだけ行い、役割にどの項目を充てるかは
+1Password のタグ secret-read/<役割> で決まる (issue #289)。偽 op は項目の一覧を JSON で
+持ち、タグでの検索・項目の取得・op read を本物と同じ形で返す。
 
     python3 claude/tests/secret_read_test.py
 """
 
 import base64
 import fcntl
+import json
 import os
 import pty
 import shutil
@@ -30,7 +35,9 @@ from hookenv import clean_env
 
 SCRIPT = Path(__file__).resolve().parent.parent.parent / "bin" / "secret-read"
 
-GYAZO_REF = "op://Automation/Gyazo API/credential"
+ROLE = "gyazo-token"
+OTHER_ROLE = "cosense-pat"
+SSH_ROLE = "ssh-key"   # 許可リストに載せない役割 (タグは付いている)
 SSH_REF = "op://Private/SSH Key/private key"
 
 # 偽 security。実際の Keychain の代わりにディレクトリへ書く。service 名はスラッシュを
@@ -86,6 +93,12 @@ exit 0
 
 # 偽 op。呼ばれた回数を数えられるようログを残す。
 #
+# 1Password の中身は FAKE_OP_ITEMS (JSON の項目一覧) に持つ。本物と同じ 3 つの口を返す:
+#   op item list --tags <タグ> --format json   タグの付いた項目 (値は含まない)
+#   op item get <ID> --vault <ID> --format json  フィールド (値つき) と添付ファイルの名前
+#   op read op://<保管庫>/<項目>/<フィールドか添付ファイル>
+# 項目に無い参照の op read は FAKE_OP_VALUE_FILE の中身を返す (直接渡す参照の再現)。
+#
 # FAKE_OP_HANG は「1Password がロックされていて、承認ダイアログを出したまま返らない」の
 # 再現。本物に寄せるための条件が 3 つある:
 #
@@ -93,20 +106,76 @@ exit 0
 #      ここを素の `sleep` にすると本物では通らない実装が緑になってしまう (実際になった)
 #   2. SIGTERM / SIGKILL では死ぬ — 諦める側はここまでやる必要がある
 #   3. 子プロセスを持たない — 親だけ殺しても子が stdout を掴んだままだとコマンド置換が
-#      返らない。exec で置き換えて、殺す相手を 1 つに保つ
-FAKE_OP = r"""#!/usr/bin/env bash
-set -u
-printf '%s\n' "$*" >> "$FAKE_OP_LOG"
-if [ -n "${FAKE_OP_HANG:-}" ]; then
-  exec perl -e '$SIG{ALRM} = "IGNORE"; sleep shift' "$FAKE_OP_HANG"
-fi
-if [ -n "${FAKE_OP_FAIL:-}" ]; then
-  echo "[ERROR] could not read secret: item not found" >&2
-  exit 1
-fi
-[ "${1:-}" = "read" ] || exit 2
-cat "$FAKE_OP_VALUE_FILE"
+#      返らない。この偽物は自分自身が眠るので、殺す相手は 1 つのまま
+FAKE_OP = r"""#!/usr/bin/env python3
+import json, os, signal, sys, time
+
+args = sys.argv[1:]
+with open(os.environ["FAKE_OP_LOG"], "a") as log:
+    log.write(" ".join(args) + "\n")
+if os.environ.get("FAKE_OP_HANG"):
+    signal.signal(signal.SIGALRM, signal.SIG_IGN)
+    time.sleep(float(os.environ["FAKE_OP_HANG"]))
+    sys.exit(1)
+if os.environ.get("FAKE_OP_FAIL"):
+    sys.stderr.write("[ERROR] could not read secret: item not found\n")
+    sys.exit(1)
+
+with open(os.environ["FAKE_OP_ITEMS"]) as f:
+    items = json.load(f)
+
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+
+def summary(item):
+    return {k: item[k] for k in ("id", "title", "vault", "tags")}
+
+if args[:2] == ["item", "list"]:
+    tag = opt("--tags")
+    print(json.dumps([summary(i) for i in items if tag in i["tags"]]))
+elif args[:2] == ["item", "get"]:
+    found = [i for i in items if i["id"] == args[2] and i["vault"]["id"] == opt("--vault")]
+    if not found:
+        sys.stderr.write("[ERROR] item not found\n")
+        sys.exit(1)
+    item = dict(summary(found[0]))
+    item["fields"] = found[0].get("fields", [])
+    if found[0].get("files"):
+        item["files"] = [{"name": f["name"]} for f in found[0]["files"]]
+    print(json.dumps(item))
+elif args[:1] == ["read"]:
+    ref = args[1]
+    parts = ref[len("op://"):].split("/", 2)
+    for item in items:
+        if parts[0] not in (item["vault"]["id"], item["vault"]["name"]):
+            continue
+        if parts[1] not in (item["id"], item["title"]):
+            continue
+        for field in item.get("fields", []):
+            if parts[2] in (field["id"], field["label"]):
+                print(field["value"])
+                sys.exit(0)
+        for file in item.get("files", []):
+            if parts[2] == file["name"]:
+                print(file["content"])
+                sys.exit(0)
+        sys.stderr.write("[ERROR] field not found\n")
+        sys.exit(1)
+    with open(os.environ["FAKE_OP_VALUE_FILE"]) as f:
+        sys.stdout.write(f.read())
+else:
+    sys.exit(2)
 """
+
+
+def credential_item(item_id, title, value, tags, vault="vault-a"):
+    return {
+        "id": item_id,
+        "title": title,
+        "vault": {"id": vault, "name": vault.title()},
+        "tags": list(tags),
+        "fields": [{"id": "credential", "label": "credential", "value": value}],
+    }
 
 
 class SecretReadTestCase(unittest.TestCase):
@@ -122,6 +191,13 @@ class SecretReadTestCase(unittest.TestCase):
         self.op_log = self.root / "op.log"
         self.op_log.write_text("")
         self.value_file = self.root / "value"
+        self.items_file = self.root / "items.json"
+        # 1Password の中身。役割 gyazo-token と ssh-key にはタグの付いた項目が 1 つずつある
+        # (ssh-key は許可リストに無いので、タグがあってもキャッシュしてはいけない)
+        self.items = [
+            credential_item("gyazo-id", "Gyazo API", "", [f"secret-read/{ROLE}"]),
+            credential_item("ssh-id", "SSH Key (role)", "ssh-private", [f"secret-read/{SSH_ROLE}"], vault="vault-b"),
+        ]
         self.set_op_value("gyazo-token-abc")
 
         # スクリプトは許可リストを**自分の隣** (<置き場>/../secret-cache-allowlist) からしか
@@ -132,7 +208,7 @@ class SecretReadTestCase(unittest.TestCase):
         self.SCRIPT_UNDER_TEST = checkout / "bin" / "secret-read"
         shutil.copy(SCRIPT, self.SCRIPT_UNDER_TEST)
         self.allowlist = checkout / "secret-cache-allowlist"
-        self.allowlist.write_text(f"# コメント行\n\n{GYAZO_REF}\n")
+        self.allowlist.write_text(f"# コメント行\n\n{ROLE}\n")
 
         self.install(self.bin / "security", FAKE_SECURITY)
         self.install(self.bin / "op", FAKE_OP)
@@ -142,7 +218,12 @@ class SecretReadTestCase(unittest.TestCase):
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
     def set_op_value(self, value):
+        """役割 gyazo-token に充てた項目の値と、直接渡す参照が返す値を変える。"""
         self.value_file.write_text(value + "\n")
+        self.items[0]["fields"][0]["value"] = value
+
+    def item_titled(self, title):
+        return next(item for item in self.items if item["title"] == title)
 
     def run_script(
         self,
@@ -162,6 +243,8 @@ class SecretReadTestCase(unittest.TestCase):
         env["FAKE_KEYCHAIN"] = str(self.keychain)
         env["FAKE_OP_LOG"] = str(self.op_log)
         env["FAKE_OP_VALUE_FILE"] = str(self.value_file)
+        env["FAKE_OP_ITEMS"] = str(self.items_file)
+        self.items_file.write_text(json.dumps(self.items))
         if keychain_readonly:
             env["FAKE_SECURITY_RO"] = "1"
         if op_fails:
@@ -199,63 +282,77 @@ class SecretReadTestCase(unittest.TestCase):
     def op_calls(self):
         return [line for line in self.op_log.read_text().splitlines() if line]
 
+    def fetches(self):
+        """1Password から役割を読みに行った回数 (解決はタグでの検索から始まる)。"""
+        return [line for line in self.op_calls() if line.startswith("item list")]
+
     def cached_entries(self):
-        return list(self.keychain.iterdir())
+        """Keychain に残ったもの。充てた項目の名前の控え (値ではない) は数えない。"""
+        names = {self.keychain_path(f"secret-read/{role}#item").name for role in (ROLE, OTHER_ROLE, SSH_ROLE)}
+        return [p for p in self.keychain.iterdir() if p.name not in names]
 
     # --- キャッシュの中身を直接いじるためのヘルパー ---
     #
     # 寿命の検証で実時間を待つとテストが遅く不安定になるので、Keychain 側の最終取得時刻を
     # 過去へずらして「古くなった状態」を作る。偽 security と同じ規則でファイル名を決める。
 
-    def keychain_path(self, ref):
+    def keychain_path(self, service):
         digest = subprocess.run(
-            ["shasum"], input=ref, capture_output=True, text=True
+            ["shasum"], input=service, capture_output=True, text=True
         ).stdout.split()[0]
         return self.keychain / digest
 
-    def age_cache(self, ref, seconds):
+    def cache_path(self, role):
+        """役割の値を預けた Keychain の項目。"""
+        return self.keychain_path(f"secret-read/{role}")
+
+    def attempt_path(self, role):
+        return self.keychain_path(f"secret-read/{role}#attempt")
+
+    def age_cache(self, role, seconds):
         """キャッシュの最終取得時刻を seconds 秒だけ過去へずらす。"""
-        path = self.keychain_path(ref)
+        path = self.cache_path(role)
         epoch, _, encoded = path.read_text().partition(":")
         path.write_text(f"{int(epoch) - seconds}:{encoded}")
 
-    def age_failed_attempt(self, ref, seconds):
+    def age_failed_attempt(self, role, seconds):
         """取り直しに失敗した時刻の控えを seconds 秒だけ過去へずらす。"""
-        path = self.keychain_path(f"{ref}#attempt")
+        path = self.attempt_path(role)
         path.write_text(str(int(path.read_text()) - seconds))
 
-    def write_legacy_cache(self, ref, value):
+    def write_legacy_cache(self, role, value):
         """時刻を持たない旧形式 (base64 のみ) のキャッシュを置く。"""
         encoded = base64.b64encode(value.encode()).decode()
-        self.keychain_path(ref).write_text(encoded)
+        self.cache_path(role).write_text(encoded)
 
     # --- キャッシュしてよい参照 ---
 
     def test_初回は_op_を呼んで値を返しキャッシュする(self):
-        result = self.run_script(GYAZO_REF)
+        result = self.run_script(ROLE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
-        self.assertEqual(len(self.op_calls()), 1)
+        self.assertEqual(len(self.fetches()), 1)
         self.assertEqual(len(self.cached_entries()), 1)
 
     def test_2回目は_op_を呼ばずにキャッシュから返す(self):
-        self.run_script(GYAZO_REF)
+        self.run_script(ROLE)
         # 1Password 側の値を変えても、キャッシュを見ている限り影響を受けないはず
         self.set_op_value("changed-in-1password")
-        result = self.run_script(GYAZO_REF)
+        result = self.run_script(ROLE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
-        self.assertEqual(len(self.op_calls()), 1, "2 回目に op を呼んでいる")
+        self.assertEqual(len(self.op_calls()), len(self.fetches()) * 3, "前提: 1 回の解決は op 3 回")
+        self.assertEqual(len(self.fetches()), 1, "2 回目に op を呼んでいる")
 
     def test_op_が無くてもキャッシュがあれば読める(self):
         """本命の性質。1Password がロック / 不在でも無人セッションが止まらないこと。"""
-        self.run_script(GYAZO_REF)
-        result = self.run_script(GYAZO_REF, with_op=False)
+        self.run_script(ROLE)
+        result = self.run_script(ROLE, with_op=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
 
     def test_op_もキャッシュも無ければ理由を言って失敗する(self):
-        result = self.run_script(GYAZO_REF, with_op=False)
+        result = self.run_script(ROLE, with_op=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("op", result.stderr)
         self.assertEqual(result.stdout, "")
@@ -263,8 +360,8 @@ class SecretReadTestCase(unittest.TestCase):
     def test_改行や記号を含む値も壊さず往復する(self):
         secret = "line1\nline2 with spaces\tand=symbols/+"
         self.set_op_value(secret)
-        first = self.run_script(GYAZO_REF)
-        second = self.run_script(GYAZO_REF, with_op=False)
+        first = self.run_script(ROLE)
+        second = self.run_script(ROLE, with_op=False)
         self.assertEqual(first.stdout, secret + "\n")
         self.assertEqual(second.stdout, secret + "\n", "キャッシュ往復で値が変わった")
 
@@ -276,8 +373,8 @@ class SecretReadTestCase(unittest.TestCase):
         body = "\n".join("MIIEpQIBAAKCAQEAuSODvgDARc6Vjq0xKiX3B1kF3erBJ5V+OwY0R" for _ in range(26))
         secret = f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----"
         self.set_op_value(secret)
-        self.run_script(GYAZO_REF)
-        cached = self.run_script(GYAZO_REF, with_op=False)
+        self.run_script(ROLE)
+        cached = self.run_script(ROLE, with_op=False)
         self.assertEqual(
             cached.stdout,
             secret + "\n",
@@ -291,17 +388,17 @@ class SecretReadTestCase(unittest.TestCase):
         """
         body = "\n".join("MIIEpQIBAAKCAQEAuSODvgDARc6Vjq0xKiX3B1kF3erBJ5V+OwY0R" for _ in range(26))
         self.set_op_value(f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----")
-        self.run_script(GYAZO_REF)
-        chunked = sorted(p.name for p in self.keychain.iterdir())
+        self.run_script(ROLE)
+        chunked = self.cached_entries()
         self.assertGreater(len(chunked), 1, "分割されていない (前提が崩れた)")
 
         self.set_op_value("short-token")
-        self.run_script("--refresh", GYAZO_REF)
+        self.run_script("--refresh", ROLE)
 
-        cached = self.run_script(GYAZO_REF, with_op=False)
+        cached = self.run_script(ROLE, with_op=False)
         self.assertEqual(cached.stdout, "short-token\n")
         self.assertEqual(
-            len(list(self.keychain.iterdir())), 1,
+            len(self.cached_entries()), 1,
             "分割数が減ったのに古い実体が残っている",
         )
 
@@ -319,14 +416,112 @@ class SecretReadTestCase(unittest.TestCase):
         self.assertEqual(len(self.op_calls()), 2)
 
     def test_コメント行や空行は許可リストとして数えない(self):
-        self.allowlist.write_text(f"#{GYAZO_REF}\n\n   \n")
-        self.run_script(GYAZO_REF)
+        self.allowlist.write_text(f"#{ROLE}\n\n   \n")
+        self.run_script(ROLE)
         self.assertEqual(self.cached_entries(), [], "コメント行を許可として読んでいる")
 
     def test_許可リストの前後の空白は無視する(self):
-        self.allowlist.write_text(f"  {GYAZO_REF}  \n")
-        self.run_script(GYAZO_REF)
+        self.allowlist.write_text(f"  {ROLE}  \n")
+        self.run_script(ROLE)
         self.assertEqual(len(self.cached_entries()), 1)
+
+    # --- 役割の解決 (1Password のタグ。issue #289) ---
+    #
+    # 公開リポジトリには役割だけを書き、どの項目を充てるかは使う人の 1Password が決める。
+    # 取り違えると別の秘密をキャッシュに入れかねないので、曖昧なら読まずに止まること、
+    # 付け替えに追いつくことを見る。
+
+    def test_役割はタグの付いた項目の_credential_を読む(self):
+        result = self.run_script(ROLE)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+        reads = [c for c in self.op_calls() if c.startswith("read ")]
+        self.assertEqual(reads, ["read op://vault-a/gyazo-id/credential"], "ID で組んだ参照を読んでいない")
+
+    def test_タグの付いた項目が無ければ理由を言って失敗する(self):
+        self.items[0]["tags"] = []
+        result = self.run_script(ROLE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn(f"secret-read/{ROLE}", result.stderr, "どのタグを付ければよいか言っていない")
+        self.assertEqual(self.cached_entries(), [])
+
+    def test_タグの付いた項目が2件あれば読まずに止まる(self):
+        """どちらを読むべきか分からないときに片方を選ばない (取り違えた秘密を預けない)。"""
+        self.items.append(credential_item("dup-id", "Gyazo API (old)", "old-token", [f"secret-read/{ROLE}"]))
+        result = self.run_script(ROLE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Gyazo API (old)", result.stderr, "重なっている項目の名前を出していない")
+        self.assertFalse([c for c in self.op_calls() if c.startswith("read ")], "曖昧なまま値を読んでいる")
+        self.assertEqual(self.cached_entries(), [])
+
+    def test_credential_が無ければただ1つの添付ファイルを読む(self):
+        """GitHub App の秘密鍵のように、値が添付ファイル (.pem) で置かれている項目。"""
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----"
+        self.items[0]["fields"] = [{"id": "notesPlain", "label": "notesPlain", "value": "メモ"}]
+        self.items[0]["files"] = [{"name": "app.2026-08-26.private-key.pem", "content": pem}]
+        result = self.run_script(ROLE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, pem + "\n")
+        self.assertEqual(self.run_script(ROLE, with_op=False).stdout, pem + "\n")
+
+    def test_credential_も添付ファイルも1つに決まらなければ失敗する(self):
+        self.items[0]["fields"] = []
+        self.items[0]["files"] = [
+            {"name": "a.pem", "content": "a"},
+            {"name": "b.pem", "content": "b"},
+        ]
+        result = self.run_script(ROLE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Gyazo API", result.stderr)
+        self.assertEqual(self.cached_entries(), [])
+
+    def test_タグを付け替えたら取り直しで新しい項目に追いつく(self):
+        """鍵を差し替えるときは、新しい項目にタグを移すだけで済む (設定ファイルを直さない)。"""
+        self.run_script(ROLE, ttl=100)
+        self.items[0]["tags"] = []
+        self.items.append(credential_item("new-id", "Gyazo API 2", "new-token", [f"secret-read/{ROLE}"]))
+        self.age_cache(ROLE, 200)
+
+        result = self.run_script(ROLE, ttl=100)
+        self.assertEqual(result.stdout, "new-token\n")
+        self.assertIn("Gyazo API 2", self.run_script("--check").stdout)
+
+    def test_許可リストに無い役割は_op_を呼ぶ前に弾く(self):
+        """タグが付いていても、レビューを経ていない役割はキャッシュしない。"""
+        result = self.run_script(SSH_ROLE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("許可リスト", result.stderr)
+        self.assertEqual(self.op_calls(), [])
+        self.assertEqual(self.cached_entries(), [])
+
+    def test_役割名に大文字や記号は使えない(self):
+        for name in ("Gyazo-Token", "gyazo_token", "gyazo/token", "-gyazo"):
+            result = self.run_script(name)
+            self.assertNotEqual(result.returncode, 0, name)
+        self.assertEqual(self.op_calls(), [])
+
+    def test_直接渡した参照は許可リストの役割と同じ項目でもキャッシュしない(self):
+        """キャッシュの入口は役割だけ。参照の形で渡すと、等級の線引きの外を通れてしまう。"""
+        result = self.run_script("op://vault-a/gyazo-id/credential")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
+        self.assertEqual(self.cached_entries(), [])
+
+    def test_forget_は役割に移る前の参照のキャッシュも消せる(self):
+        legacy = "op://Automation/Gyazo API/credential"
+        encoded = base64.b64encode(b"legacy-token").decode()
+        self.keychain_path(legacy).write_text(f"1:{encoded}")
+        result = self.run_script("--forget", legacy)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(self.keychain.iterdir()), [])
+
+    def test_forget_は充てた項目の名前の控えも消す(self):
+        self.run_script(ROLE)
+        self.run_script("--forget", ROLE)
+        self.assertEqual(list(self.keychain.iterdir()), [], "控えが残っている")
 
     # --- キャッシュの寿命 ---
     #
@@ -335,41 +530,41 @@ class SecretReadTestCase(unittest.TestCase):
     # 対で見る。
 
     def test_寿命を過ぎたら_op_から取り直して新しい値を返す(self):
-        self.run_script(GYAZO_REF, ttl=100)
+        self.run_script(ROLE, ttl=100)
         self.set_op_value("rotated-token")
-        self.age_cache(GYAZO_REF, 200)
+        self.age_cache(ROLE, 200)
 
-        result = self.run_script(GYAZO_REF, ttl=100)
+        result = self.run_script(ROLE, ttl=100)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "rotated-token\n")
 
     def test_取り直したら次の呼び出しでは_op_を呼ばない(self):
         """取り直しで時刻が進むこと。進まなければ毎回 op を叩きに行ってしまう。"""
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
-        self.run_script(GYAZO_REF, ttl=100)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
+        self.run_script(ROLE, ttl=100)
         calls_after_refresh = len(self.op_calls())
 
-        self.run_script(GYAZO_REF, ttl=100)
+        self.run_script(ROLE, ttl=100)
         self.assertEqual(len(self.op_calls()), calls_after_refresh)
 
     def test_取り直しに失敗しても古い値で動き続ける(self):
         """本命の性質。1Password が閉じていても呼び出し側は止まらない。"""
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
 
-        result = self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        result = self.run_script(ROLE, ttl=100, op_fails=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
 
     def test_取り直しに失敗した直後は_op_を呼び直さない(self):
         """再試行の抑制。これが無いとロック中は呼び出しのたびにタイムアウトを待つ。"""
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
-        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
+        self.run_script(ROLE, ttl=100, op_fails=True)
         calls_after_failure = len(self.op_calls())
 
-        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.run_script(ROLE, ttl=100, op_fails=True)
         self.assertEqual(len(self.op_calls()), calls_after_failure)
 
     def test_取り直しに失敗したら短い間隔でもう一度試す(self):
@@ -379,63 +574,63 @@ class SecretReadTestCase(unittest.TestCase):
         だった。期限切れ後の最初の読み出しが毎回ロック中に当たる構成 (夜間の
         scheduled task) では失敗が毎日繰り返され、いつまでもローテートに追いつかない。
         """
-        self.run_script(GYAZO_REF, ttl=100000, retry=60)
-        self.age_cache(GYAZO_REF, 200000)
-        self.run_script(GYAZO_REF, ttl=100000, retry=60, op_fails=True)
+        self.run_script(ROLE, ttl=100000, retry=60)
+        self.age_cache(ROLE, 200000)
+        self.run_script(ROLE, ttl=100000, retry=60, op_fails=True)
         self.set_op_value("rotated-token")
 
         # 間隔の内側では呼び直さない (ロック中に毎回タイムアウトを待たない)
-        result = self.run_script(GYAZO_REF, ttl=100000, retry=60)
+        result = self.run_script(ROLE, ttl=100000, retry=60)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
 
         # 間隔を過ぎたら試す。TTL (100000 秒) は待たない
-        self.age_failed_attempt(GYAZO_REF, 61)
-        result = self.run_script(GYAZO_REF, ttl=100000, retry=60)
+        self.age_failed_attempt(ROLE, 61)
+        result = self.run_script(ROLE, ttl=100000, retry=60)
         self.assertEqual(result.stdout, "rotated-token\n")
 
     def test_取り直しに失敗しても最終取得時刻は動かさない(self):
         """--check が、失敗しただけの時刻を「取得した時刻」として見せない。"""
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 3 * 3600)
-        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 3 * 3600)
+        self.run_script(ROLE, ttl=100, op_fails=True)
 
         listing = self.run_script("--check").stdout
         self.assertIn("3 時間前に取得", listing)
         self.assertIn("取り直しに失敗", listing)
 
     def test_取り直しに成功したら失敗の控えを消す(self):
-        self.run_script(GYAZO_REF, ttl=100, retry=0)
-        self.age_cache(GYAZO_REF, 200)
-        self.run_script(GYAZO_REF, ttl=100, retry=0, op_fails=True)
-        self.assertTrue(self.keychain_path(f"{GYAZO_REF}#attempt").exists())
+        self.run_script(ROLE, ttl=100, retry=0)
+        self.age_cache(ROLE, 200)
+        self.run_script(ROLE, ttl=100, retry=0, op_fails=True)
+        self.assertTrue(self.attempt_path(ROLE).exists())
 
-        self.run_script(GYAZO_REF, ttl=100, retry=0)
-        self.assertFalse(self.keychain_path(f"{GYAZO_REF}#attempt").exists())
+        self.run_script(ROLE, ttl=100, retry=0)
+        self.assertFalse(self.attempt_path(ROLE).exists())
         self.assertNotIn("取り直しに失敗", self.run_script("--check").stdout)
 
     def test_refresh_で取り直せたら失敗の控えを消す(self):
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
-        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
+        self.run_script(ROLE, ttl=100, op_fails=True)
 
-        self.run_script("--refresh", GYAZO_REF)
+        self.run_script("--refresh", ROLE)
         self.assertNotIn("取り直しに失敗", self.run_script("--check").stdout)
 
     def test_forget_は失敗の控えも消す(self):
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
-        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
+        self.run_script(ROLE, ttl=100, op_fails=True)
 
-        self.run_script("--forget", GYAZO_REF)
+        self.run_script("--forget", ROLE)
         self.assertEqual(self.cached_entries(), [])
 
     def test_取り直しに失敗しても値は壊さない(self):
         """時刻だけ進めるつもりで値まで飛ばしていないこと。"""
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
-        self.run_script(GYAZO_REF, ttl=100, op_fails=True)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
+        self.run_script(ROLE, ttl=100, op_fails=True)
 
-        result = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        result = self.run_script(ROLE, ttl=100, with_op=False)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
 
     def test_Keychain_に書けなくてもキャッシュは残る(self):
@@ -444,17 +639,17 @@ class SecretReadTestCase(unittest.TestCase):
         この仕組みの本命は「1Password が閉じていても呼び出し側が止まらない」ことなので、
         Keychain が一時的に書けないだけでキャッシュを失ってはいけない。
         """
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
 
         # 書き込みだけが失敗する状況で取り直しに行く (op は成功する)
-        result = self.run_script(GYAZO_REF, ttl=100, keychain_readonly=True)
+        result = self.run_script(ROLE, ttl=100, keychain_readonly=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
         self.assertTrue(
-            self.keychain_path(GYAZO_REF).exists(), "書き込み失敗でキャッシュが消えた"
+            self.cache_path(ROLE).exists(), "書き込み失敗でキャッシュが消えた"
         )
-        again = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        again = self.run_script(ROLE, ttl=100, with_op=False)
         self.assertEqual(again.stdout, "gyazo-token-abc\n")
 
     def test_refresh_が失敗してもキャッシュは残る(self):
@@ -463,15 +658,15 @@ class SecretReadTestCase(unittest.TestCase):
         消してから取り直していると、1Password がロック中に打ったときに
         「消えた」だけが残る — 無人セッションが止まる、防ぎたかった状態そのもの。
         """
-        self.run_script(GYAZO_REF, ttl=100)
+        self.run_script(ROLE, ttl=100)
 
-        result = self.run_script("--refresh", GYAZO_REF, op_fails=True)
+        result = self.run_script("--refresh", ROLE, op_fails=True)
         self.assertNotEqual(result.returncode, 0, "失敗が呼び出し側へ伝わっていない")
 
         self.assertTrue(
-            self.keychain_path(GYAZO_REF).exists(), "--refresh の失敗でキャッシュが消えた"
+            self.cache_path(ROLE).exists(), "--refresh の失敗でキャッシュが消えた"
         )
-        again = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        again = self.run_script(ROLE, ttl=100, with_op=False)
         self.assertEqual(again.stdout, "gyazo-token-abc\n")
 
     def test_op_が返ってこなくても待たされずキャッシュを返す(self):
@@ -480,11 +675,11 @@ class SecretReadTestCase(unittest.TestCase):
         値だけを見ても通ってしまう (待った末に諦めても同じ値が出る) ので、経過時間まで
         見る。閾値は op を 30 秒黙らせた設定と明確に切り分けられるところに置く。
         """
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
 
         started = time.monotonic()
-        result = self.run_script(GYAZO_REF, ttl=100, refresh_timeout=1, op_hangs=30)
+        result = self.run_script(ROLE, ttl=100, refresh_timeout=1, op_hangs=30)
         elapsed = time.monotonic() - started
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -492,36 +687,36 @@ class SecretReadTestCase(unittest.TestCase):
         self.assertLess(elapsed, 15, "タイムアウトが効かず op の応答を待っている")
 
     def test_TTL_0_なら取り直さない(self):
-        self.run_script(GYAZO_REF, ttl=0)
+        self.run_script(ROLE, ttl=0)
         self.set_op_value("rotated-token")
-        self.age_cache(GYAZO_REF, 10**6)
+        self.age_cache(ROLE, 10**6)
         calls_before = len(self.op_calls())
 
-        result = self.run_script(GYAZO_REF, ttl=0)
+        result = self.run_script(ROLE, ttl=0)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
         self.assertEqual(len(self.op_calls()), calls_before)
 
     def test_寿命内なら_op_を呼ばない(self):
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 50)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 50)
         calls_before = len(self.op_calls())
 
-        self.run_script(GYAZO_REF, ttl=100)
+        self.run_script(ROLE, ttl=100)
         self.assertEqual(len(self.op_calls()), calls_before)
 
     def test_時刻を持たない古いキャッシュは取り直して移行する(self):
         """既にキャッシュ済みの項目を作り直させないための後方互換。"""
-        self.write_legacy_cache(GYAZO_REF, "legacy-token")
+        self.write_legacy_cache(ROLE, "legacy-token")
         self.set_op_value("rotated-token")
 
-        result = self.run_script(GYAZO_REF, ttl=100)
+        result = self.run_script(ROLE, ttl=100)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "rotated-token\n")
-        self.assertIn(":", self.keychain_path(GYAZO_REF).read_text(), "新形式へ移っていない")
+        self.assertIn(":", self.cache_path(ROLE).read_text(), "新形式へ移っていない")
 
     def test_時刻を持たない古いキャッシュも_op_が無ければそのまま読める(self):
-        self.write_legacy_cache(GYAZO_REF, "legacy-token")
-        result = self.run_script(GYAZO_REF, ttl=100, with_op=False)
+        self.write_legacy_cache(ROLE, "legacy-token")
+        result = self.run_script(ROLE, ttl=100, with_op=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "legacy-token\n")
 
@@ -533,7 +728,7 @@ class SecretReadTestCase(unittest.TestCase):
         self.assertEqual(self.cached_entries(), [])
 
     def test_TTL_が壊れていても既定で動き続ける(self):
-        result = self.run_script(GYAZO_REF, ttl="いつまでも")
+        result = self.run_script(ROLE, ttl="いつまでも")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
         self.assertIn("SECRET_CACHE_TTL", result.stderr)
@@ -541,26 +736,26 @@ class SecretReadTestCase(unittest.TestCase):
     # --- 入れ替えと後始末 ---
 
     def test_refresh_は_op_から取り直して上書きする(self):
-        self.run_script(GYAZO_REF)
+        self.run_script(ROLE)
         self.set_op_value("rotated-token")
-        refreshed = self.run_script("--refresh", GYAZO_REF)
+        refreshed = self.run_script("--refresh", ROLE)
         self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
         self.assertEqual(refreshed.stdout, "rotated-token\n")
         # 以後はキャッシュも新しい値になっている
-        self.assertEqual(self.run_script(GYAZO_REF, with_op=False).stdout, "rotated-token\n")
+        self.assertEqual(self.run_script(ROLE, with_op=False).stdout, "rotated-token\n")
 
     def test_forget_でキャッシュが消える(self):
-        self.run_script(GYAZO_REF)
-        result = self.run_script("--forget", GYAZO_REF)
+        self.run_script(ROLE)
+        result = self.run_script("--forget", ROLE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.cached_entries(), [])
 
     def test_forget_はキャッシュが無くても失敗しない(self):
-        result = self.run_script("--forget", GYAZO_REF)
+        result = self.run_script("--forget", ROLE)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_refresh_はキャッシュが無い状態からでも通る(self):
-        result = self.run_script("--refresh", GYAZO_REF)
+        result = self.run_script("--refresh", ROLE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "gyazo-token-abc\n")
         self.assertEqual(len(self.cached_entries()), 1)
@@ -568,7 +763,7 @@ class SecretReadTestCase(unittest.TestCase):
     # --- 誤用と失敗 ---
 
     def test_op_が失敗したら値を出さず非ゼロで終わる(self):
-        result = self.run_script(GYAZO_REF, op_fails=True)
+        result = self.run_script(ROLE, op_fails=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
         self.assertEqual(self.cached_entries(), [], "失敗した値をキャッシュしている")
@@ -590,18 +785,22 @@ class SecretReadTestCase(unittest.TestCase):
         self.assertEqual(self.op_calls(), [])
 
     def test_参照を2つ渡したら弾く(self):
-        result = self.run_script(GYAZO_REF, SSH_REF)
+        result = self.run_script(ROLE, SSH_REF)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.op_calls(), [])
 
     # --- 状態の確認 ---
 
     def test_check_は値を出さない(self):
-        self.run_script(GYAZO_REF)
+        self.run_script(ROLE)
+        calls_before = len(self.op_calls())
         result = self.run_script("--check")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(GYAZO_REF, result.stdout)
+        self.assertIn(ROLE, result.stdout)
         self.assertIn("キャッシュ済み", result.stdout)
+        self.assertIn("項目「Gyazo API」", result.stdout, "充てた項目の名前を出していない")
+        # ロック中に打っても待たされないよう、--check は op を呼ばない
+        self.assertEqual(len(self.op_calls()), calls_before, "--check が op を呼んでいる")
         self.assertNotIn("gyazo-token-abc", result.stdout, "--check が値を漏らしている")
 
     def test_check_は未キャッシュを見分ける(self):
@@ -609,20 +808,21 @@ class SecretReadTestCase(unittest.TestCase):
         self.assertIn("未キャッシュ", result.stdout)
 
     def test_check_は鮮度を出すが値は出さない(self):
-        self.run_script(GYAZO_REF)
-        self.age_cache(GYAZO_REF, 7200)
+        self.run_script(ROLE)
+        self.age_cache(ROLE, 7200)
         result = self.run_script("--check")
         self.assertIn("2 時間前", result.stdout)
         self.assertNotIn("gyazo-token-abc", result.stdout, "--check が値を漏らしている")
 
     def test_check_は時刻を持たない古いキャッシュを見分ける(self):
-        self.write_legacy_cache(GYAZO_REF, "legacy-token")
+        self.write_legacy_cache(ROLE, "legacy-token")
         result = self.run_script("--check")
         self.assertIn("取得時刻が不明", result.stdout)
         self.assertNotIn("legacy-token", result.stdout, "--check が値を漏らしている")
 
     def test_check_は許可リストの不正な行を指摘する(self):
-        self.allowlist.write_text("not-a-reference\n")
+        # 役割に移る前の書式 (op:// の参照) は、役割名ではないので不正として指摘する
+        self.allowlist.write_text("op://Automation/Gyazo API/credential\n")
         result = self.run_script("--check")
         self.assertIn("不正", result.stdout)
 
@@ -642,25 +842,25 @@ class SecretReadTestCase(unittest.TestCase):
         無確認で読める。
         """
         permissive = self.root / "permissive-allowlist"
-        permissive.write_text(f"{GYAZO_REF}\n{SSH_REF}\n")
+        permissive.write_text(f"{ROLE}\n{SSH_ROLE}\n")
         # clean_env はこの変数を落とすので、明示して渡す (攻撃する側の再現)
         result = self.run_script(
-            SSH_REF, extra_env={"SECRET_CACHE_ALLOWLIST": str(permissive)}
+            SSH_ROLE, extra_env={"SECRET_CACHE_ALLOWLIST": str(permissive)}
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.cached_entries(), [], "許可リストに無い参照がキャッシュされた")
+        self.assertNotEqual(result.returncode, 0, "許可リストに無い役割を読んでいる")
+        self.assertEqual(self.cached_entries(), [], "許可リストに無い役割がキャッシュされた")
 
     def test_許可リストは本体の隣のものが読まれる(self):
         """symlink 越しに呼ばれても、リンクの置き場ではなく実体の隣を見る。"""
         elsewhere = self.root / "elsewhere"
         elsewhere.mkdir()
-        (self.root / "secret-cache-allowlist").write_text(f"{SSH_REF}\n")   # 囮
+        (self.root / "secret-cache-allowlist").write_text(f"{SSH_ROLE}\n")   # 囮
         link = elsewhere / "secret-read"
         link.symlink_to(self.SCRIPT_UNDER_TEST)
         original, self.SCRIPT_UNDER_TEST = self.SCRIPT_UNDER_TEST, link
         try:
-            self.run_script(GYAZO_REF)
-            self.run_script(SSH_REF)
+            self.run_script(ROLE)
+            self.run_script(SSH_ROLE)
         finally:
             self.SCRIPT_UNDER_TEST = original
         self.assertEqual(len(self.cached_entries()), 1, "実体の隣の許可リストが使われていない")
@@ -686,18 +886,18 @@ class SecretReadTestCase(unittest.TestCase):
             "security が端末へプロンプトを出す形で呼ばれた (パイプの値は読まれない)",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.run_script(GYAZO_REF, with_op=False).stdout.strip(), "gyazo-token-abc")
+        self.assertEqual(self.run_script(ROLE, with_op=False).stdout.strip(), "gyazo-token-abc")
 
     def test_端末から打った読み出しでも期限切れを取り直せる(self):
         """素の `secret-read <参照>` も、取り直しのときに同じ書き込みを通る。"""
         self.open_pty()
-        self.run_script(GYAZO_REF, ttl=100)
-        self.age_cache(GYAZO_REF, 200)
+        self.run_script(ROLE, ttl=100)
+        self.age_cache(ROLE, 200)
         self.set_op_value("rotated-token")
-        result = self.run_script(GYAZO_REF, ttl=100, controlling_tty=True)
+        result = self.run_script(ROLE, ttl=100, controlling_tty=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.keychain / "PROMPTED_ON_TTY").exists())
-        self.assertEqual(self.run_script(GYAZO_REF, with_op=False).stdout.strip(), "rotated-token")
+        self.assertEqual(self.run_script(ROLE, with_op=False).stdout.strip(), "rotated-token")
 
     def test_偽_security_は制御端末があると_stdin_を読まない(self):
         """対照。偽物が本物の挙動を再現していなければ、上の 2 本は何も確かめていない。"""
@@ -712,32 +912,33 @@ class SecretReadTestCase(unittest.TestCase):
         self.assertTrue((self.keychain / "PROMPTED_ON_TTY").exists())
 
     def test_warm_は許可リストの未キャッシュを入れて値を出さない(self):
-        other = "op://Automation/Other/credential"
-        self.allowlist.write_text(f"{GYAZO_REF}\n{other}\n")
+        other = OTHER_ROLE
+        self.items.append(credential_item("cosense-id", "Cosense PAT", "pat-xyz", [f"secret-read/{other}"]))
+        self.allowlist.write_text(f"{ROLE}\n{other}\n")
         result = self.run_script("--warm")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.op_calls()), 2)
+        self.assertEqual(len(self.fetches()), 2)
         self.assertEqual(len(self.cached_entries()), 2)
-        self.assertIn(GYAZO_REF, result.stdout)
+        self.assertIn(ROLE, result.stdout)
         self.assertIn(other, result.stdout)
         self.assertNotIn("gyazo-token-abc", result.stdout + result.stderr, "--warm が値を漏らしている")
         # 温めた後は op が無くても読める = 無人セッションが止まらない
-        self.assertEqual(self.run_script(GYAZO_REF, with_op=False).stdout, "gyazo-token-abc\n")
+        self.assertEqual(self.run_script(ROLE, with_op=False).stdout, "gyazo-token-abc\n")
 
     def test_warm_はキャッシュ済みなら_op_を呼ばない(self):
-        self.run_script(GYAZO_REF)
+        self.run_script(ROLE)
         result = self.run_script("--warm")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.op_calls()), 1, "キャッシュ済みでも op を呼んでいる")
+        self.assertEqual(len(self.fetches()), 1, "キャッシュ済みでも op を呼んでいる")
 
     def test_warm_は取れなかった参照を名乗って非ゼロで終わる(self):
         result = self.run_script("--warm", op_fails=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(GYAZO_REF, result.stdout + result.stderr)
+        self.assertIn(ROLE, result.stdout + result.stderr)
         self.assertEqual(self.cached_entries(), [], "失敗した値をキャッシュしている")
 
     def test_warm_は引数を取らない(self):
-        result = self.run_script("--warm", GYAZO_REF)
+        result = self.run_script("--warm", ROLE)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.op_calls(), [])
 

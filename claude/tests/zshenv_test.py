@@ -14,7 +14,6 @@ zshenv は「人が打つとき以外にも要るもの」の置き場。zshrc �
 """
 
 import os
-import re
 import subprocess
 import tempfile
 import unittest
@@ -88,7 +87,7 @@ class NonInteractiveEssentialsTest(unittest.TestCase):
 
     def test_exports_the_gyazo_token_reference(self):
         env = source_zshenv(GYAZO_TOKEN_REF=None)
-        self.assertTrue(env["GYAZO_TOKEN_REF"].startswith("op://"))
+        self.assertEqual(env["GYAZO_TOKEN_REF"], "gyazo-token")
 
     def test_exports_the_gyazo_token_command_for_mokume(self):
         # mokume の口はコマンドの形しか受け取らない (スキルは eval・example-shots は bash -c)。
@@ -207,15 +206,14 @@ class LoginShellPathOrderTest(unittest.TestCase):
 
 
 class AllowlistConsistencyTest(unittest.TestCase):
-    """zshenv が渡す参照は、どれも secret-cache-allowlist に載っている (issue #215)。
+    """zshenv が secret-read に渡す役割は、どれも secret-cache-allowlist に載っている (issue #215)。
 
     zshenv の参照は無人セッション (hook・scheduled task) のために置いてある。許可リストに
-    無い参照は secret-read がキャッシュせず、素の `op read` へ落ちる — つまり 1Password の
-    承認を待って止まる。このリポジトリが繰り返し踏んできた症状で、原因が「2 か所の
-    不一致」だとは気付きにくい。
+    無い役割を secret-read は読まずに止まる — 無人セッションでは値が引けずに黙って止まる。
+    このリポジトリが繰り返し踏んできた症状で、原因が「2 か所の不一致」だとは気付きにくい。
 
-    mokume の鍵の参照は日付入りのファイル名で、鍵を差し替えるたびに zshenv と許可リストの
-    両方を直す必要がある。片方だけ直した変更を CI で落とす。
+    あわせて、**公開リポジトリに `op://` の参照を書かない**ことも固定する (issue #289)。
+    保管庫や項目の名前は人ごとに違い、書いた時点で他の人には意味の無い設定になる。
     """
 
     ALLOWLIST = REPO / "secret-cache-allowlist"
@@ -224,32 +222,61 @@ class AllowlistConsistencyTest(unittest.TestCase):
         lines = (line.strip() for line in self.ALLOWLIST.read_text().splitlines())
         return {line for line in lines if line and not line.startswith("#")}
 
-    def exported_references(self):
-        """zshenv を実際に source し、export された変数の値から op:// の参照を拾う。
+    def exported(self):
+        """zshenv を実際に source し、export された変数を {名前: 値} で返す。
 
         ファイルを正規表現で読まないのは、`$GYAZO_TOKEN_REF` のように**別の変数を経由して
         渡している参照**を展開後の形で見るためと、コメントの中の例を拾わないため。
         """
         output = subprocess.run(
-            ["zsh", "-f", "-c", f'source "{ZSHENV}"; export -p'],
+            ["zsh", "-f", "-c", f'source "{ZSHENV}"; env -0'],
             env={"HOME": os.environ["HOME"], "PATH": "/usr/bin:/bin"},
             capture_output=True, text=True, check=True,
         ).stdout
-        # 参照は空白を含む (op://Automation/Gyazo API/credential)。引用符か行末まで
-        return set(re.findall(r"op://[^\"'$\\\n]+", output))
+        return dict(entry.split("=", 1) for entry in output.split("\0") if "=" in entry)
 
-    def test_references_are_found(self):
+    def exported_roles(self):
+        """secret-read に渡している役割。*_REF はそのまま、*_CMD は secret-read の引数を取る。"""
+        env = self.exported()
+        roles = {value for name, value in env.items() if name.endswith("_TOKEN_REF")}
+        for name, command in env.items():
+            if not name.endswith("_CMD") or "secret-read" not in command:
+                continue
+            # 使う側と同じく bash で eval して、変数を経由した引数も展開後の形で見る
+            argument = subprocess.run(
+                ["bash", "-c", 'eval "set -- $CMD"; printf "%s" "$2"'],
+                env={"PATH": "/usr/bin:/bin", "CMD": command, **env},
+                capture_output=True, text=True, check=True,
+            ).stdout
+            roles.add(argument)
+        return roles
+
+    def test_roles_are_found(self):
         """対照。1 つも拾えていなければ、下は何も確かめていない。"""
-        references = self.exported_references()
-        self.assertIn("op://Automation/Gyazo API/credential", references)
-        self.assertGreaterEqual(len(references), 2, references)
+        roles = self.exported_roles()
+        self.assertIn("gyazo-token", roles)
+        self.assertIn("mokume-app-key", roles)
 
-    def test_every_exported_reference_is_allowlisted(self):
-        missing = self.exported_references() - self.allowed()
+    def test_every_exported_role_is_allowlisted(self):
+        missing = self.exported_roles() - self.allowed()
         self.assertEqual(
             missing, set(),
-            "zshenv が渡している参照が secret-cache-allowlist に無い "
-            "(キャッシュされず、無人セッションが 1Password の承認待ちで止まる)",
+            "zshenv が渡している役割が secret-cache-allowlist に無い "
+            "(secret-read が読まずに止まり、無人セッションが値を引けない)",
+        )
+
+    def test_no_op_reference_is_exported(self):
+        leaked = {name: value for name, value in self.exported().items() if "op://" in value}
+        self.assertEqual(
+            leaked, {},
+            "zshenv が op:// の参照を渡している (保管庫や項目の名前は人ごとに違う。役割名で渡す)",
+        )
+
+    def test_allowlist_has_no_op_reference(self):
+        references = {line for line in self.allowed() if "op://" in line}
+        self.assertEqual(
+            references, set(),
+            "secret-cache-allowlist に op:// の参照がある (役割名だけを書く)",
         )
 
 
