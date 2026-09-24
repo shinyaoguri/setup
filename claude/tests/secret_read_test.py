@@ -153,7 +153,7 @@ elif args[:1] == ["read"]:
             continue
         for field in item.get("fields", []):
             if parts[2] in (field["id"], field["label"]):
-                print(field["value"])
+                print(field.get("value", ""))
                 sys.exit(0)
         for file in item.get("files", []):
             if parts[2] == file["name"]:
@@ -464,6 +464,24 @@ class SecretReadTestCase(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, pem + "\n")
         self.assertEqual(self.run_script(ROLE, with_op=False).stdout, pem + "\n")
+
+    def test_credential_が空なら添付ファイルを読む(self):
+        """「API 認証情報」の項目は credential の欄を最初から持つ。空のまま鍵を添付した形。
+
+        欄があるかどうかで選ぶと、空の欄を読みに行って添付に届かない (実機の mokume-agent の
+        項目で踏んだ)。本物の op は空の欄の value を JSON に出さないので、ここでも出さない。
+        """
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----"
+        self.items[0]["fields"] = [{"id": "credential", "label": "認証情報", "type": "CONCEALED"}]
+        self.items[0]["files"] = [{"name": "app.2026-08-26.private-key.pem", "content": pem}]
+        result = self.run_script(ROLE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, pem + "\n")
+
+    def test_credential_に値があれば添付ファイルより優先する(self):
+        self.items[0]["files"] = [{"name": "memo.txt", "content": "添付の中身"}]
+        result = self.run_script(ROLE)
+        self.assertEqual(result.stdout, "gyazo-token-abc\n")
 
     def test_credential_も添付ファイルも1つに決まらなければ失敗する(self):
         self.items[0]["fields"] = []
