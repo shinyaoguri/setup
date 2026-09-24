@@ -110,6 +110,11 @@ python3 claude/tests/runcat_metrics_test.py
   shinyaoguri/claude-plugins の repo-standards プラグイン (`/repo-audit` 等が
   `~/.claude/repo-standards.json` 経由で読む)。項目の増減はテストが守るが、
   check type や builtin 名の変更はプラグイン側スクリプトとの契約が壊れないか確認する
+- **Bash ツールのシェルは zsh で、MULTIOS が効いている** (setup#291)。`cmd >/dev/null | head` は
+  stdout を /dev/null とパイプの**両方**へ流すので、bash の感覚で「捨てた」出力が素通りする。これで
+  secret-read の値がトランスクリプトに出た。**秘密の値の行き先は `claude/secret-output-guard.py` が
+  コマンド文字列から判定し**、`$(secret-read <役割>)` を値を受け取る道具 (curl・gh など) の引数か
+  環境変数の前置に渡す形だけを通す。道具が足りなければ同ファイルの `CONSUMERS` に足す
 - **シグナルの送り先は名前ではなく親子関係で持ち主を決める** (`claude/signal-guard.py`・setup#150)。
   Bash ツールのシェルもフックもそのセッションの `claude` プロセスの子なので、対象の一番近い
   `claude` の祖先が自分と違えば別セッションのもので deny になる。`pkill` / `killall` /

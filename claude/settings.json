@@ -127,6 +127,12 @@
             "command": "~/.claude/signal-guard.py",
             "timeout": 10,
             "statusMessage": "シグナルの送り先の持ち主を確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/secret-output-guard.py",
+            "timeout": 10,
+            "statusMessage": "秘密の値が出力に出ないか確認中"
           }
         ]
       },

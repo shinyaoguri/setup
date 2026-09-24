@@ -518,6 +518,24 @@
       "sunset": "本体が無人セッション向けの秘密の受け渡し (スコープを絞った保管庫連携) を持ったら"
     },
     {
+      "id": "secret-values-off-transcript",
+      "intent": "秘密の値を Bash ツールの出力 (= セッションのトランスクリプト) に出さない",
+      "why": "出力はトランスクリプトに残り、モデルの文脈にも入る。一度出た秘密は発行し直すしかない",
+      "rationale": ["shinyaoguri/setup#291", "claude/secret-output-guard.py の docstring"],
+      "means": [
+        {"kind": "self", "ref": "claude/secret-output-guard.py"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
+        {"surface": "tool-name", "name": "Bash", "stability": "documented"},
+        {"surface": "hook-input", "name": "tool_input.command", "stability": "documented"},
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "Bash ツールのシェルは zsh で、MULTIOS が有効 (`cmd >/dev/null | x` は stdout を両方へ流す)", "stability": "undocumented"}
+      ],
+      "verify": ["claude/tests/secret_output_guard_test.py"],
+      "sunset": "本体が Bash ツールの出力から秘密を伏せる (登録した値を出力の前に隠す) ようになったら"
+    },
+    {
       "id": "config-distribution",
       "intent": "グローバル設定の実体をこのリポジトリに置き、どのマシンでも同じ形に配る",
       "why": "~/.claude/ を直接直すと実体を見失い、マシンごとに設定がずれる",
