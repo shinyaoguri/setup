@@ -578,14 +578,14 @@ class NodeVersionTest(unittest.TestCase):
 class WorktreeSourceTest(unittest.TestCase):
     """worktree から流した playbook に、~/ 配下の symlink を張らせない (issue #209)。
 
-    tasks/claude.yml と tasks/zshrc.yml は symlink の先を playbook_dir から組む。worktree
+    tasks/claude.yml・tasks/zshrc.yml・tasks/codex.yml は symlink の先を playbook_dir から組む。worktree
     (.claude/worktrees/*) から流すと ~/.claude/* と ~/.zshrc が worktree を指し、worktree が
     掃除された時点でリンクが全部切れる。フックと autoMode は fail-open なので、切れた状態では
     **安全装置が無音で全部外れる**。このリポジトリの開発は worktree で行うのが常で、
     「確かめるために --tags claude を流す」で踏みうる。
     """
 
-    LINKING = ("claude.yml", "zshrc.yml")
+    LINKING = ("claude.yml", "zshrc.yml", "codex.yml")
 
     def test_the_guard_comes_before_any_symlink(self):
         """ansible が無い環境 (CI) でも見られる形の検査。"""
