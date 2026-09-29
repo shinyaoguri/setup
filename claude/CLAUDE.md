@@ -33,7 +33,7 @@
 - Squash merge 前提。PR タイトルもコミットと同形式に書く (マージコミットのメッセージになる)。**Issue を閉じる `Closes #N` は PR 本文に書く** — squash ではコミットメッセージが PR タイトル + 本文へ置き換わるので、コミット側に書いた名乗りは GitHub へ届かず Issue が開いたまま残る
 - コミットログと PR 本文 (目的・変更点・確認方法) を丁寧に書くこと。それが書けていて CI が green なら、push / merge は指示を待たず進めてよい (force push・main への直接 push は上記の「押し通す」に当たるので事前確認)
 - **マージを起点にリポジトリが自動で走らせる後続処理はマージに含まれる** (リリース・タグ・パッケージ公開・デプロイなど)。「公開だから」を理由に確認を挟まず、規約どおりの PR ならマージまで一続きで進めて結果を報告する。自動化の有無と bump 規則はリポジトリの規約・ワークフロー定義から読み取る。人が明示的に起こす公開操作 (手動の `workflow_dispatch`・手動タグ・外部への告知) は開発ループの帰結ではないので事前確認
-- merge 後は main に戻って pull する。**ローカルブランチの掃除は Stop hook が `git gone-clean` で自動的に行う**ので、自分で `git branch -D <名前>` を打たない (追跡先が畳まれる前に打つと safety guard が ask を返し、人手の確認を要求してしまう)。その場で消したいときは `git gone-clean` / `git stale-clean` を使う — 状態を変えるコマンドなので allow には置かないが、safety guard が「gone なブランチだけを消す」と読めるため確認は出ない
+- merge 後は main に戻って pull する。**ローカルブランチの掃除は Stop hook が `git gone-clean` で自動的に行う** (Codex も `~/.codex/hooks.json` の同じ Stop hook で行う) ので、自分で `git branch -D <名前>` を打たない (追跡先が畳まれる前に打つと safety guard が ask を返し、人手の確認を要求してしまう)。その場で消したいときは `git gone-clean` / `git stale-clean` を使う — 状態を変えるコマンドなので allow には置かないが、safety guard が「gone なブランチだけを消す」と読めるため確認は出ない
 - **Issue / PR へのコメントは本文の末尾に署名を付けて投稿する**。同じ場所に人間も複数のエージェントも書き込むので、発言の出どころが後から辿れる必要がある (ChatGPT Codex は GitHub App 経由の投稿なので GitHub が「commented with 〜」を描くが、ローカルの gh CLI から投稿する Claude Code にその表示は出ない)。水平線を挟んで次の 1 行 — 付け忘れは gh-comment-guard フックが差し戻す:
 
   ```markdown

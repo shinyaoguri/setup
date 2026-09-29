@@ -53,6 +53,10 @@
       tags: claude
       ansible.builtin.import_tasks: tasks/claude.yml
 
+    - name: Codex global hooks
+      tags: codex
+      ansible.builtin.import_tasks: tasks/codex.yml
+
     - name: fnm and Node.js
       tags: fnm
       ansible.builtin.import_tasks: tasks/fnm.yml
