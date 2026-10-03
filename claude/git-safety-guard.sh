@@ -68,8 +68,12 @@ command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null
 # git のサブコマンドの手前にはグローバルオプション (-C <path> など) が入りうるので、
 # 「git … <サブコマンド>」の間は緩く見る。ask 止まりなので多少の過検出は許容する。
 readonly GIT='(^|[;&|[:space:]])git([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+'
-# サブコマンドと注目する引数の間。引数がサブコマンドの直後に来る場合もあるので丸ごと省ける
-readonly ARG='([[:space:]]|$)(.*[[:space:]])?'
+# サブコマンドと注目する引数の間。引数がサブコマンドの直後に来る場合もあるので丸ごと省ける。
+# 区切り (; & |) は越えない — `.*` だった頃は同じ行の別コマンドの引数まで読み、
+# `git push origin HEAD; gh api graphql -f query=…` の gh の -f を force push と
+# 読んでいた (setup#300)。引用の中の区切りで照合が切れる見逃しは、引用を解釈する
+# 解析 (setup#193) の範囲に置く。
+readonly ARG='([[:space:]]|$)([^;&|]*[[:space:]])?'
 
 # エイリアスに包まれた危険操作を見えるようにする。`git gone-clean` のようなエイリアスは
 # 展開しない限り `git branch -D` が文字列に現れず、検査を素通りしてしまう。
