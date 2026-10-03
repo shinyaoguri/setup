@@ -183,8 +183,10 @@ class DestructiveCommandTest(HookTestCase):
             with self.subTest(command=command):
                 self.assert_allowed(self.run_hook(command))
 
-    def test_stash_drop_asks(self):
-        self.assert_decision(self.run_hook("git stash drop"), "ask")
+    def test_stash_drop_outside_a_repository_asks(self):
+        """スタックを読めず固定できないときは、従来どおり ask。"""
+        with tempfile.TemporaryDirectory() as outside:
+            self.assert_decision(self.run_hook("git stash drop", cwd=outside), "ask")
 
     def test_command_after_another_is_caught(self):
         self.assert_decision(
@@ -193,6 +195,74 @@ class DestructiveCommandTest(HookTestCase):
 
     def test_git_with_global_option_is_caught(self):
         self.assert_decision(self.run_hook("git -C /tmp/repo reset --hard"), "ask")
+
+
+class StashDropTest(HookTestCase):
+    """stash drop / clear は、その時点の全エントリを固定してから通す (setup#301)。
+
+    スタックは worktree 間で共有され、消す対象は変数で渡されることが多い
+    (実例 3 件すべて)。どのエントリが消えても取り戻せるよう、全件を固定する。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.commit("init")
+
+    def push_stash(self, content):
+        (self.repo / "f.txt").write_text(content)
+        self.git("add", "f.txt")
+        self.git("stash", "push", "-q", "-m", content)
+        return self.git("rev-parse", "stash@{0}").stdout.strip()
+
+    def test_stash_drop_pins_every_entry(self):
+        shas = {self.push_stash("a"), self.push_stash("b")}
+        reason = self.assert_auto_approved(self.run_hook("git stash drop"))
+        pinned = {self.git("rev-parse", ref).stdout.strip() for ref in self.backups()}
+        self.assertEqual(pinned, shas)
+        self.assertIn("stash apply", reason, "復元方法が理由に書かれていない")
+
+    def test_stash_drop_with_variable_target_is_pinned(self):
+        """対象が変数でも、全件を固定してあれば何が消えても取り戻せる。"""
+        sha = self.push_stash("a")
+        self.assert_allowed(
+            self.run_hook("ref=stash@{0}; git stash drop -q $ref 2>&1 | tail -1")
+        )
+        self.assertEqual(
+            [self.git("rev-parse", ref).stdout.strip() for ref in self.backups()], [sha]
+        )
+
+    def test_stash_pins_are_not_duplicated(self):
+        """共有されるスタックを drop のたびに全件固定し直すと、ref が増え続ける。"""
+        self.push_stash("a")
+        self.push_stash("b")
+        self.run_hook("git stash drop")
+        self.run_hook("git stash drop stash@{1}")
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_stash_clear_pins_every_entry(self):
+        self.push_stash("a")
+        self.push_stash("b")
+        self.assert_auto_approved(self.run_hook("git stash clear"))
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_stash_drop_after_push_in_the_same_command_is_denied(self):
+        """同じコマンドで積んだエントリはフックの時点に無く、固定できない。
+
+        ask にしても押す人に足せる情報が無い。分ければ固定して通せるので、
+        deny で分け方を返し、エージェントに打ち直させる。
+        """
+        for command in (
+            'git stash push -m t -- f.txt && git stash apply -q "$SHA" && git stash drop -q "$REF"',
+            "git stash && git stash drop",
+            "git stash save t; git stash clear",
+        ):
+            with self.subTest(command=command):
+                reason = self.assert_decision(self.run_hook(command), "deny")
+                self.assertIn("分け", reason)
+
+    def test_empty_stack_is_not_asked(self):
+        """スタックが空なら捨てられるものが無い (drop は git 自身が断る)。"""
+        self.assert_auto_approved(self.run_hook("git stash drop"))
 
 
 class ReversibleOperationTest(HookTestCase):

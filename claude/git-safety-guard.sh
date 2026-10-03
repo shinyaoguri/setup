@@ -43,6 +43,8 @@
 #   作業ツリーの未コミット変更  git stash create のコミットを固定 (setup#142)
 #   ブランチの先端            git branch -D の前に refs/heads/<名前> を固定
 #   HEAD                     git reset --hard の前に固定
+#   stash の全エントリ         git stash drop / clear の前に固定 (setup#301。同じコマンドで
+#                            積んでから消す形は固定できないので、分けるよう deny で返す)
 #
 # 退避は refs/claude/discarded/* に 30 日残り、`git discarded` で一覧・復元できる
 # (tasks/git.yml)。**退避できないものは残っている** — 追跡外ファイルを消す
@@ -365,6 +367,44 @@ backup_reset_hard() { # → "<作業ツリーの ref または空>\n<HEAD の re
   printf '%s\n%s' "$worktree_ref" "$head_ref"
 }
 
+# stash drop / clear の前に、スタックの**全エントリ**を固定する (setup#301)。
+#
+# 対象を 1 つに絞らないのは、消す対象が変数で渡されることが多く (`git stash drop -q $ref`)、
+# フックの時点では決まらないため。全件を固定しておけば、どれが消えても取り戻せる。
+# スタックは worktree 間で共有されるので、すでに固定済みのコミットは固定し直さない
+# (drop のたびに全件を固定すると ref が増え続ける)。スタックが空なら固定するものが無く
+# 成功を返す — drop は git 自身が断る。
+backup_stash_entries() { # → "<sha> <ref>" を 1 行 1 件 (新しく固定したものだけ)
+  local shas sha ref out=''
+  shas=$(git stash list --format=%H 2>/dev/null) || return 1
+  for sha in $shas; do
+    [ -n "$(git for-each-ref --points-at "$sha" --format=x "$BACKUP_NS" 2>/dev/null)" ] &&
+      continue
+    # ラベルに SHA を含める。pin_object の連番はコマンド置換の中で増えて呼び手へ
+    # 戻らないので、同じラベルを同じ秒に 2 回固定すると名前が衝突して上書きになる
+    ref=$(pin_object "stash-${sha:0:12}" "$sha") || return 1
+    out="$out$sha $ref
+"
+  done
+  printf '%s' "$out"
+}
+
+# 同じコマンドの中で stash にエントリを積むか (`git stash` 単独 / push / save)。
+# 積まれたエントリはフックの時点に無く、後続の drop の前に固定できない。
+creates_stash_entry() {
+  command_segments | awk '
+    {
+      git = 0
+      for (i = 1; i <= NF; i++) {
+        if (!git) { if ($i == "git") git = 1; continue }
+        if ($i != "stash") continue
+        if (i == NF || $(i + 1) == "push" || $(i + 1) == "save" || $(i + 1) ~ /^-/) found = 1
+        break
+      }
+    }
+    END { exit !found }'
+}
+
 # 捨てられるものを消えない場所へ置き、その参照を stdout に返す。
 #
 # `git stash create` はコミットオブジェクトを作るだけで**スタックには積まない**。
@@ -656,8 +696,21 @@ fi
 
 has "${GIT}push${ARG}(--force|-f([[:space:]]|$))" &&
   danger="force push は remote の履歴を書き換える (他の作業や PR に影響する)"
-has "${GIT}stash${ARG}(drop|clear)" &&
-  danger="git stash drop / clear は退避した変更を消す"
+# git stash drop / clear — その時点の全エントリを固定してから通す (setup#301)
+stash_refs=""
+stash_pinned=false
+if has "${GIT}stash${ARG}(drop|clear)"; then
+  if creates_stash_entry; then
+    decide deny "同じコマンドの中で stash に積んでから drop / clear している。積んだエントリはこのフックが走る時点にまだ無いので、消す前に固定できない。
+
+drop / clear を**別のコマンドに分けて**打ち直す。分ければ、このフックがその時点のスタックを全件 refs/claude/discarded/* に固定してから通す (確認は出ない)。"
+  fi
+  if stash_refs=$(backup_stash_entries); then
+    stash_pinned=true
+  else
+    danger="git stash drop / clear は退避した変更を消す (消す前にスタックを固定できなかった — git リポジトリの外か、ref を作れなかった)"
+  fi
+fi
 
 if [ -n "$danger" ]; then
   decide ask "${danger}。実行前にユーザーへ確認する。
@@ -764,6 +817,15 @@ if [ -n "$branch_refs" ] &&
 $(printf '%s' "$branch_refs" | sed 's/^/  - /')
 
 復元は git branch <名前> <ref>、中身を見るだけなら git log <ref>。一覧は git discarded。取り戻せるので確認は不要。"
+fi
+
+# スタックを固定した git stash drop / clear
+if [ "$stash_pinned" = true ] &&
+  command_is_only '^git[[:space:]]+stash[[:space:]]+(drop|clear)([[:space:]]|$)'; then
+  decide allow "スタックの全エントリを refs/claude/discarded/* に固定済み${stash_refs:+ (今回新しく固定したもの:
+$(printf '%s' "$stash_refs" | sed 's/^/  - /'))}。
+
+復元は git stash apply <ref>、一覧は git discarded。取り戻せるので確認は不要。"
 fi
 
 # 退避を作った git reset --hard
