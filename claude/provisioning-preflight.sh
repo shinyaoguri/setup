@@ -61,9 +61,6 @@ printf '%s' "$command" | tr ';&|' '\n' | awk '
     }
   }
   END { exit !found }' || exit 0
-# dry-run そのものは状態を変えないので素通しする (二重に走らせない)。
-printf '%s' "$command" | grep -qE '(^|[[:space:]])(--check|-C)([[:space:]]|$)' && exit 0
-
 # `cd <dir> && ansible-playbook …` は頻出なので、cd 先を取り出して残りを予告に回す。
 workdir="."
 rest="$command"
@@ -95,6 +92,21 @@ rest=$(printf '%s' "$rest" | awk '
     print out
   }')
 
+# 出力を絞るだけの後続 (`2>&1 | tail -30`・`| grep -E "TASK|changed" | tail -12`) は外す。
+# エージェントは長い出力を絞るのが常で、絞っただけで予告を諦めると毎回人を呼ぶ
+# (setup#302)。外すのは**予告の組み立てにだけ**で、実行されるコマンドは変わらない。
+#
+# 絞りとして認めるのは tail / head / grep / cat だけで、引数は $ とバッククォートを
+# 含まない引用文字列か、区切り・置換・リダイレクト・引用符を含まない素の語に限る。
+# ここに載らない後続 (`| tee`・`| sh`・`> out`・置換入り) は外れずに残り、下の検査で
+# ask に落ちる。
+readonly FILTER_WORD='("[^"$`\\]*"|'"'"'[^'"'"']*'"'"'|[^][:space:];&|$`<>"'"'"'\\[]+)'
+readonly FILTER='\|[[:space:]]*(tail|head|grep|cat)([[:space:]]+'"$FILTER_WORD"')*[[:space:]]*'
+if [[ "$rest" =~ ^([^|]*)((${FILTER})+)$ ]]; then
+  rest=${BASH_REMATCH[1]}
+fi
+rest=$(printf '%s' "$rest" | sed -E 's/[[:space:]]+2>&1[[:space:]]*$//')
+
 # ここから先は「ansible-playbook 単体」でないと予告を組み立てられない。
 #
 # 見るのは区切り [;&|] だけでは足りない。下の dry-run は eval で走らせるので、
@@ -109,6 +121,13 @@ if printf '%s' "$rest" | grep -qE '[;&|$`<>]' ||
 ansible-playbook だけを単体で実行すれば、このフックが --check --diff で予告する。
 そのうえで実行するなら、何が変わるのかをユーザーへ伝えて判断を仰ぐ。"
 fi
+
+# 何も変えない形は予告せずに通す (dry-run を二重に走らせない)。見るのは単体だと
+# 確かめた ansible-playbook の引数だけ — コマンド全体から探していた頃は、同じ行の
+# `git -C` に反応して本実行の予告が黙って出なかった (setup#208)。
+printf '%s' "$rest" |
+  grep -qE '(^|[[:space:]])(--check|-C|--syntax-check|--list-tasks|--list-hosts|--list-tags)([[:space:]]|$)' &&
+  exit 0
 
 # --- dry-run で予告を取る ---------------------------------------------------
 report=$(mktemp)

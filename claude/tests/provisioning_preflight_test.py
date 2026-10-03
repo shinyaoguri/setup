@@ -203,6 +203,66 @@ class CommandShapeTest(HookTestCase):
             self.run_hook("ANSIBLE_FORCE_COLOR=0 ansible-playbook playbook.yml"), "ask"
         )
 
+    def test_output_filter_pipes_are_stripped_for_the_forecast(self):
+        """出力を絞るだけの後続は、予告の邪魔をしない (setup#302)。
+
+        エージェントは長い出力を `| tail` で絞るのが常で、絞っただけで「繋がっている」
+        として予告を諦めていた。外すのは予告の組み立てだけで、実行は変わらない。
+        """
+        commands = (
+            "ansible-playbook playbook.yml --tags x 2>&1 | tail -30",
+            'ansible-playbook playbook.yml --tags codex 2>&1 | grep -E "TASK|changed|ok=" | tail -12',
+            "ansible-playbook playbook.yml | head -5 | cat",
+        )
+        for command in commands:
+            with self.subTest(command=command, changed=0):
+                self.fake_ansible(RECAP_NO_CHANGE)
+                self.assert_allowed(self.run_hook(command))
+            with self.subTest(command=command, changed=1):
+                self.fake_ansible(DIFF_BODY + RECAP_WITH_CHANGE)
+                reason = self.assert_decision(self.run_hook(command), "ask")
+                self.assertIn("1 件が変更される", reason)
+
+    def test_read_only_flags_pass(self):
+        """何も変えないフラグは予告せずに通す。dry-run も走らせない。"""
+        for command in (
+            "ansible-playbook playbook.yml --syntax-check 2>&1 | tail -2",
+            "ansible-playbook playbook.yml --list-tasks",
+            "ansible-playbook playbook.yml --list-tags --tags codex",
+            "ansible-playbook playbook.yml --list-hosts",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(self.run_hook(command))
+
+    def test_non_filter_pipes_still_ask(self):
+        """絞り以外が続く形・絞りに置換やリダイレクトが混ざる形は外さない。"""
+        self.fake_ansible(RECAP_NO_CHANGE)
+        marker = self.root / "PWNED_FILTER"
+        for command in (
+            "ansible-playbook playbook.yml | sh",
+            "ansible-playbook playbook.yml | tee log.txt",
+            "ansible-playbook playbook.yml | tail -1 > out.txt",
+            f'ansible-playbook playbook.yml | grep "$(touch {marker})"',
+            "ansible-playbook playbook.yml | grep x; rm -rf build",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
+        self.assertFalse(marker.exists(), "承認前にコマンド置換が実行された")
+
+    def test_check_flag_of_another_command_is_not_ansibles(self):
+        """別のコマンドの -C を ansible の --check と読まない (setup#208)。
+
+        コマンド全体から探していたため、worktree 運用で頻出の `git -C` が同じ行に
+        あるだけで、本実行の予告が黙って出なかった。
+        """
+        for command in (
+            "git -C /tmp status; ansible-playbook playbook.yml",
+            "make -C build; ansible-playbook playbook.yml",
+            "ansible-playbook playbook.yml --check; rm -rf build",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
