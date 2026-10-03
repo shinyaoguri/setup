@@ -149,6 +149,40 @@ class DestructiveCommandTest(HookTestCase):
         self.assert_decision(self.run_hook("git push --force origin main"), "ask")
         self.assert_decision(self.run_hook("git push -f"), "ask")
 
+    def test_force_push_spelled_in_compound_commands_asks(self):
+        """区切りの手前・後ろのどちらの push でも、自分の -f / --force は拾う。"""
+        for command in (
+            "git push --force-with-lease origin x",
+            "git push origin x && git push -f origin y",
+            "git push -f origin x; gh api graphql -f query=x",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
+
+    def test_flag_of_another_command_is_not_a_force_push(self):
+        """同じ行の別のコマンドの -f を git push の引数と読まない (setup#300)。
+
+        引数の照合が区切りを越えていたため、gh のフィールド指定 `-f` を
+        force push と読み、2 週間で 3 回人を呼んでいた。
+        """
+        for command in (
+            "git push origin HEAD; gh api graphql -f query=x",
+            "git push -q origin HEAD && gh workflow run w -f a=b",
+            "git push -q -u origin x 2>&1 | grep -v remote; gh workflow run w -f t=v",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(self.run_hook(command))
+
+    def test_argument_match_stops_at_a_separator(self):
+        """区切りで止まる境界は、引数を見る他の照合にも同じく効く。"""
+        for command in (
+            "git clean -n; rm -f x",
+            "git stash list | grep drop",
+            "git reset --soft HEAD~1 && echo --hard",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(self.run_hook(command))
+
     def test_stash_drop_asks(self):
         self.assert_decision(self.run_hook("git stash drop"), "ask")
 
