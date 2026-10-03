@@ -41,6 +41,8 @@ TABLE = [
     (24585, 13728, "/tmp/sketch/.build/debug/my-sketch", "/tmp/sketch/.build/debug/my-sketch"),
     (88920, 88906, "/opt/homebrew/Cellar/mokume/0.7.1/libexec/mokume", "mokume mcp"),  # 自分の MCP
     (13925, 88906, "/bin/sleep", "sleep 900"),  # 背面実行で exec した自分のプロセス (シェルの印が消える)
+    (13926, 88906, "/bin/sleep", "sleep 901"),  # exec した上で出力を /dev/null に捨てたもの
+    (13927, 88906, "/bin/sleep", "sleep 902"),  # fd 1 の種類を読めなかったもの
     (5665, 48499, "disclaimer", "disclaimer"),
     (5666, 5665, APP, APP + " --output-format stream-json"),
     (5682, 5666, "/opt/homebrew/Cellar/mokume/0.7.1/libexec/mokume", "mokume mcp"),  # 止めてしまった
@@ -54,6 +56,14 @@ TABLE = [
     (31005, 1, "mokume-cli", "mokume-cli watch"),
     (31006, 1, "sketch", f"mokume-cli run {OWN_CWD}-other/.build/debug/sketch"),
 ]
+
+# fd 1 の種類 (fixture の 7 列目。lsof の -Ft が返す値)。setup#303 の実測: stdio で話す
+# サーバは通信路 (unix / PIPE)、exec で起動した背面プロセスは通常ファイル (タスクの出力先)
+STDOUT = {
+    13925: "REG",
+    13926: "CHR",
+    88920: "unix",
+}
 
 # プロセスの cwd (fixture の 6 列目)。書いておくとフックは lsof を呼ばない
 CWD = {
@@ -85,8 +95,9 @@ class SignalGuardTest(unittest.TestCase):
         cls.fixture = tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False, encoding="utf-8")
         for pid, ppid, comm, args in TABLE:
             cwd = CWD.get(pid, "")
+            stdout = STDOUT.get(pid, "")
             cls.fixture.write(
-                f"{pid}\t{ppid}\tMon Sep 14 17:12:54 2026\t{comm}\t{args}\t{cwd}\n"
+                f"{pid}\t{ppid}\tMon Sep 14 17:12:54 2026\t{comm}\t{args}\t{cwd}\t{stdout}\n"
             )
         cls.fixture.close()
 
@@ -174,9 +185,20 @@ class SignalGuardTest(unittest.TestCase):
     def test_自分の_MCP_サーバは聞く(self):
         self.assertIn("直接持つ子", self.assert_asked("kill 88920"))
 
-    def test_exec_で置き換えた自分の背面プロセスは_MCP_サーバと区別できず聞く(self):
-        # 実測: `exec sleep 900` を背面実行すると sleep が claude の直接の子になる
-        self.assert_asked("kill 13925")
+    def test_exec_で起動した自分の背面プロセスは出力先がファイルなので通す(self):
+        """claude の直接の子でも、fd 1 が通常ファイルなら stdio のサーバではない (setup#303)。
+
+        実測: `exec sleep 900` を背面実行すると sleep が claude の直接の子になり、
+        fd 1 はセッションのタスク出力ファイルを指す。MCP / LSP の fd 1 は通信路
+        (unix ソケットかパイプ) なので、通常ファイルにはなりえない。
+        """
+        self.assert_allowed("kill 13925")
+
+    def test_出力をファイルに向けていない直接の子は聞く(self):
+        """/dev/null に捨てた形と、fd 1 を読めなかった形は見分けられないので人に返す。"""
+        for pid in (13926, 13927):
+            with self.subTest(pid=pid):
+                self.assertIn("直接持つ子", self.assert_asked(f"kill {pid}"))
 
     def test_自分の_claude_とシェルは止める(self):
         self.assertIn("このセッション自身", self.assert_denied("kill 88906"))
