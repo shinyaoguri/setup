@@ -375,6 +375,64 @@ class ReversibleOperationTest(HookTestCase):
         self.make_gone_branch("feature/done")
         self.assert_allowed(self.run_hook("git branch -D feature/done 2>&1 | tail -1"))
 
+    def make_unpushed_branch(self, name):
+        """push しておらず、origin/main にも無いコミットを持つブランチ (固定が要る形)。"""
+        subprocess.run(["git", "checkout", "-q", "-b", name], cwd=self.repo, check=True)
+        self.commit(f"on {name}")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+
+    def test_delete_after_a_separator_is_pinned(self):
+        """区切りの後ろにある削除でも、対象名を読んで先端を固定する (setup#299)。
+
+        対象名を先頭のセグメントからしか読まなかったため、`echo a; git branch -D x`
+        は実在する枝でも「名前を確定できない」に落ちて ask になっていた (2 週間で 11 件)。
+        複合コマンドなので allow ではなく素通し (判定は permissions と分類器へ戻る)。
+        """
+        self.with_remote()
+        for name, command in (
+            ("feature/x", "echo a; git branch -D feature/x"),
+            ("feature/y", "git status && git branch -D feature/y 2>&1 | tail -1"),
+        ):
+            with self.subTest(command=command):
+                self.make_unpushed_branch(name)
+                before = len(self.backups())
+                self.assert_allowed(self.run_hook(command))
+                self.assertEqual(len(self.backups()), before + 1, "先端が固定されていない")
+
+    def test_dash_d_of_another_command_is_not_a_target(self):
+        """git branch 以外のセグメントの -d の後ろの語は、ブランチ名に数えない。
+
+        数えると実在しない名前として先端の固定に失敗し、ask に落ちる。
+        """
+        self.with_remote()
+        self.make_unpushed_branch("feature/x")
+        self.assert_allowed(self.run_hook("gh x -d foo; git branch -D feature/x"))
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_delete_in_a_loop_asks(self):
+        """展開しないと対象が決まらない形は、区切りの後ろにあっても ask のまま。"""
+        self.with_remote()
+        self.assert_decision(
+            self.run_hook('for b in a; do git branch -D "$b"; done'), "ask"
+        )
+
+    def test_delete_in_another_repository_asks(self):
+        """別のリポジトリを操作する形は、cwd 側の同名ブランチを固定して通さない。
+
+        フックは cwd のリポジトリで固定するので、`cd` や `git -C` の先で消される枝は
+        退避されない (cwd の扱い全般は setup#205)。今までどおり ask に落とす。
+        """
+        self.with_remote()
+        self.make_unpushed_branch("feature/x")
+        for command in (
+            "cd ../o && git branch -D feature/x",
+            "git -C ../o branch -D feature/x",
+            "git --git-dir=../o/.git branch -D feature/x",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
+        self.assertEqual(self.backups(), [], "別リポジトリの削除なのに cwd 側を固定した")
+
     def test_squash_merged_branch_is_pinned_before_pruning(self):
         """squash merge 済みで追跡が生きている間は「役目を終えた」と言えない。
 
