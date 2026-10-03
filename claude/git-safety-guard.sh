@@ -153,21 +153,40 @@ deletes_branch_by_force() {
 }
 
 # 削除対象のブランチ名を取り出す。削除フラグの後ろの語のうち、オプションでないものを集める。
-# シェルの区切り・リダイレクトが現れたら打ち切る — `git branch -D x 2>&1 | tail -1` の
-# "2>&1" までブランチ名として読むと、実在しない名前として判定不能に落ち、掃除のたびに
-# ユーザーを呼ぶことになる。
+# リダイレクトが現れたら打ち切る — `git branch -D x 2>&1 | tail -1` の "2>&1" まで
+# ブランチ名として読むと、実在しない名前として判定不能に落ち、掃除のたびにユーザーを呼ぶ。
+#
+# **区切りで割ってからセグメントごとに読む** (deletes_branch_by_force と同じ切り方)。
+# 先頭から読んで最初の区切りで打ち切っていた頃は、`echo a; git branch -D x` の x を
+# 取れず、実在する枝でも「名前を確定できない」に落ちていた (setup#299)。読むのは
+# `git … branch` のセグメントだけで、別コマンドの -d の後ろの語は数えない。
+#
+# 別のリポジトリを操作する形 (`cd` / `pushd` の後・`git -C` / `--git-dir` / `--work-tree`)
+# は何も返さない。先端の固定は cwd のリポジトリで行うので、名前を返すと cwd 側の同名の
+# 枝を固定して「退避済み」と扱ってしまう (cwd の扱い全般は setup#205)。
 branch_delete_targets() {
-  printf '%s' "$command" | awk '{
-    seen = 0
-    for (i = 1; i <= NF; i++) {
-      if ($i ~ /[;&|<>]/) exit
-      if ($i == "-D" || $i == "-d" || $i == "--delete") { seen = 1; continue }
-      if (!seen) continue
-      # 削除フラグの後ろに来る --force / -f などのオプションは対象名ではない
-      if ($i ~ /^-/) continue
-      print $i
-    }
-  }'
+  printf '%s' "$command" |
+    awk '{ gsub(/&&|\|\||[;&|]/, "\n"); print }' |
+    awk '
+      $1 == "cd" || $1 == "pushd" { elsewhere = 1 }
+      {
+        git = 0; branch = 0; seen = 0
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /[<>]/) break
+          if (!git) { if ($i == "git") git = 1; continue }
+          if (!branch) {
+            if ($i == "branch") branch = 1
+            else if ($i == "-C" || $i ~ /^--(git-dir|work-tree)/) elsewhere = 1
+            continue
+          }
+          if ($i == "-D" || $i == "-d" || $i == "--delete") { seen = 1; continue }
+          if (!seen) continue
+          # 削除フラグの後ろに来る --force / -f などのオプションは対象名ではない
+          if ($i ~ /^-/) continue
+          found[++n] = $i
+        }
+      }
+      END { if (!elsewhere) for (k = 1; k <= n; k++) print found[k] }'
 }
 
 # そのブランチを消しても失うものが無いと確認できるか。指標は upstream の有無で分かれる。
