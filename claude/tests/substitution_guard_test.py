@@ -31,7 +31,7 @@ DENIED = [
     ("実害の実物の形", INCIDENT, "<<'EOF'"),
     ("二重引用符のコミットメッセージ", 'git commit -m "fix: `foo` を直す"', "単一引用符"),
     ("二重引用符の gh の本文", 'gh pr comment 1 --body "`make test` を流した"', "--body-file"),
-    ("引用符なしの heredoc の $(", "cat <<EOF\n$(date)\nEOF", "<<'EOF'"),
+    ("heredoc の本文の $( の中のバッククォート", "cat <<EOF\n$(echo `x`)\nEOF", "<<'EOF'"),
     ("<<- の本文 (タブ付きの区切り)", "cat <<-EOF\n\t`x`\n\tEOF", "<<'EOF'"),
     ("<<- の後に空白", "cat <<- EOF\n`x`\nEOF", "<<'EOF'"),
     ("区切りの名前を文面に写す", "cat <<BODY\n`x`\nBODY", "<<'BODY'"),
@@ -66,6 +66,15 @@ ALLOWED = [
     ("heredoc の本文で逃がしたもの", "cat <<EOF\n\\`x\\` \\$(y)\nEOF"),
     ("GH_TOKEN の代入", 'GH_TOKEN="$(bash x.sh)" && gh pr create'),
     ("引用符の外の $( )", "gh pr view $(git branch --show-current)"),
+    # setup#309 の実測で、引用符なしの heredoc の $( は事故 0 件・意図した用途 10 件だった
+    ("引用符なしの heredoc の $(", "cat <<EOF\n$(date)\nEOF"),
+    ("引用符なしの heredoc の $( (実測の形)", "cat <<EOF\nmokume @ $(git rev-parse --short HEAD)\nEOF"),
+    ("<<- の本文の $(", "cat <<-EOF\n\t$(cat $S/top.txt)\n\tEOF"),
+    # 実測の形: バッククォートは逃がし、$( ) で値を差し込む。バッククォートを含むので字句解析まで届く
+    (
+        "逃がしたバッククォートと heredoc の $(",
+        "cat <<EOF\n\\`cmp\\` で main (@ $(git rev-parse --short origin/main)) と比べた\nEOF",
+    ),
     ("$VAR だけの heredoc", "cat <<EOF\n$HOME ${USER}\nEOF"),
     ("引用した heredoc の本文", "cat <<'EOF'\n`x` $(y)\nEOF"),
     ("引用した <<- の本文", "cat <<-'EOF'\n\t`x`\n\tEOF"),
@@ -139,12 +148,11 @@ class DenyTest(HookTestCase):
         reason = self.assert_denied(INCIDENT)
         self.assertIn("os.environ", reason)
 
-    def test_heredoc_の_置換は変数へ受けてから渡す形を示す(self):
-        # 実測で、引用符なしの heredoc の $( は `$(git rev-parse --short HEAD)` のように意図して
-        # 書かれていた。止めるなら、同じことを通る形で書く道を出す
-        reason = self.assert_denied("cat <<EOF\nmokume @ $(git rev-parse --short HEAD)\nEOF")
-        self.assertIn("X=$(…)", reason)
-        self.assertIn("$X", reason)
+    def test_文面は_heredoc_の_置換を挙げない(self):
+        # 止めるのはバッククォートだけ。同じ本文の $( ) は意図した差し込みなので箇所に数えない
+        reason = self.assert_denied("cat <<EOF\n@ $(git rev-parse --short HEAD)\n`x`\nEOF")
+        self.assertIn("3 行目", reason)
+        self.assertNotIn("git rev-parse", reason)
 
     def test_文脈が複数なら打ち直し方を両方示す(self):
         reason = self.assert_denied('git commit -m "`a`" && cat <<EOF\n`b`\nEOF')

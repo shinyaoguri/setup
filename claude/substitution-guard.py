@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Claude Code の PreToolUse フック: 文字列のつもりの箇所がコマンド置換として実行されるのを止める。
 
+止めるのはコマンド置換のうち**バッククォート**だけで、`$( )` はどの文脈でも止めない (下の実測)。
+
 塞ぐ実害は setup#309。mokume の Issue を作業していたセッションが、Issue の本文を書き換える
 ために次の形のコマンドを打った。
 
@@ -23,10 +25,16 @@ heredoc の本文にバッククォートが 117 件・`$(` が 12 件、二重�
 
 上の件数は字面での粗い数え方で、逃がした `\\`` や引用した heredoc の本文も含む。このガードの
 字句解析で同じ時点の記録 (サブエージェントを含む Bash 44,149 件) を数え直すと、実際に置換になる
-形は 17 件だった。内訳は heredoc の本文のバッククォート 3 件・二重引用符の中のバッククォート 4 件
-(どれも事故で、`python3 -c "…"` の中の DocC の ``…`` が黙って消えていた) と、heredoc の本文の
-`$(` 10 件 (`$(git rev-parse --short HEAD)` のように意図して書いたもの)。後者を止める代償は、
-先に `X=$(…)` で変数へ受けて本文で `$X` と書き直すことで、差し戻しの文面がその形を出す。
+形は 17 件だった。
+
+  - 事故 7 件は**すべてバッククォート**だった。heredoc の本文が 3 件 (上の実害を含む)、二重引用符の
+    中が 4 件 (`python3 -c "…"` の中の DocC の ``…`` や `grep "…"` のパターンが黙って崩れていた)
+  - heredoc の本文の `$(` 10 件は**すべて意図した用途**だった (`$(git rev-parse --short HEAD)`・
+    `$(cat $S/top.txt)` のように、本文へ値を差し込むために書いたもの。バッククォートの側は `\\``
+    で逃がしてあったものまである)
+
+だから `$(` は止めない。Markdown が `$(` を書くことはまず無く、事故の形はバッククォートに集まる。
+止めれば意図した 10 件を毎回書き直させる代償だけが残る。
 
 **見るのは「シェルが置換として解釈するか」であって、字面ではない。** だから正規表現 1 本では
 なく、引用・逃がし・heredoc を追う小さな字句解析で読む。判定:
@@ -41,17 +49,17 @@ heredoc の本文にバッククォートが 117 件・`$(` が 12 件、二重�
     バックスラッシュで逃がしたもの (`\\``)        → 素通し (単一引用符の中の `\\` は逃がしでない)
     コメント (語の先頭の `#` から行末)            → 素通し
   `$(`
-    引用符なしの heredoc の本文                   → deny
     引用符の外・二重引用符の中                    → 素通し (`GH_TOKEN="$(cmd)"` は正当な用途)。
                                                     中身はシェルのコードとして同じ規則で読み直す
+    引用符なしの heredoc の本文                   → 素通し (実測で事故 0 件・意図した用途 10 件)
   here-string (`<<<`)                            → heredoc ではない。続く語を普通の語として読む
   `$VAR`・`${VAR}` だけの heredoc                 → 素通し
 
 `$( )` の中は入れ子のシェルとして読み直すので、`git commit -m "$(cat <<'EOF' … EOF\\n)"` の形
 (本文に Markdown のバッククォートを含む) は素通しになり、区切りの引用を外すと deny になる。
 
-**引用の外の `$( )` を止めないのは、意図して書く形だからである。** 実害はどれも「文字列のつもりの
-場所」で起きている。引用符の外のバッククォートは置換の意図で書かれたものもあるが、`$(…)` へ
+**`$( )` を止めないのは、意図して書く形だからである。** 実害はどれも「文字列のつもりの場所」に
+書いたバッククォートで起きている。引用符の外のバッククォートは置換の意図で書かれたものもあるが、`$(…)` へ
 書き換えれば同じ意味で通るので、止めても打ち直しは 1 語で済む。
 
 deny なのは、正しい形が機械的に決まってその場で打ち直せるから (人を呼ぶ必要がない)。差し戻しの
@@ -87,10 +95,9 @@ class Unparsable(Exception):
 
 
 class Finding:
-    """置換として解釈される箇所。`kind` は "`" か "$(", `where` は bare / dquote / heredoc。"""
+    """置換として解釈されるバッククォート。`where` は bare / dquote / heredoc。"""
 
-    def __init__(self, kind, where, line, snippet, delimiter=None):
-        self.kind = kind
+    def __init__(self, where, line, snippet, delimiter=None):
         self.where = where
         self.line = line
         self.snippet = snippet
@@ -118,9 +125,9 @@ class Scanner:
         text = self.s[start:end].replace("\n", "⏎")
         return text if len(text) <= 60 else text[:57] + "…"
 
-    def add(self, kind, where, start, end, delimiter=None):
+    def add(self, where, start, end, delimiter=None):
         self.findings.append(
-            Finding(kind, where, self.line_of(start), self.snippet_at(start, end), delimiter)
+            Finding(where, self.line_of(start), self.snippet_at(start, end), delimiter)
         )
 
     # --- 文脈ごとの読み -----------------------------------------------------------
@@ -241,7 +248,7 @@ class Scanner:
             end += 2 if self.s[end] == "\\" else 1
         if end >= len(self.s):
             raise Unparsable("バッククォートが閉じていない")
-        self.add("`", where, start, end + 1)
+        self.add(where, start, end + 1)
         self.i = end + 1
 
     def dollar(self, where):
@@ -323,7 +330,10 @@ class Scanner:
                 self.heredoc_body(body_start, body_end, delimiter)
 
     def heredoc_body(self, start, end, delimiter):
-        """引用符なしの heredoc の本文。`\\` は次の 1 字を逃がし、引用符は字として残る。"""
+        """引用符なしの heredoc の本文。`\\` は次の 1 字を逃がし、引用符は字として残る。
+
+        `$( )` は止めない (意図して書く形)。中のバッククォートは置換なので、そのまま拾う。
+        """
         j = start
         while j < end:
             c = self.s[j]
@@ -335,16 +345,7 @@ class Scanner:
                 while close < end and self.s[close] != "`":
                     close += 2 if self.s[close] == "\\" else 1
                 stop = min(close + 1, end)
-                self.add("`", "heredoc", j, stop, delimiter)
-                j = stop
-                continue
-            if self.s.startswith("$((", j):
-                j += 3
-                continue
-            if self.s.startswith("$(", j):
-                close = self.s.find(")", j)
-                stop = end if close < 0 or close >= end else close + 1
-                self.add("$(", "heredoc", j, stop, delimiter)
+                self.add("heredoc", j, stop, delimiter)
                 j = stop
                 continue
             j += 1
@@ -371,8 +372,7 @@ ADVICE = {
         "すれば本文は一字も展開されない。変数を差し込みたいなら本文の外で渡す "
         "(例: `S=\"$S\" python3 - <<'{delimiter}'` として本文では os.environ[\"S\"] を読む・"
         "`python3 - \"$S\" <<'{delimiter}'` として sys.argv[1] を読む)。"
-        "本文に置換の結果を差し込みたいなら、先に `X=$(…)` で変数へ受け、本文では `$X` と書く "
-        "(`$VAR` だけの本文は通る)。本文が長い・Markdown なら Write ツールでファイルに書き、`--body-file <ファイル>` / "
+        "本文が長い・Markdown なら Write ツールでファイルに書き、`--body-file <ファイル>` / "
         "`-F <ファイル>` で渡す。"
     ),
     "dquote": (
@@ -426,7 +426,7 @@ def main():
     except (json.JSONDecodeError, ValueError):
         return
     command = (payload.get("tool_input") or {}).get("command") or ""
-    if "`" not in command and not ("$(" in command and "<<" in command):
+    if "`" not in command:
         return
     try:
         findings = findings_of(command)

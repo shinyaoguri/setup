@@ -540,7 +540,7 @@
     },
     {
       "id": "no-unintended-substitution",
-      "intent": "文字列のつもりの箇所 (heredoc の本文・二重引用符の引数) を、シェルにコマンドとして実行させない",
+      "intent": "文字列のつもりの箇所 (heredoc の本文・二重引用符の引数) に書いたバッククォートを、シェルにコマンドとして実行させない",
       "why": "引用符なしの heredoc に書いた Markdown の `make test` が実行され、GPU を塞いでカーネルパニックに至った (setup#309)",
       "rationale": ["shinyaoguri/setup#309", "mokume-metal/mokume#2052", "claude/substitution-guard.py の docstring"],
       "means": [
@@ -554,7 +554,7 @@
         {"surface": "harness-behavior", "name": "Bash ツールのコマンドは zsh が解釈し、引用符なしの heredoc と二重引用符の中のコマンド置換を展開する", "stability": "undocumented"}
       ],
       "verify": ["claude/tests/substitution_guard_test.py"],
-      "sunset": "本体が Bash ツールのコマンドを実行前に解析し、文字列の中のコマンド置換を止めるか確認に回すようになったら"
+      "sunset": "本体が Bash ツールのコマンドを実行前に解析し、文字列の中のバッククォートの置換を止めるか確認に回すようになったら"
     },
     {
       "id": "config-distribution",
