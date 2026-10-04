@@ -133,6 +133,12 @@
             "command": "~/.claude/secret-output-guard.py",
             "timeout": 10,
             "statusMessage": "秘密の値が出力に出ないか確認中"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/substitution-guard.py",
+            "timeout": 10,
+            "statusMessage": "意図しないコマンド置換が無いか確認中"
           }
         ]
       },

@@ -104,6 +104,7 @@
       - wait-deadline-guard.sh
       - signal-guard.py
       - secret-output-guard.py
+      - substitution-guard.py
 
 - name: Create ~/.claude directory
   ansible.builtin.file:
