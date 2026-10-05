@@ -148,9 +148,6 @@ class CommandWithoutPathTest(unittest.TestCase):
         self.assertEqual(0, resolved.returncode, f"解決できない: {cmd}")
         self.assertEqual(str(REPO / "bin" / "secret-read"), resolved.stdout.strip())
 
-    def test_app_private_key_command_resolves_without_setup_bin_on_path(self):
-        self.assert_resolves_without_setup_bin_on_path("MOKUME_APP_PRIVATE_KEY_CMD")
-
     def test_gyazo_token_command_resolves_without_setup_bin_on_path(self):
         self.assert_resolves_without_setup_bin_on_path("MOKUME_GYAZO_TOKEN_CMD")
 
@@ -255,7 +252,6 @@ class AllowlistConsistencyTest(unittest.TestCase):
         """対照。1 つも拾えていなければ、下は何も確かめていない。"""
         roles = self.exported_roles()
         self.assertIn("gyazo-token", roles)
-        self.assertIn("mokume-app-key", roles)
 
     def test_every_exported_role_is_allowlisted(self):
         missing = self.exported_roles() - self.allowed()
