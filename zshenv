@@ -35,31 +35,6 @@ export PATH
 # あり、参照を書き換えるときに直す場所が 2 つに割れないようにしている。
 export GYAZO_TOKEN_REF="gyazo-token"
 
-# mokume のエージェントが push と PR 作成に使う GitHub App の秘密鍵を、**読むコマンド**
-# として置く (値は持たせない)。mokume の scripts/gh-app-token.sh が eval して PEM を得る。
-# 参照だけでなくコマンドの形なのは、あちらが受け取る口が MOKUME_APP_PRIVATE_KEY_CMD
-# だから (mokume の AGENTS.md「エージェントの identity」)。
-#
-# **こちらが持つのは、あちらが持てないからである。** mokume は「秘密鍵の中身も在処も
-# リポジトリに書かない」を規約にしていて、鍵の渡し方だけが手で揃える設定として外に
-# 残る。その置き場がここになる。
-#
-# zshrc ではなくここに置くのは GYAZO_TOKEN_REF と同じ理由 — 無人セッション (hook・
-# scheduled task) が非対話で zshrc を読まず、空のまま「鍵が無い」で止まるため。
-# 承認が要る PR は App identity でしか作れないので (mokume の ADR-0007)、ここが空だと
-# エージェントは PR を作れない。
-#
-# コマンドは絶対パスで書く。上で PATH へ足した分は、Claude デスクトップアプリのセッションでは
-# 残らないことがある — アプリは起動した時点の PATH を持ち続け、Bash ツールのシェル
-# スナップショットがこのファイルの後でそれを書き戻す (セットアップ前に起動していたアプリで
-# 実際に踏んだ。#154)。書き戻されるのは PATH だけで変数は残るので、裸の secret-read だと
-# 「変数はあるのにコマンドが無い」になり、エージェントは 1Password の承認待ちへ落ちる。
-#
-# 鍵を差し替えても、ここは直さない。1Password のタグ (secret-read/mokume-app-key) を新しい
-# 項目へ付け替えれば、キャッシュの取り直しで追いつく (以前は日付入りのファイル名を
-# ここと許可リストの 2 か所に書いていた)
-export MOKUME_APP_PRIVATE_KEY_CMD="${(q)_setup_root}/bin/secret-read mokume-app-key"
-
 # Gyazo のトークンも、mokume へは**読むコマンド**として渡す (受け取る口が
 # MOKUME_GYAZO_TOKEN_CMD で、`bash -c` / `eval` で実行される)。上の GYAZO_TOKEN_REF は
 # 参照の形なので、そのままでは mokume の口に嵌まらない — スキルと `make example-shots` は
@@ -69,7 +44,11 @@ export MOKUME_APP_PRIVATE_KEY_CMD="${(q)_setup_root}/bin/secret-read mokume-app-
 # `You are not authorized.` を返すので、未設定は「トークンが死んだ」に見える (#159 で
 # 実際に誤診し、トークンを作り直させた)。
 #
-# 絶対パスで書く理由と、参照を直書きしない理由はそれぞれ上の 2 つと同じ。
+# コマンドは絶対パスで書く。上で PATH へ足した分は、Claude デスクトップアプリのセッションでは
+# 残らないことがある — アプリは起動した時点の PATH を持ち続け、Bash ツールのシェル
+# スナップショットがこのファイルの後でそれを書き戻す (セットアップ前に起動していたアプリで
+# 実際に踏んだ。#154)。書き戻されるのは PATH だけで変数は残るので、裸の secret-read だと
+# 「変数はあるのにコマンドが無い」になる。参照を直書きしない理由は上の GYAZO_TOKEN_REF と同じ。
 export MOKUME_GYAZO_TOKEN_CMD="${(q)_setup_root}/bin/secret-read \"\$GYAZO_TOKEN_REF\""
 unset _setup_root
 

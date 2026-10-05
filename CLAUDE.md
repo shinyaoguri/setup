@@ -66,7 +66,7 @@ python3 claude/tests/runcat_metrics_test.py
 - **Claude デスクトップアプリは起動した時点の PATH を持ち続ける。** Bash ツールのシェルスナップショットが
   zshenv の後でそれを書き戻すので、zshenv が export した変数は届くのに PATH の追加だけが消える
   (セットアップ前から開いていたアプリで踏んだ。#154)。**変数で渡すコマンドは絶対パスで書く**
-  (`MOKUME_APP_PRIVATE_KEY_CMD` がその形)。playbook はアプリが zshenv より古いと再起動を促す。
+  (`MOKUME_GYAZO_TOKEN_CMD` がその形)。playbook はアプリが zshenv より古いと再起動を促す。
   新しいマシンで手作業が残る手順は README の「新しいマシンで」に集めてある
 - スキルはこのリポでは配らない。自作の汎用スキルは shinyaoguri/claude-plugins (marketplace) の
   プラグインとして配布し、第三者配布スキルも含めて `claude/settings.json` の marketplace 宣言
