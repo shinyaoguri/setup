@@ -130,6 +130,28 @@
       "gap": "plan-pass.sh がプラン本文を、文書化されていない transcript の形式から逆引きしている。tool_input.plan で足りる (shinyaoguri/claude-plugins#176)"
     },
     {
+      "id": "model-sized-tasks",
+      "intent": "セッションのモデルの格に合うタスクだけを引き受け、判断が要る部分は上位のモデルか人へ戻す",
+      "why": "軽いモデルほど自分の限界に気付かず、自己申告に頼ると設計判断を下したまま進む。plan-pass は格に関係なくプランを自動承認していた",
+      "rationale": ["shinyaoguri/claude-plugins#207", "shinyaoguri/claude-plugins:docs/decisions/0031-model-tier-routing.md"],
+      "means": [
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/model-tier.sh"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/plan-pass.sh"},
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/next-task"}
+      ],
+      "depends_on": [
+        {"surface": "hook-event", "name": "SessionStart", "stability": "documented"},
+        {"surface": "hook-input", "name": "model", "stability": "documented"},
+        {"surface": "hook-event", "name": "PostModelSwitch", "stability": "documented"},
+        {"surface": "hook-input", "name": "to_model", "stability": "documented"},
+        {"surface": "hook-output", "name": "additionalContext", "stability": "documented"},
+        {"surface": "hook-event", "name": "PermissionRequest", "stability": "documented"}
+      ],
+      "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-model-tier.sh と scripts/test-rs-plan-pass.sh"],
+      "sunset": "本体がモデルの格に応じてタスクの引き受けや上位モデルへの委譲を自前で行うようになったら",
+      "gap": "サブエージェントの格は見ない。PostModelSwitch では文脈を注入しない (出力の契約が未確認)"
+    },
+    {
       "id": "durable-work-record",
       "intent": "決定・経過・中間所見を、記憶ゼロのセッションや他の人が読める恒久的な置き場 (Issue・PR・docs) に残す",
       "why": "セッションの記憶はいつでも消える前提で、本体の記憶はそのマシンのその利用者にしか見えない",
