@@ -192,13 +192,13 @@
     },
     {
       "id": "comment-provenance",
-      "intent": "コミットと Issue / PR コメントの出どころ (人間か、どのエージェントか) を後から辿れるようにする",
+      "intent": "コミットと Issue / PR の本文・コメントの出どころ (人間か、どのエージェントのどのモデルか) を後から辿れるようにする",
       "why": "同じ場所に人間と複数のエージェントが書き込むが、ローカルの gh CLI からの投稿には GitHub 側の表示が出ない",
       "rationale": ["tasks/claude.yml 冒頭コメントの gh-comment-guard.sh の節", "anthropics/claude-code#62791"],
       "means": [
         {"kind": "native", "ref": "settings:attribution"},
         {"kind": "self", "ref": "claude/gh-comment-guard.sh"},
-        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "Issue / PR へのコメントは本文の末尾に署名を付けて投稿する"}
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "Issue / PR のコメントと新しく作る本文には、末尾に署名を付ける"}
       ],
       "depends_on": [
         {"surface": "settings-key", "name": "attribution", "stability": "documented"},
