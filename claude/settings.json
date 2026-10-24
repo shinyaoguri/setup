@@ -84,6 +84,11 @@
             "command": "git rev-parse --git-dir >/dev/null 2>&1 && git gone-clean >/dev/null 2>&1 || true",
             "timeout": 30,
             "statusMessage": "役目を終えたブランチを掃除中"
+          },
+          {
+            "type": "command",
+            "command": "git rev-parse --git-dir >/dev/null 2>&1 && (nohup git wt-clean >/dev/null 2>&1 &) ; true",
+            "timeout": 10
           }
         ]
       }

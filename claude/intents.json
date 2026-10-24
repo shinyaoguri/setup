@@ -291,11 +291,15 @@
       "id": "branch-worktree-hygiene",
       "intent": "役目を終えたローカルブランチと worktree を、情報を失わないと証明できるものだけ自動で片付ける",
       "why": "squash merge と worktree 分離の運用では、マージ済みのブランチと残骸 worktree が放っておくと溜まり続ける",
-      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0018-provable-branch-deletion.md", "tasks/git.yml の gone-clean の節", "tasks/codex.yml の冒頭 (Codex へ同じ Stop hook を配る。shinyaoguri/setup#297)"],
+      "rationale": ["shinyaoguri/claude-plugins:docs/decisions/0018-provable-branch-deletion.md", "tasks/git.yml の gone-clean の節", "tasks/codex.yml の冒頭 (Codex へ同じ Stop hook を配る。shinyaoguri/setup#297)", "bin/git-wt-clean の冒頭 (worktree の削除。ignore 済みのファイルだけは再生成できるものとして失ってよい側に倒す — 容量の大半がそこにあり、厳密に 1 ビットも失わない条件では一度も発火しないため。shinyaoguri/setup#319)"],
       "means": [
         {"kind": "native", "ref": "settings:hooks.Stop", "anchor": "git gone-clean"},
         {"kind": "external", "ref": "tasks/git.yml", "anchor": "gone-clean"},
         {"kind": "self", "ref": "codex/hooks.json", "anchor": "git gone-clean"},
+        {"kind": "native", "ref": "settings:hooks.Stop", "anchor": "git wt-clean"},
+        {"kind": "external", "ref": "tasks/git.yml", "anchor": "wt-clean"},
+        {"kind": "self", "ref": "codex/hooks.json", "anchor": "git wt-clean"},
+        {"kind": "self", "ref": "bin/git-wt-clean"},
         {"kind": "external", "ref": "tasks/codex.yml", "anchor": "codex/hooks.json"},
         {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/stale-branch-sweep.sh"},
         {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/worktree-sweep.sh"},
@@ -310,7 +314,7 @@
         {"surface": "desktop-app", "name": "Auto-archive", "stability": "documented"},
         {"surface": "harness-behavior", "name": "Codex が $CODEX_HOME/hooks.json をユーザー層のフックとして読む", "stability": "undocumented"}
       ],
-      "verify": ["env-doctor:9", "claude/tests/codex_hooks_test.py", "none: フック本体の検証は claude-plugins 側の scripts/test-rs-branch-sweep.sh と scripts/test-rs-worktree-sweep.sh"],
+      "verify": ["env-doctor:9", "claude/tests/codex_hooks_test.py", "claude/tests/git_wt_clean_test.py", "none: フック本体の検証は claude-plugins 側の scripts/test-rs-branch-sweep.sh と scripts/test-rs-worktree-sweep.sh"],
       "sunset": "worktree 側: 本体の sweep が残骸 worktree と既定ブランチを掴んだ worktree を片付けるようになったら worktree-sweep を消す。ブランチ側: squash merge 済みのローカルブランチを本体が情報を失わずに消すようになったら残りを消す (Codex 側の codex/hooks.json も、Codex 本体が同じことをするようになったら消す)"
     },
     {
