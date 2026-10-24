@@ -110,6 +110,26 @@
     value: '!git stale | while read -r branch; do git branch -d "$branch"; done'
     scope: global
 
+# worktree も同じ 2 段構えで片付ける (issue #319)。ブランチだけ掃除しても、worktree が
+# 掴んでいるブランチは gone / stale の候補から外れるので、worktree が残る限り両方溜まる。
+# 判定 (clean・HEAD が参照済み・locked でない・7 日無活動) は 1 行に収まらないので
+# bin/git-wt-clean に置き、エイリアスはその絶対パスを指す — Stop hook の PATH に
+# bin/ が通っている保証が無いため (ssh-key-check を絶対パスで呼ぶのと同じ理由)。
+#
+#   git wt-stale      # 消してよい worktree を一覧
+#   git wt-clean      # それを削除し、実体が消えた登録を prune
+- name: Add git alias `wt-stale` (list worktrees that can be removed without losing anything)
+  community.general.git_config:
+    name: alias.wt-stale
+    value: "!{{ playbook_dir }}/bin/git-wt-clean --list"
+    scope: global
+
+- name: Add git alias `wt-clean` (remove the worktrees listed by `git wt-stale`)
+  community.general.git_config:
+    name: alias.wt-clean
+    value: "!{{ playbook_dir }}/bin/git-wt-clean"
+    scope: global
+
 - name: Check the Secure Enclave key is usable for signing
   # 4 つの完了条件のうち、ネットワーク無しで分かるもの (鍵が 1 本に決まるか・SecretAgent が
   # 常駐しているか・鍵タイプ・承認を求められずに署名できるか) を見る。GitHub への登録は

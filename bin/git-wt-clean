@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# 役目を終えた git worktree を片付ける (issue #319)。
+#
+# なぜ要るか: Stop hook はブランチ (`git gone-clean`) しか掃除しておらず、worktree は
+# 誰も片付けていなかった。アプリのセッション・サブエージェントの worktree 分離・
+# セッションが手で作ったものが溜まり、手元で 39 個・約 118GB まで積み上がった。しかも
+# worktree に掴まれたブランチは gone / stale の候補から外れるので、worktree が残ると
+# ブランチの掃除まで止まる。
+#
+# 使い方 (tasks/git.yml がエイリアスとして登録する):
+#   git wt-stale              消してよい worktree を一覧 (= git-wt-clean --list)
+#   git wt-clean              それを削除し、実体が消えた登録を prune する
+#   --days N                  最終活動からの日数の閾値 (既定 7)
+#
+# 消すのは「消しても 1 ビットも失われない」ものだけ。全部を満たすこと:
+#   1. メインの worktree でも、呼び出し元を含む worktree でもない。locked でない
+#      (サブエージェントの worktree は実行中 locked になる)
+#   2. `git status --porcelain` が空。追跡外の非 ignore ファイルも無い。ignore 済み
+#      (node_modules・ビルド生成物) は再生成できるので失ってよい — これが容量の大半
+#   3. HEAD がどれかの ref (refs/heads・refs/remotes) に含まれる。ブランチの上なら
+#      worktree を消してもブランチは残る。detached のまま積んだ未参照のコミットは
+#      消すと reflog 頼みになるので残す
+#   4. 最終活動から N 日以上。他のセッションがいま使っている worktree を消さないため。
+#      活動は worktree の管理ディレクトリ (HEAD・index・logs/HEAD) の最新 mtime で見る
+#
+# 削除は `git worktree remove` に --force 無しで任せる。上の判定をすり抜けても、
+# 変更や追跡外ファイルがあれば git 自身が断る (二重の安全側)。
+#
+# 終了コード: 0 = 正常 (消すものが無い場合も) / 64 = 使い方の誤り。
+
+set -u
+
+usage() {
+  sed -n '2,/^# 終了コード/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+die() {
+  echo "git-wt-clean: $*" >&2
+  exit 64
+}
+
+list=0
+days=7
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --list) list=1 ;;
+    --days) shift; days=${1-} ;;
+    --days=*) days=${1#--days=} ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "不明な引数: $1" ;;
+  esac
+  shift
+done
+case "$days" in
+  ''|*[!0-9]*) die "--days には 0 以上の整数を渡す: '$days'" ;;
+esac
+
+git rev-parse --git-dir >/dev/null 2>&1 || die "git リポジトリの中で実行する"
+
+# 呼び出し元の worktree。パスは symlink を解いて比べる (/tmp と /private/tmp など)
+here=$(git rev-parse --show-toplevel 2>/dev/null) && here=$(cd "$here" && pwd -P) || here=
+now=$(date +%s)
+threshold=$((days * 86400))
+
+mtime() {
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+}
+
+# 最終活動 (秒)。管理ディレクトリの HEAD・index・logs/HEAD のうち最も新しいもの
+last_activity() {
+  local admin latest=0 f t
+  admin=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || { echo "$now"; return; }
+  for f in "$admin/HEAD" "$admin/index" "$admin/logs/HEAD"; do
+    [ -e "$f" ] || continue
+    t=$(mtime "$f")
+    [ "$t" -gt "$latest" ] && latest=$t
+  done
+  echo "$latest"
+}
+
+removable() {
+  local path=$1 head=$2 branch=$3 locked=$4 real st
+  [ "$locked" = 1 ] && return 1
+  [ -d "$path" ] || return 1 # 実体が無いものは prune の持ち物
+  real=$(cd "$path" && pwd -P) || return 1
+  if [ -n "$here" ]; then
+    case "$here/" in "$real/"*) return 1 ;; esac
+  fi
+  [ $((now - $(last_activity "$path"))) -ge "$threshold" ] || return 1
+  # --no-optional-locks: status は index を機会的に書き直し、その mtime が最終活動に
+  # 数えられる。Stop hook は毎ターン流すので、書かせると無活動の時計を毎回巻き戻して
+  # 永遠に閾値へ届かない
+  st=$(git -C "$path" --no-optional-locks status --porcelain 2>/dev/null) || return 1
+  [ -z "$st" ] || return 1
+  if [ -z "$branch" ]; then
+    [ -n "$(git for-each-ref --contains "$head" --count=1 refs/heads refs/remotes 2>/dev/null)" ] || return 1
+  fi
+  return 0
+}
+
+candidates() {
+  # porcelain の 1 ブロック = 1 worktree。先頭ブロックはメインなので読み飛ばす
+  local path='' head='' branch='' locked=0 first=1 line
+  { git worktree list --porcelain; echo; } | while IFS= read -r line; do
+    case "$line" in
+      'worktree '*) path=${line#worktree } ;;
+      'HEAD '*) head=${line#HEAD } ;;
+      'branch '*) branch=${line#branch } ;;
+      locked|'locked '*) locked=1 ;;
+      '')
+        if [ -n "$path" ]; then
+          if [ "$first" = 1 ]; then
+            first=0
+          elif removable "$path" "$head" "$branch" "$locked"; then
+            printf '%s\n' "$path"
+          fi
+        fi
+        path='' head='' branch='' locked=0
+        ;;
+    esac
+  done
+}
+
+if [ "$list" = 1 ]; then
+  candidates
+  exit 0
+fi
+
+candidates | while IFS= read -r path; do
+  git worktree remove "$path" && echo "removed: $path"
+done
+git worktree prune
+exit 0

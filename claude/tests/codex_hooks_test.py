@@ -12,6 +12,7 @@ Stop hook と同じコマンドに揃え、片方だけ直して食い違うの�
 import json
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -36,6 +37,10 @@ def gone_clean(hooks):
     return [c for c in commands(hooks, "Stop") if "git gone-clean" in c]
 
 
+def wt_clean(hooks):
+    return [c for c in commands(hooks, "Stop") if "git wt-clean" in c]
+
+
 class HooksFileTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -48,6 +53,11 @@ class HooksFileTest(unittest.TestCase):
         """Claude 側だけ直して Codex 側が古いまま残るのを落とす。"""
         claude = gone_clean(json.loads(SETTINGS.read_text()))
         self.assertEqual(gone_clean(self.hooks), claude)
+
+    def test_stop_runs_wt_clean_once_like_claude(self):
+        """worktree の掃除 (issue #319) も Claude と同じコマンドで 1 回だけ。"""
+        self.assertEqual(len(wt_clean(self.hooks)), 1)
+        self.assertEqual(wt_clean(self.hooks), wt_clean(json.loads(SETTINGS.read_text())))
 
     def test_only_hooks(self):
         """Codex 固有の設定は config.toml の持ち物。ここへ混ぜない。"""
@@ -94,6 +104,58 @@ class HookCommandTest(unittest.TestCase):
 
     def test_failure_does_not_block_the_turn(self):
         result = self.run_hook(self.make_repo(), "!echo boom >&2; exit 3")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout + result.stderr, "", "失敗の出力がターンへ漏れている")
+
+
+class WtCleanHookTest(unittest.TestCase):
+    """worktree の削除は巨大になりうるので背景へ逃がす。hook 自体はすぐ返り、
+    git の外でも失敗してもターンを止めない。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.command = wt_clean(json.loads(HOOKS.read_text()))[0]
+        self.marker = self.root / "called"
+
+    def run_hook(self, cwd, alias):
+        gitconfig = self.root / "gitconfig"
+        gitconfig.write_text(f'[alias]\n\twt-clean = "{alias}"\n')
+        return subprocess.run(
+            ["/bin/sh", "-c", self.command], cwd=cwd, capture_output=True, text=True, timeout=30,
+            env=clean_env(GIT_CONFIG_GLOBAL=str(gitconfig), GIT_CONFIG_NOSYSTEM="1",
+                          GIT_CEILING_DIRECTORIES=str(self.root)),
+        )
+
+    def wait_for_marker(self):
+        for _ in range(50):
+            if self.marker.exists():
+                return True
+            time.sleep(0.1)
+        return False
+
+    def test_calls_wt_clean_in_the_background(self):
+        repo = self.root / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        started = time.monotonic()
+        result = self.run_hook(repo, f"!sleep 2; touch {self.marker}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(time.monotonic() - started, 1.5, "削除を待ってからターンへ戻っている")
+        self.assertTrue(self.wait_for_marker(), "リポジトリの中で wt-clean が呼ばれていない")
+
+    def test_does_nothing_outside_a_repository(self):
+        outside = self.root / "plain"
+        outside.mkdir()
+        result = self.run_hook(outside, f"!touch {self.marker}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        time.sleep(0.5)
+        self.assertFalse(self.marker.exists(), "git の外で wt-clean を呼んだ")
+
+    def test_failure_does_not_block_the_turn(self):
+        repo = self.root / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        result = self.run_hook(repo, "!echo boom >&2; exit 3")
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout + result.stderr, "", "失敗の出力がターンへ漏れている")
 
