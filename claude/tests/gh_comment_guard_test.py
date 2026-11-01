@@ -222,6 +222,30 @@ class HookTestCase(unittest.TestCase):
         )
         self.assert_allowed(command)
 
+    # --- 本文ファイルのパスをシェル変数で渡す -------------------------------
+    # サブエージェントは「S=<scratchpad> && gh issue comment N -F $S/plan.md」の形で
+    # 投稿する。変数のまま [ -f ] に掛けると読めず、署名入りでも無署名と判定していた
+
+    def test_signed_body_file_via_assigned_variable_is_allowed(self):
+        self.body_file(signed("本文"), name="plan.md")
+        self.assert_allowed(f"S={self.root} && gh issue comment 395 -F $S/plan.md")
+
+    def test_signed_body_file_via_braced_quoted_variable_is_allowed(self):
+        self.body_file(signed("本文"), name="pr.md")
+        self.assert_allowed(
+            f'cd /tmp && S="{self.root}"; gh pr create --title t --body-file "${{S}}/pr.md"'
+        )
+
+    def test_unsigned_body_file_via_assigned_variable_is_denied(self):
+        self.body_file("本文です。\n", name="plan.md")
+        self.assert_denied(f"S={self.root} && gh issue comment 395 -F $S/plan.md")
+
+    def test_body_file_via_unresolvable_variable_is_allowed(self):
+        # 値がコマンドの外 (シェルの環境・置換) にある変数は、フックからは読めない。
+        # 判断材料が無いので、無署名と決めつけて差し戻さない
+        self.assert_allowed('gh issue comment 395 -F "$BODY"')
+        self.assert_allowed("gh issue comment 395 -F $(mktemp)")
+
     # --- 無効化スイッチ ----------------------------------------------------
 
     def test_disabled_by_env_lets_unsigned_body_through(self):
