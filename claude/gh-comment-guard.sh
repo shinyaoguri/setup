@@ -103,9 +103,30 @@ body_files=$(printf '%s' "$command" |
   grep -oE "(^|[[:space:]])(-F|--body-file)([[:space:]]+|=)(\"[^\"]*\"|'[^']*'|[^[:space:];&|]+)" |
   sed -E "s/^.*(-F|--body-file)([[:space:]]+|=)//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/")
 
+
+# パスはシェル変数で来ることがある (サブエージェントは「S=<scratchpad> && gh … -F $S/x.md」と
+# 書く)。同じコマンドの中でリテラルを代入した変数だけを展開する。値がコマンドの外にある
+# 変数や置換はフックから読めないので、判断材料が無いとして差し戻さない — 無署名と
+# 決めつけると、署名入りの本文まで止める
+resolve_path() { # $1=パス → 展開後のパス (展開しきれなければ失敗)
+  local path=$1 name value
+  [[ $path == \~/* ]] && path="$HOME/${path#\~/}"
+  while [[ $path =~ \$\{?([A-Za-z_][A-Za-z0-9_]*)\}? ]]; do
+    name=${BASH_REMATCH[1]}
+    value=$(printf '%s' "$command" |
+      grep -oE "(^|[;&|[:space:]])${name}=(\"[^\"\$\`]*\"|'[^']*'|[^[:space:];&|\"'\$\`]+)" |
+      tail -n 1 | sed -E "s/^[;&|[:space:]]?${name}=//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/")
+    [ -n "$value" ] || return 1
+    path=${path//"${BASH_REMATCH[0]}"/$value}
+  done
+  [[ $path == *[\$\`]* ]] && return 1 # $(…) や `…` の置換
+  printf '%s' "$path"
+}
+
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  # 読めないパス (これから作る、変数のまま、標準入力の -) は判断材料が無いだけ。
+  file=$(resolve_path "$file") || exit 0
+  # 読めないパス (これから作る、標準入力の -) は判断材料が無いだけ。
   # ここで落とさず、コマンド文字列側の署名を見て判断する
   [ -f "$file" ] || continue
   haystack="$haystack
