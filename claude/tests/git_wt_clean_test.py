@@ -20,6 +20,8 @@ from hookenv import clean_env
 REPO = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO / "bin" / "git-wt-clean"
 OLD = time.time() - 30 * 86400
+# 畳まれた worktree の近道 (既定 1 日) には届き、通常の閾値 (既定 7 日) には届かない
+TWO_DAYS = time.time() - 2 * 86400
 
 
 class GitWtCleanTest(unittest.TestCase):
@@ -56,11 +58,26 @@ class GitWtCleanTest(unittest.TestCase):
             self.age(path)
         return path
 
-    def age(self, path):
+    def age(self, path, when=OLD):
         admin = Path(self.git("rev-parse", "--absolute-git-dir", cwd=path).strip())
         for f in ("HEAD", "index", "logs/HEAD"):
             if (admin / f).exists():
-                os.utime(admin / f, (OLD, OLD))
+                os.utime(admin / f, (when, when))
+
+    def with_origin(self):
+        """裸のリモートに main を置き、origin/HEAD を張る (既定ブランチの比較相手)。"""
+        bare = self.root / "origin.git"
+        self.git("init", "-q", "--bare", str(bare), cwd=self.root)
+        self.git("remote", "add", "origin", str(bare))
+        self.git("push", "-q", "-u", "origin", "main")
+        self.git("remote", "set-head", "origin", "main")
+
+    def branch_with_change(self, name, content):
+        """main から切ったブランチに 1 コミット足した worktree を作る。"""
+        path = self.add(name, "-b", name, old=False)
+        (path / "a.txt").write_text(content)
+        self.git("commit", "-qam", name, cwd=path)
+        return path
 
     def run_script(self, *args, cwd=None):
         return subprocess.run(
@@ -113,7 +130,61 @@ class GitWtCleanTest(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         self.assertNotIn(str(path), self.git("worktree", "list"))
 
+    def test_lists_folded_worktree_after_one_day(self):
+        """squash merge 済み (同じ変更が別のコミットで main に入った) なら 7 日待たない。"""
+        self.with_origin()
+        path = self.branch_with_change("feat-done", "done\n")
+        (self.main / "a.txt").write_text("done\n")
+        self.git("commit", "-qam", "squash of feat-done")
+        self.git("push", "-q", "origin", "main")
+        self.age(path, TWO_DAYS)
+        self.assertEqual(self.listed(), {path})
+
+    def test_lists_worktree_whose_upstream_is_gone_after_one_day(self):
+        """merge でリモートのブランチが消えた (追跡先が gone) なら 7 日待たない。"""
+        self.with_origin()
+        path = self.branch_with_change("feat-gone", "gone\n")
+        self.git("push", "-q", "-u", "origin", "feat-gone", cwd=path)
+        self.git("push", "-q", "origin", "--delete", "feat-gone")
+        self.git("fetch", "-q", "--prune", "origin")
+        self.age(path, TWO_DAYS)
+        self.assertEqual(self.listed(), {path})
+
+    def test_merged_days_threshold_is_configurable(self):
+        self.with_origin()
+        path = self.add("same", "--detach", old=False)
+        result = self.run_script("--list", "--merged-days", "0")
+        self.assertEqual({Path(p).resolve() for p in result.stdout.splitlines()}, {path})
+
     # --- 残す側 -------------------------------------------------------------
+
+    def test_keeps_unfolded_worktree_for_the_full_days(self):
+        """main に入っていない仕事は、2 日では消さない (通常の 7 日を待つ)。"""
+        self.with_origin()
+        path = self.branch_with_change("feat-open", "open\n")
+        self.age(path, TWO_DAYS)
+        self.assertEqual(self.listed(), set())
+
+    def test_keeps_folded_worktree_active_within_a_day(self):
+        """畳まれていても、1 日以内に触ったものは使い途中かもしれないので残す。"""
+        self.with_origin()
+        self.add("fresh", "--detach", old=False)
+        self.assertEqual(self.listed(), set())
+
+    def test_app_worktree_does_not_take_the_folded_shortcut(self):
+        """アプリが作った worktree はアプリが回収するので、近道に乗せず 7 日のまま。"""
+        self.with_origin()
+        path = self.add("app", "--detach")
+        admin = Path(self.git("rev-parse", "--absolute-git-dir", cwd=path).strip())
+        (admin / "claude-desktop-worktree").touch()
+        self.age(path, TWO_DAYS)
+        self.assertEqual(self.listed(), set())
+
+    def test_without_a_remote_folded_shortcut_is_off(self):
+        """比べる既定ブランチが無ければ、近道は使わない。"""
+        path = self.add("noremote", "--detach")
+        self.age(path, TWO_DAYS)
+        self.assertEqual(self.listed(), set())
 
     def test_keeps_tracked_changes(self):
         path = self.add("dirty", "--detach")
@@ -166,6 +237,9 @@ class GitWtCleanTest(unittest.TestCase):
 
     def test_rejects_bad_days(self):
         self.assertEqual(self.run_script("--days", "x").returncode, 64)
+
+    def test_rejects_bad_merged_days(self):
+        self.assertEqual(self.run_script("--merged-days", "-1").returncode, 64)
 
     def test_rejects_unknown_argument(self):
         self.assertEqual(self.run_script("--force").returncode, 64)
