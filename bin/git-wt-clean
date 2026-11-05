@@ -11,6 +11,7 @@
 #   git wt-stale              消してよい worktree を一覧 (= git-wt-clean --list)
 #   git wt-clean              それを削除し、実体が消えた登録を prune する
 #   --days N                  最終活動からの日数の閾値 (既定 7)
+#   --merged-days M           仕事が畳まれた worktree の閾値 (既定 1。下の「畳まれた」)
 #
 # 消すのは「消しても 1 ビットも失われない」ものだけ。全部を満たすこと:
 #   1. メインの worktree でも、呼び出し元を含む worktree でもない。locked でない
@@ -21,7 +22,17 @@
 #      worktree を消してもブランチは残る。detached のまま積んだ未参照のコミットは
 #      消すと reflog 頼みになるので残す
 #   4. 最終活動から N 日以上。他のセッションがいま使っている worktree を消さないため。
-#      活動は worktree の管理ディレクトリ (HEAD・index・logs/HEAD) の最新 mtime で見る
+#      活動は worktree の管理ディレクトリ (HEAD・index・logs/HEAD) の最新 mtime で見る。
+#      **仕事が既定ブランチに入った worktree は M 日 (既定 1) で足りる** — 下の「畳まれた」
+#
+# 畳まれた worktree (mokume-metal/mokume#3769): 7 日の待ちは、使い途中の worktree を
+# 消さないための余裕だった。ところが週に数十本の PR を出す速さでは、merge 済みの worktree が
+# 7 日分 (手元で 75 個・215G) 溜まる。次のどちらかなら仕事は終わっているので、待ちを M 日にする:
+#   - ブランチの追跡先が gone (merge でリモートのブランチが消えた)
+#   - HEAD を既定ブランチ (origin/HEAD、無ければ origin/main) へ merge しても木が変わらない
+#     (squash merge 済み・変更が無い)。merge-tree はファイルにも ref にも書かない
+# アプリが作った worktree (管理ディレクトリに claude-desktop-worktree がある) は、アプリが
+# 自分で再利用・回収するので、この近道に乗せず N 日のまま扱う
 #
 # 削除は `git worktree remove` に --force 無しで任せる。上の判定をすり抜けても、
 # 変更や追跡外ファイルがあれば git 自身が断る (二重の安全側)。
@@ -41,11 +52,14 @@ die() {
 
 list=0
 days=7
+merged_days=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) list=1 ;;
     --days) shift; days=${1-} ;;
     --days=*) days=${1#--days=} ;;
+    --merged-days) shift; merged_days=${1-} ;;
+    --merged-days=*) merged_days=${1#--merged-days=} ;;
     -h|--help) usage; exit 0 ;;
     *) die "不明な引数: $1" ;;
   esac
@@ -54,6 +68,9 @@ done
 case "$days" in
   ''|*[!0-9]*) die "--days には 0 以上の整数を渡す: '$days'" ;;
 esac
+case "$merged_days" in
+  ''|*[!0-9]*) die "--merged-days には 0 以上の整数を渡す: '$merged_days'" ;;
+esac
 
 git rev-parse --git-dir >/dev/null 2>&1 || die "git リポジトリの中で実行する"
 
@@ -61,6 +78,13 @@ git rev-parse --git-dir >/dev/null 2>&1 || die "git リポジトリの中で実�
 here=$(git rev-parse --show-toplevel 2>/dev/null) && here=$(cd "$here" && pwd -P) || here=
 now=$(date +%s)
 threshold=$((days * 86400))
+merged_threshold=$((merged_days * 86400))
+
+# 既定ブランチ (畳まれたかを比べる相手)。無ければ近道を使わない
+base=$(git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) ||
+  base=$(git rev-parse -q --verify --symbolic-full-name refs/remotes/origin/main 2>/dev/null) || base=
+base_tree=
+[ -n "$base" ] && base_tree=$(git rev-parse -q --verify "$base^{tree}" 2>/dev/null)
 
 mtime() {
   stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
@@ -78,15 +102,32 @@ last_activity() {
   echo "$latest"
 }
 
+# 仕事が畳まれたか (上の「畳まれた」)。$1=HEAD $2=branch の ref (detached なら空)
+folded() {
+  local head=$1 branch=$2 tree
+  if [ -n "$branch" ]; then
+    [ "$(git for-each-ref --format='%(upstream:track)' "$branch" 2>/dev/null)" = "[gone]" ] && return 0
+  fi
+  [ -n "$base_tree" ] || return 1
+  tree=$(git merge-tree --write-tree "$base" "$head" 2>/dev/null | sed -n 1p) || return 1
+  [ "$tree" = "$base_tree" ]
+}
+
 removable() {
-  local path=$1 head=$2 branch=$3 locked=$4 real st
+  local path=$1 head=$2 branch=$3 locked=$4 real st idle admin
   [ "$locked" = 1 ] && return 1
   [ -d "$path" ] || return 1 # 実体が無いものは prune の持ち物
   real=$(cd "$path" && pwd -P) || return 1
   if [ -n "$here" ]; then
     case "$here/" in "$real/"*) return 1 ;; esac
   fi
-  [ $((now - $(last_activity "$path"))) -ge "$threshold" ] || return 1
+  idle=$((now - $(last_activity "$path")))
+  if [ "$idle" -lt "$threshold" ]; then
+    [ "$idle" -ge "$merged_threshold" ] || return 1
+    admin=$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+    [ -e "$admin/claude-desktop-worktree" ] && return 1
+    folded "$head" "$branch" || return 1
+  fi
   # --no-optional-locks: status は index を機会的に書き直し、その mtime が最終活動に
   # 数えられる。Stop hook は毎ターン流すので、書かせると無活動の時計を毎回巻き戻して
   # 永遠に閾値へ届かない
