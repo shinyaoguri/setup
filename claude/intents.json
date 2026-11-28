@@ -447,8 +447,7 @@
         {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-audit"},
         {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-audit-min"},
         {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-audit-fix"},
-        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-bootstrap"},
-        {"kind": "self", "ref": "claude/repo-standards.json"}
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/repo-bootstrap"}
       ],
       "depends_on": [
         {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
@@ -456,9 +455,8 @@
         {"surface": "skill-spec", "name": "サブエージェント (agents/*.md) の model 指定", "stability": "documented"},
         {"surface": "plugin-spec", "name": "CLAUDE_PLUGIN_ROOT", "stability": "documented"}
       ],
-      "verify": ["claude/tests/repo_standards_test.py"],
-      "sunset": "本体か GitHub が、リポジトリ設定を宣言した標準と突き合わせる監査を提供したら",
-      "gap": "claude/repo-standards.json は ADR 0022 でプラグイン同梱へ移る前の旧正本で、もう読まれていないのに残っている (撤去は shinyaoguri/setup#233)"
+      "verify": ["none: 正本と消費側スクリプトの契約は claude-plugins の scripts/check-repo-standards.sh が同リポジトリの CI で検査する (ADR 0022)"],
+      "sunset": "本体か GitHub が、リポジトリ設定を宣言した標準と突き合わせる監査を提供したら"
     },
     {
       "id": "env-self-diagnosis",
