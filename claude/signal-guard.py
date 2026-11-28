@@ -29,8 +29,9 @@
       自分の claude そのもの・フックの祖先              → deny
       一番近い claude が自分と別                        → deny (他セッションのもの)
       自分の claude の直下が Bash ツールのシェル         → 素通し (自分が立てたもの)
-      自分の claude の直下がそれ以外                    → ask (MCP サーバか、exec で置き換えた
-                                                          自分の背面プロセスか区別できない)
+      自分の claude の直下がそれ以外:
+        fd 1 が通常ファイル                             → 素通し (exec で起動した自分の背面プロセス)
+        それ以外 (通信路・/dev/null・読めない)           → ask (MCP サーバかもしれない)
       どの claude にも属さない (孤児) → **出所で見直す** (下記):
         出所にこのセッションの session_id               → allow
         出所がこのセッションの作業ディレクトリ配下       → allow / 同じ所を開いた別セッションが
@@ -57,12 +58,15 @@ deny が多いのは、正しい形が機械的に決まってその場で打ち
 PID を出すコマンドだけを先に打ち、確かめた数字で `kill <PID>` を送り直せばよい。
 ask は持ち主を判定できないときだけで、判定できない以上は人に返す。
 
-**自分の claude の直接の子は ask にとどめる。** このセッションの MCP サーバも、背面実行で
-`exec` を使った自分のプロセス (シェルが置き換わり、シェルの印ごと消える) も、claude の直接の
-子として同じ形に見える。環境変数で分けようにも、`/bin/sleep` のような OS 同梱のバイナリは
-SIP により外から環境を読めない (実測で 0 件)。区別できないものを deny にすると自分の
-プロセスを止められなくなり、素通しにすると自分の MCP サーバを守れないので、人に返す。
-背面実行で `exec` を使わなければ、自分のプロセスはシェルの印の下に残って素通しになる。
+**自分の claude の直接の子は fd 1 の行き先で分ける** (setup#303)。このセッションの MCP サーバも、
+背面実行で `exec` を使った自分のプロセス (シェルが置き換わり、シェルの印ごと消える) も、claude の
+直接の子として同じ形に見える。環境変数で分けようにも、`/bin/sleep` のような OS 同梱のバイナリは
+SIP により外から環境を読めない (実測で 0 件)。分けられるのは fd 1 で、stdio で話すサーバでは
+claude との通信路 (unix ソケットかパイプ)、背面プロセスではタスクの出力ファイルか自分で向けた
+ログ (通常ファイル) になる (実測)。通常ファイルなら素通しにし、それ以外は人に返す — 区別できない
+ものを deny にすると自分のプロセスを止められなくなり、素通しにすると自分の MCP サーバを守れない。
+エージェントが `exec` を書くのは kill の宛先をシェルでなく本体にしたいからで (実例 3 件すべて)、
+「exec を使うな」では応えられない。
 
 **塞いでいない穴:** `kill` 系のコマンドを経由しない送り方 (`python3 -c 'os.kill(…)'`・
 `osascript -e 'quit app …'`・`launchctl`・スクリプトファイルの中の kill) と、Bash 以外の経路。
@@ -227,6 +231,10 @@ def kill_targets(arguments):
 # --- プロセス表 ------------------------------------------------------------------
 
 
+# テスト用のプロセス表が持つ fd 1 の種類 (7 列目)。差し替え中は lsof を呼ばずにこれを使う
+STDOUT_FIXTURE = {}
+
+
 def using_fixture():
     """プロセス表が差し替えられているか (テスト)。差し替え中は `lsof` を呼ばない。"""
     return bool(os.environ.get("SIGNAL_GUARD_PS", ""))
@@ -241,10 +249,11 @@ def process_table():
             for line in handle:
                 if not line.strip():
                     continue
-                pid, ppid, started, comm, args, cwd = (
-                    line.rstrip("\n").split("\t") + [""] * 6
-                )[:6]
+                pid, ppid, started, comm, args, cwd, stdout = (
+                    line.rstrip("\n").split("\t") + [""] * 7
+                )[:7]
                 table[int(pid)] = (int(ppid), started, comm, args, cwd)
+                STDOUT_FIXTURE[int(pid)] = stdout
         return table
     heads = subprocess.run(
         ["ps", "-axww", "-o", "pid=,ppid=,lstart=,comm="], capture_output=True, text=True
@@ -295,6 +304,25 @@ def cwds_of(table, pids):
         elif line.startswith("n") and current is not None:
             known.setdefault(current, line[1:])
     return known
+
+
+def stdout_is_file(pid):
+    """fd 1 が通常ファイルか (setup#303)。
+
+    stdio で話すサーバ (MCP / LSP) の fd 1 は claude との通信路 (unix ソケットかパイプ) なので、
+    通常ファイルにはなりえない。`exec` で起動した背面プロセスの fd 1 はセッションのタスク出力
+    ファイルか、自分でリダイレクトしたログになる。読めない・ファイル以外 (/dev/null を含む) は
+    偽 — 判定不能は人に返す側へ倒す。
+    """
+    if using_fixture():
+        return STDOUT_FIXTURE.get(pid, "") == "REG"
+    try:
+        out = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "1", "-Ft"], capture_output=True, text=True
+        ).stdout
+    except OSError:
+        return False
+    return "tREG" in out.splitlines()
 
 
 def under(path, root):
@@ -423,11 +451,15 @@ def judge_pid(table, own, own_ancestors, pid, verdict, marks=("", "")):
             f"切れる (setup#150 で実際に起きた)。{HOW_TO}",
         )
     elif below is None or TOOL_SHELL_MARK not in table[below][3]:
+        # シェルの印が無くても、fd 1 が通常ファイルなら exec で起動した自分の背面プロセス
+        if below is not None and stdout_is_file(below):
+            return
         verdict.add(
             "ask",
-            f"{describe(table, pid)} はこのセッションの Claude Code が直接持つ子である。MCP サーバなら"
-            "止めるとこのセッションのツールが切れる。背面実行で `exec` を使って立てた自分のプロセスも"
-            "同じ形に見えるので区別できず、人に確認する (setup#150)。",
+            f"{describe(table, pid)} はこのセッションの Claude Code が直接持つ子で、出力が"
+            "ファイルに向いていない。MCP サーバなら止めるとこのセッションのツールが切れるので、"
+            "人に確認する (setup#150)。自分が背面で立てたプロセスなら、出力をファイルへ向けて"
+            "起動すれば (背面実行の既定、または `> log`) 確認なしで止められる (setup#303)。",
         )
 
 

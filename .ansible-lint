@@ -6,8 +6,11 @@ exclude_paths:
   - .github/
 
 skip_list:
+  # roles ディレクトリを持たない構成 (tasks/*.yml を playbook が直接 import する)
   - role-name
-  - fqcn-builtins
+  # name[casing] は「名前は大文字で始める」。ここで引っかかるのは macOS / fnm と
+  # いった固有名詞で、正しい綴りの方を優先する (issue #179)
+  - name[casing]
 
 warn_list:
   - experimental

@@ -20,8 +20,11 @@ issue #138 では mokume を主として開いたセッション (`.claude/setti
 この方針が守られているかは claude/tests/env_isolation_test.py が見る。
 """
 
+import atexit
 import os
 import re
+import shutil
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -44,6 +47,10 @@ SYSTEM_VARIABLES = frozenset(
 # ${VAR:-既定値} / ${VAR:=既定値} と、python の os.environ.get("VAR") / os.environ["VAR"]
 _SHELL_DEFAULT = re.compile(r"\$\{([A-Z][A-Z0-9_]*):[-=]")
 _PY_ENVIRON = re.compile(r"environ(?:\.get)?[\(\[]\s*[\"']([A-Z][A-Z0-9_]*)[\"']")
+# bin/secret-read は数値の設定を `numeric_env NAME 既定値` で読む (中は eval)。上の 2 つの
+# 綴りに掛からないので、SECRET_CACHE_TTL などが呼び出し元のセッションからテストへ
+# 継承されていた (#218)。関数の定義行 (`numeric_env() {`) は大文字で始まらないので当たらない
+_NUMERIC_ENV = re.compile(r"numeric_env\s+([A-Z][A-Z0-9_]*)")
 
 
 def script_files():
@@ -59,7 +66,11 @@ def script_files():
 def raw_variables_read_by(path):
     """そのスクリプトが既定値つきで読んでいる変数 (除外前)。"""
     text = path.read_text(errors="replace")
-    return set(_SHELL_DEFAULT.findall(text)) | set(_PY_ENVIRON.findall(text))
+    return (
+        set(_SHELL_DEFAULT.findall(text))
+        | set(_PY_ENVIRON.findall(text))
+        | set(_NUMERIC_ENV.findall(text))
+    )
 
 
 def variables_read_by(path):
@@ -76,12 +87,28 @@ def switch_variables():
     return frozenset(found)
 
 
+@lru_cache(maxsize=1)
+def empty_zdotdir():
+    """空のディレクトリ。ZDOTDIR をここへ向けると、子の zsh は利用者の rc ファイルを読まない。"""
+    path = tempfile.mkdtemp(prefix="claude-tests-zdotdir-")
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
+
+
 def clean_env(**overrides):
     """呼び出し元のスイッチを落とした環境に、テストが明示した値を載せて返す。
 
     値に None を渡した変数は環境から落とす (未設定の再現)。
+
+    **環境変数を落としても、子の zsh が ~/.zshenv を読めば戻ってくる。** このリポジトリの
+    zshenv は /opt/homebrew/bin と setup の bin/ を PATH の先頭へ足すので、偽コマンドを
+    PATH の先頭へ置いたつもりでも、Homebrew に同名があれば本物が先に引かれる (偽 brew の
+    つもりで本物の `brew install` が走った。issue #238)。ZDOTDIR を空のディレクトリへ
+    向けて読ませない。`-f` と違って環境変数なので、テスト対象のスクリプトが起動する
+    孫の zsh にも届く。rc ファイルそのものを試すテストは ZDOTDIR を明示して上書きする。
     """
     env = {k: v for k, v in os.environ.items() if k not in switch_variables()}
+    env["ZDOTDIR"] = empty_zdotdir()
     for key, value in overrides.items():
         if value is None:
             env.pop(key, None)

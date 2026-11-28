@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# helpfeel/cosense-cli の cosense を、1Password の Personal Access Token を持たせて起動する。
+#
+# なぜ要るか: cosense CLI は PAT を ~/.cosense/settings.json に平文で置く作りで、1Password を
+# 正本にする口が無い。ただし環境変数 COSENSE_PAT があればそちらを設定ファイルより優先する
+# (cosense-cli の src/lib/settings.ts)。そこで起動のたびに secret-read の役割 cosense-pat から
+# 読んで渡す。値はこのプロセスとその子にだけ現れ、シェル全体の環境には常駐させない
+# (zshenv で export すると、どのシェルを開いてもすべての子プロセスへ漏れる)。
+#
+# 名前で呼ばれる (cosense-cli スキルも、各リポジトリのスクリプトも `cosense` と打つ) ので、
+# PATH で本物より前に居る必要がある。fnm が node の bin を前へ入れるため、zshrc が fnm の
+# 後で setup の bin を入れ直している。
+#
+# COSENSE_PAT が既に設定されていれば (空でも) 何もしない。空で設定しておくと、この差し込みを
+# 止めて settings.json に任せられる (1Password に Cosense の項目を持たない人向け)。
+# 役割を解決できなかったときも止めずに警告だけ出し、settings.json に任せる。
+#
+# テストは claude/tests/cosense_wrapper_test.py。
+
+set -euo pipefail
+
+die() {
+  printf 'cosense (setup): %s\n' "$1" >&2
+  exit 1
+}
+
+# symlink を辿って実体の絶対パスを返す
+resolve() {
+  local path="$1" dir
+  while [ -L "$path" ]; do
+    dir=$(cd -P "$(dirname "$path")" && pwd)
+    path=$(readlink "$path")
+    case "$path" in /*) ;; *) path="$dir/$path" ;; esac
+  done
+  dir=$(cd -P "$(dirname "$path")" && pwd)
+  printf '%s/%s' "$dir" "$(basename "$path")"
+}
+
+self=$(resolve "${BASH_SOURCE[0]}")
+readonly self
+
+# 本物を PATH から探す。実体が自分と同じものは飛ばす — 置き場所を比べるだけだと、
+# 別の場所から張った symlink 越しに自分を呼び直してしまう
+find_real() {
+  local dir candidate dirs=()
+  IFS=: read -r -a dirs <<<"$PATH"
+  for dir in ${dirs[@]+"${dirs[@]}"}; do
+    [ -n "$dir" ] || continue
+    candidate="$dir/cosense"
+    if ! { [ -f "$candidate" ] && [ -x "$candidate" ]; }; then
+      continue
+    fi
+    [ "$(resolve "$candidate")" = "$self" ] && continue
+    printf '%s' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+real=$(find_real) ||
+  die "本物の cosense が PATH に見つからない (npm install -g @helpfeel/cosense-cli で入れる)"
+
+if [ -z "${COSENSE_PAT+set}" ]; then
+  if pat=$("$(dirname "$self")/secret-read" cosense-pat); then
+    export COSENSE_PAT="$pat"
+  else
+    printf 'cosense (setup): 1Password から PAT を取れなかったので ~/.cosense/settings.json に任せる (理由は上。止めるには COSENSE_PAT を空で設定する)\n' >&2
+  fi
+  pat=''
+fi
+
+exec "$real" "$@"

@@ -25,8 +25,8 @@ DIFF_BODY = """TASK [Set Git global email] ****
 --- before
 +++ after
 @@ -1 +1 @@
--36407060+shinyaoguri@users.noreply.github.com
-+ogrsny@gmail.com
+-old-noreply@users.noreply.github.invalid
++new@example.invalid
 
 changed: [localhost]
 """
@@ -150,6 +150,118 @@ class CommandShapeTest(HookTestCase):
         ):
             with self.subTest(command):
                 self.assert_allowed(self.run_hook(command))
+
+    def test_command_substitution_is_not_executed(self):
+        """予告を組み立てる過程で任意コードを実行しない (issue #164)。
+
+        複合コマンドの判定が [;&|] しか見ていないと、$(...) が eval まで届いて
+        **人間が承認する前に**実行される。「実行前に中身を見る」ためのフックが
+        攻撃面になる形なので、実行されていないことを痕跡で直接見る。
+        """
+        self.fake_ansible(RECAP_NO_CHANGE)
+        marker = self.root / "PWNED"
+        self.assert_decision(
+            self.run_hook(
+                f"ansible-playbook playbook.yml --extra-vars $(touch {marker})"
+            ),
+            "ask",
+        )
+        self.assertFalse(marker.exists(), "承認前にコマンド置換が実行された")
+
+    def test_backtick_substitution_is_not_executed(self):
+        """バッククォートも同じ。"""
+        self.fake_ansible(RECAP_NO_CHANGE)
+        marker = self.root / "PWNED_BQ"
+        self.assert_decision(
+            self.run_hook(f"ansible-playbook playbook.yml --extra-vars `touch {marker}`"),
+            "ask",
+        )
+        self.assertFalse(marker.exists(), "承認前にバッククォートが実行された")
+
+    def test_redirect_asks(self):
+        """リダイレクトも予告を組み立てられない形 (プロセス置換 <(...) もここで塞がる)。"""
+        self.fake_ansible(RECAP_NO_CHANGE)
+        self.assert_decision(
+            self.run_hook("ansible-playbook playbook.yml > out.log"), "ask"
+        )
+
+    def test_sudo_prefixed_playbook_is_inspected(self):
+        """become を要するタスクでは sudo を付ける形が自然に出る (issue #164)。
+
+        先頭語だけを見ていると sudo で判定から外れ、予告なしに playbook が走る。
+        """
+        self.fake_ansible(RECAP_WITH_CHANGE + "\n" + DIFF_BODY)
+        reason = self.assert_decision(
+            self.run_hook("sudo ansible-playbook playbook.yml --tags macos"), "ask"
+        )
+        self.assertIn("changed", reason)
+
+    def test_env_prefixed_playbook_is_inspected(self):
+        """env / 変数代入も同じ。"""
+        self.fake_ansible(RECAP_WITH_CHANGE + "\n" + DIFF_BODY)
+        self.assert_decision(
+            self.run_hook("ANSIBLE_FORCE_COLOR=0 ansible-playbook playbook.yml"), "ask"
+        )
+
+    def test_output_filter_pipes_are_stripped_for_the_forecast(self):
+        """出力を絞るだけの後続は、予告の邪魔をしない (setup#302)。
+
+        エージェントは長い出力を `| tail` で絞るのが常で、絞っただけで「繋がっている」
+        として予告を諦めていた。外すのは予告の組み立てだけで、実行は変わらない。
+        """
+        commands = (
+            "ansible-playbook playbook.yml --tags x 2>&1 | tail -30",
+            'ansible-playbook playbook.yml --tags codex 2>&1 | grep -E "TASK|changed|ok=" | tail -12',
+            "ansible-playbook playbook.yml | head -5 | cat",
+        )
+        for command in commands:
+            with self.subTest(command=command, changed=0):
+                self.fake_ansible(RECAP_NO_CHANGE)
+                self.assert_allowed(self.run_hook(command))
+            with self.subTest(command=command, changed=1):
+                self.fake_ansible(DIFF_BODY + RECAP_WITH_CHANGE)
+                reason = self.assert_decision(self.run_hook(command), "ask")
+                self.assertIn("1 件が変更される", reason)
+
+    def test_read_only_flags_pass(self):
+        """何も変えないフラグは予告せずに通す。dry-run も走らせない。"""
+        for command in (
+            "ansible-playbook playbook.yml --syntax-check 2>&1 | tail -2",
+            "ansible-playbook playbook.yml --list-tasks",
+            "ansible-playbook playbook.yml --list-tags --tags codex",
+            "ansible-playbook playbook.yml --list-hosts",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(self.run_hook(command))
+
+    def test_non_filter_pipes_still_ask(self):
+        """絞り以外が続く形・絞りに置換やリダイレクトが混ざる形は外さない。"""
+        self.fake_ansible(RECAP_NO_CHANGE)
+        marker = self.root / "PWNED_FILTER"
+        for command in (
+            "ansible-playbook playbook.yml | sh",
+            "ansible-playbook playbook.yml | tee log.txt",
+            "ansible-playbook playbook.yml | tail -1 > out.txt",
+            f'ansible-playbook playbook.yml | grep "$(touch {marker})"',
+            "ansible-playbook playbook.yml | grep x; rm -rf build",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
+        self.assertFalse(marker.exists(), "承認前にコマンド置換が実行された")
+
+    def test_check_flag_of_another_command_is_not_ansibles(self):
+        """別のコマンドの -C を ansible の --check と読まない (setup#208)。
+
+        コマンド全体から探していたため、worktree 運用で頻出の `git -C` が同じ行に
+        あるだけで、本実行の予告が黙って出なかった。
+        """
+        for command in (
+            "git -C /tmp status; ansible-playbook playbook.yml",
+            "make -C build; ansible-playbook playbook.yml",
+            "ansible-playbook playbook.yml --check; rm -rf build",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
 
 
 if __name__ == "__main__":

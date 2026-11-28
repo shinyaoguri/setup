@@ -38,7 +38,7 @@
       ansible.builtin.import_tasks: tasks/git.yml
 
     - name: Fonts
-      tags: font
+      tags: fonts
       ansible.builtin.import_tasks: tasks/fonts.yml
 
     - name: Terminal.app defaults
@@ -52,6 +52,10 @@
     - name: Claude Code global configuration
       tags: claude
       ansible.builtin.import_tasks: tasks/claude.yml
+
+    - name: Codex global hooks
+      tags: codex
+      ansible.builtin.import_tasks: tasks/codex.yml
 
     - name: fnm and Node.js
       tags: fnm

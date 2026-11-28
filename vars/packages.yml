@@ -1,33 +1,91 @@
 ---
+# 一覧は **required (ワンライナーで必ず入れる) と optional (要るときに選んで入れる)** に
+# 割ってある (issue #191)。
+#
+# なぜ割るか: 宣言されている cask 19 本のうち **17 本が auto_updates: true** で、自分で
+# 更新する。そしてこのリポジトリはどこでも `brew upgrade` を走らせていない —
+# `auto_updates: true` の cask は --greedy なしでは対象にすらならない。つまり brew の
+# 役割は**初回に入れることだけ**で、「宣言しておけば管理してもらえる」という期待は
+# 成り立っていない。一方でダウンロードは重く、Office (2.7GB) と ScanSnap (1.1GB) だけで
+# 全体 (約 9.5GB) の 40% を占める。
+#
+# **台帳の範囲は「どのマシンでも使うもの」まで。** 特定のプロジェクトでしか使わない道具
+# (言語処理系・ビルドツール・そのプロジェクトの CLI) は、そのプロジェクトの手順が入れる
+# ものなので、ここには載せない — `brew leaves` との差がゼロになることは目指さない。
+#
+# required に置くのは「**それが無いと playbook か鍵まわりが成立しないもの**」だけ。
+# 「あると便利」は optional。宣言そのものはどちらの側にも残るので、「自分が何を使うか」の
+# 台帳としての価値は失わない。
+
 ###############
 # CUI App List
 ###############
-homebrew_packages:
+
+# 無いとセットアップ自体が進まないもの
+homebrew_packages_required:
+  # playbook と clone が使う
   - git
+  # App Store の**導入状況を報告する**のに要る (`mas list`)。入れる側でなく見る側の前提
+  # なので、App Store アプリに必須が 1 つも無くてもこれは required に残る
+  - mas
+  # 選択 UI そのもの。fzf が一覧と preview、gum が報告と進捗を描く。
+  # これを適用する playbook は Step 6 なので、選択を使う Step 5.5 より前に
+  # sillicon_mac_setup.zsh が自前で入れる (mas と同じ形)
+  - fzf
+  - gum
+  # 配っているフックと運用の前提。claude/plan-record.sh が PR・Issue へ投稿し、
+  # グローバル CLAUDE.md は Issue・PR を作業の置き場にしている。README 手順 3 の
+  # `gh auth refresh` もこれ。macOS は同梱していないので、無いと配った設定が動かない
+  # (issue #200)。jq もフックが使うが、こちらは macOS 15 以降が /usr/bin/jq を同梱している
+  - gh
+
+# 要るときに選んで入れるもの
+homebrew_packages_optional:
+  # macOS は vim を同梱しているので、無くても編集はできる
   - vim
   - neovim
+  # Node を使わないマシンには要らない。外すと tasks/fnm.yml が対象外になる
+  # (あちらに「fnm が無ければ skip」のガードを入れてある)
   - fnm
+  # zshrc が hook を読む (.envrc でディレクトリ単位に環境を切り替える)。存在チェック付き
+  # なので、無くても壊れない
+  - direnv
 
 ###############
 # GUI App List
 ###############
-homebrew_cask_packages:
+
+# playbook 自身か鍵まわりの前提。「あると便利な GUI アプリ」ではない
+homebrew_cask_packages_required:
+  # bin/secret-read が使う。CLI 連携にデスクトップアプリが要る (README 手順 4)
   - 1password
   - 1password-cli
   # SSH 鍵を Secure Enclave に置く agent (コミット署名と GitHub 認証。tasks/ssh.yml)
   - secretive
+  # tasks/claude.yml が `claude mcp add` を打つので、playbook 自身の依存
+  # (入っていないマシンではそのタスクが実行ファイル不在で失敗する。issue #177)
+  - claude-code
+
+# 要るときに選んで入れるもの。**すべて auto_updates: true** で、入れれば自分で更新される
+homebrew_cask_packages_optional:
   - google-chrome
   - google-drive
   - discord
   - visual-studio-code
+  # **手動インストーラの cask。** artifact が installer: manual なので brew は
+  # .pkg を Caskroom に置くだけで、アプリのインストールは人が .pkg を開く必要がある。
+  # それでも `brew list --cask gyazo` は成功を返すので「導入済み」と報告される。
+  # 手順は README の「新しいマシンで」を参照 (issue #177)
   - gyazo
   - rectangle
   - zoom
   - todoist-app
   - notion
+  # 2.7GB。単独で最大 (issue #191 の実測)
   - microsoft-office
   - microsoft-teams
   - vlc
+  # 1.1GB。スキャナを繋がないマシンには要らない
   - fujitsu-scansnap-home
   - jump-desktop-connect
   - docker-desktop
@@ -35,8 +93,15 @@ homebrew_cask_packages:
 ###############
 # AppStore Apps
 ###############
-appstore_apps:
+
+# **必須は無い。** RunCatNeo も選択式でよい — tasks/claude.yml の seed はカードの JSON を
+# 書くだけで、RunCat が入っていなくても失敗しない (受け手が居ないだけ)。
+# したがって appstore_apps_required は置かない。
+appstore_apps_optional:
+  # 2.9GB。加えて .xip の展開が CPU バウンドで 10〜20 分級かかる
   - { name: "Xcode", id: "497799835" }
+  # tasks/claude.yml が seed する Custom Metrics カードの受け手 (issue #177)
+  - { name: "RunCatNeo", id: "6757801838" }
   - { name: "ScreenPointer", id: "1368204906" }
   - { name: "Paste", id: "967805235" }
   - { name: "Jump Desktop", id: "524141863" }
@@ -44,6 +109,9 @@ appstore_apps:
 ###############
 # Fonts
 ###############
+
+# フォントは割らない。アプリではなく**表示の土台**で、tasks/fonts.yml (ansible 側) の
+# 管轄でもある。8 本で 239MB (うち Noto CJK 2 本が 223MB)
 font_casks:
   - font-m-plus-1
   - font-m-plus-1p

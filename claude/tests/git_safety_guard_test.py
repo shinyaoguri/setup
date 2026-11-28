@@ -11,6 +11,7 @@ git add したうえで走らせる。
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -148,8 +149,44 @@ class DestructiveCommandTest(HookTestCase):
         self.assert_decision(self.run_hook("git push --force origin main"), "ask")
         self.assert_decision(self.run_hook("git push -f"), "ask")
 
-    def test_stash_drop_asks(self):
-        self.assert_decision(self.run_hook("git stash drop"), "ask")
+    def test_force_push_spelled_in_compound_commands_asks(self):
+        """区切りの手前・後ろのどちらの push でも、自分の -f / --force は拾う。"""
+        for command in (
+            "git push --force-with-lease origin x",
+            "git push origin x && git push -f origin y",
+            "git push -f origin x; gh api graphql -f query=x",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
+
+    def test_flag_of_another_command_is_not_a_force_push(self):
+        """同じ行の別のコマンドの -f を git push の引数と読まない (setup#300)。
+
+        引数の照合が区切りを越えていたため、gh のフィールド指定 `-f` を
+        force push と読み、2 週間で 3 回人を呼んでいた。
+        """
+        for command in (
+            "git push origin HEAD; gh api graphql -f query=x",
+            "git push -q origin HEAD && gh workflow run w -f a=b",
+            "git push -q -u origin x 2>&1 | grep -v remote; gh workflow run w -f t=v",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(self.run_hook(command))
+
+    def test_argument_match_stops_at_a_separator(self):
+        """区切りで止まる境界は、引数を見る他の照合にも同じく効く。"""
+        for command in (
+            "git clean -n; rm -f x",
+            "git stash list | grep drop",
+            "git reset --soft HEAD~1 && echo --hard",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(self.run_hook(command))
+
+    def test_stash_drop_outside_a_repository_asks(self):
+        """スタックを読めず固定できないときは、従来どおり ask。"""
+        with tempfile.TemporaryDirectory() as outside:
+            self.assert_decision(self.run_hook("git stash drop", cwd=outside), "ask")
 
     def test_command_after_another_is_caught(self):
         self.assert_decision(
@@ -158,6 +195,74 @@ class DestructiveCommandTest(HookTestCase):
 
     def test_git_with_global_option_is_caught(self):
         self.assert_decision(self.run_hook("git -C /tmp/repo reset --hard"), "ask")
+
+
+class StashDropTest(HookTestCase):
+    """stash drop / clear は、その時点の全エントリを固定してから通す (setup#301)。
+
+    スタックは worktree 間で共有され、消す対象は変数で渡されることが多い
+    (実例 3 件すべて)。どのエントリが消えても取り戻せるよう、全件を固定する。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.commit("init")
+
+    def push_stash(self, content):
+        (self.repo / "f.txt").write_text(content)
+        self.git("add", "f.txt")
+        self.git("stash", "push", "-q", "-m", content)
+        return self.git("rev-parse", "stash@{0}").stdout.strip()
+
+    def test_stash_drop_pins_every_entry(self):
+        shas = {self.push_stash("a"), self.push_stash("b")}
+        reason = self.assert_auto_approved(self.run_hook("git stash drop"))
+        pinned = {self.git("rev-parse", ref).stdout.strip() for ref in self.backups()}
+        self.assertEqual(pinned, shas)
+        self.assertIn("stash apply", reason, "復元方法が理由に書かれていない")
+
+    def test_stash_drop_with_variable_target_is_pinned(self):
+        """対象が変数でも、全件を固定してあれば何が消えても取り戻せる。"""
+        sha = self.push_stash("a")
+        self.assert_allowed(
+            self.run_hook("ref=stash@{0}; git stash drop -q $ref 2>&1 | tail -1")
+        )
+        self.assertEqual(
+            [self.git("rev-parse", ref).stdout.strip() for ref in self.backups()], [sha]
+        )
+
+    def test_stash_pins_are_not_duplicated(self):
+        """共有されるスタックを drop のたびに全件固定し直すと、ref が増え続ける。"""
+        self.push_stash("a")
+        self.push_stash("b")
+        self.run_hook("git stash drop")
+        self.run_hook("git stash drop stash@{1}")
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_stash_clear_pins_every_entry(self):
+        self.push_stash("a")
+        self.push_stash("b")
+        self.assert_auto_approved(self.run_hook("git stash clear"))
+        self.assertEqual(len(self.backups()), 2)
+
+    def test_stash_drop_after_push_in_the_same_command_is_denied(self):
+        """同じコマンドで積んだエントリはフックの時点に無く、固定できない。
+
+        ask にしても押す人に足せる情報が無い。分ければ固定して通せるので、
+        deny で分け方を返し、エージェントに打ち直させる。
+        """
+        for command in (
+            'git stash push -m t -- f.txt && git stash apply -q "$SHA" && git stash drop -q "$REF"',
+            "git stash && git stash drop",
+            "git stash save t; git stash clear",
+        ):
+            with self.subTest(command=command):
+                reason = self.assert_decision(self.run_hook(command), "deny")
+                self.assertIn("分け", reason)
+
+    def test_empty_stack_is_not_asked(self):
+        """スタックが空なら捨てられるものが無い (drop は git 自身が断る)。"""
+        self.assert_auto_approved(self.run_hook("git stash drop"))
 
 
 class ReversibleOperationTest(HookTestCase):
@@ -208,6 +313,44 @@ class ReversibleOperationTest(HookTestCase):
         self.with_remote()
         subprocess.run(["git", "branch", "feature/x"], cwd=self.repo, check=True)
         self.assert_auto_approved(self.run_hook("git branch -d feature/x"))
+
+    def test_forced_delete_spelled_as_lowercase_d_pins_the_tip(self):
+        """`-d --force` は -D と等価で、未マージでも消える (issue #162)。
+
+        -d だから安全という理由は --force があれば成り立たない。退避を作れたなら
+        allow でよいが、作らずに allow を返すと確認プロンプトごと消えて先端が失われる。
+        """
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/unmerged"], cwd=self.repo, check=True
+        )
+        self.commit("wip")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        tip = self.git("rev-parse", "feature/unmerged").stdout.strip()
+
+        self.assert_auto_approved(self.run_hook("git branch -d --force feature/unmerged"))
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, f"退避が作られていない: {refs}")
+        self.assertEqual(self.git("rev-parse", refs[0]).stdout.strip(), tip)
+
+    def test_forced_delete_spelled_long_pins_the_tip(self):
+        """`--delete --force` も同じ。長形式だけ検査から落ちていた。"""
+        self.with_remote()
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature/long"], cwd=self.repo, check=True
+        )
+        self.commit("wip")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        tip = self.git("rev-parse", "feature/long").stdout.strip()
+
+        self.assert_auto_approved(
+            self.run_hook("git branch --delete --force feature/long")
+        )
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, f"退避が作られていない: {refs}")
+        self.assertEqual(self.git("rev-parse", refs[0]).stdout.strip(), tip)
 
     def test_delete_with_another_command_is_not_auto_approved(self):
         """allow はコマンド全体に効くので、削除以外が混ざったら allow は返さない。
@@ -335,6 +478,64 @@ class ReversibleOperationTest(HookTestCase):
         self.with_remote()
         self.make_gone_branch("feature/done")
         self.assert_allowed(self.run_hook("git branch -D feature/done 2>&1 | tail -1"))
+
+    def make_unpushed_branch(self, name):
+        """push しておらず、origin/main にも無いコミットを持つブランチ (固定が要る形)。"""
+        subprocess.run(["git", "checkout", "-q", "-b", name], cwd=self.repo, check=True)
+        self.commit(f"on {name}")
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+
+    def test_delete_after_a_separator_is_pinned(self):
+        """区切りの後ろにある削除でも、対象名を読んで先端を固定する (setup#299)。
+
+        対象名を先頭のセグメントからしか読まなかったため、`echo a; git branch -D x`
+        は実在する枝でも「名前を確定できない」に落ちて ask になっていた (2 週間で 11 件)。
+        複合コマンドなので allow ではなく素通し (判定は permissions と分類器へ戻る)。
+        """
+        self.with_remote()
+        for name, command in (
+            ("feature/x", "echo a; git branch -D feature/x"),
+            ("feature/y", "git status && git branch -D feature/y 2>&1 | tail -1"),
+        ):
+            with self.subTest(command=command):
+                self.make_unpushed_branch(name)
+                before = len(self.backups())
+                self.assert_allowed(self.run_hook(command))
+                self.assertEqual(len(self.backups()), before + 1, "先端が固定されていない")
+
+    def test_dash_d_of_another_command_is_not_a_target(self):
+        """git branch 以外のセグメントの -d の後ろの語は、ブランチ名に数えない。
+
+        数えると実在しない名前として先端の固定に失敗し、ask に落ちる。
+        """
+        self.with_remote()
+        self.make_unpushed_branch("feature/x")
+        self.assert_allowed(self.run_hook("gh x -d foo; git branch -D feature/x"))
+        self.assertEqual(len(self.backups()), 1)
+
+    def test_delete_in_a_loop_asks(self):
+        """展開しないと対象が決まらない形は、区切りの後ろにあっても ask のまま。"""
+        self.with_remote()
+        self.assert_decision(
+            self.run_hook('for b in a; do git branch -D "$b"; done'), "ask"
+        )
+
+    def test_delete_in_another_repository_asks(self):
+        """別のリポジトリを操作する形は、cwd 側の同名ブランチを固定して通さない。
+
+        フックは cwd のリポジトリで固定するので、`cd` や `git -C` の先で消される枝は
+        退避されない (cwd の扱い全般は setup#205)。今までどおり ask に落とす。
+        """
+        self.with_remote()
+        self.make_unpushed_branch("feature/x")
+        for command in (
+            "cd ../o && git branch -D feature/x",
+            "git -C ../o branch -D feature/x",
+            "git --git-dir=../o/.git branch -D feature/x",
+        ):
+            with self.subTest(command=command):
+                self.assert_decision(self.run_hook(command), "ask")
+        self.assertEqual(self.backups(), [], "別リポジトリの削除なのに cwd 側を固定した")
 
     def test_squash_merged_branch_is_pinned_before_pruning(self):
         """squash merge 済みで追跡が生きている間は「役目を終えた」と言えない。
@@ -778,23 +979,179 @@ class DiscardBackupTest(HookTestCase):
 
     # --- 退避の後始末 -------------------------------------------------------
 
-    def test_old_backups_are_pruned(self):
-        """放っておくと ref が際限なく増えるので、退避を作った直後に古いものを落とす。"""
-        stale = f"{self.BACKUP_NS}/20200101-000000-1"
-        old_date = "2020-01-01T00:00:00 +0000"
-        sha = subprocess.run(
-            ["git", "commit-tree", "-m", "old", "HEAD^{tree}"],
+    OLD_DATE = "2020-01-01T00:00:00 +0000"
+
+    def old_commit(self, message="old"):
+        """日付の古いコミットを作って sha を返す (放置されていたブランチの先端の再現)。"""
+        return subprocess.run(
+            ["git", "commit-tree", "-m", message, "HEAD^{tree}", "-p", "HEAD"],
             cwd=self.repo, check=True, capture_output=True, text=True,
-            env=dict(os.environ, GIT_COMMITTER_DATE=old_date, GIT_AUTHOR_DATE=old_date),
+            env=dict(os.environ, GIT_COMMITTER_DATE=self.OLD_DATE, GIT_AUTHOR_DATE=self.OLD_DATE),
         ).stdout.strip()
-        self.git("update-ref", stale, sha)
+
+    def test_old_backups_are_pruned(self):
+        """放っておくと ref が際限なく増えるので、退避を作った直後に古いものを落とす。
+
+        古さは **ref 名に埋めた退避の時刻**で決まる。コミットの日付は新しくても、
+        退避してから 30 日を過ぎていれば落とす。
+        """
+        stale = [
+            f"{self.BACKUP_NS}/worktree-20200101-000000-4242-1",   # いまの命名
+            f"{self.BACKUP_NS}/20200101-000000-4242",              # ラベルと連番が付く前の命名
+        ]
+        for ref in stale:
+            self.git("update-ref", ref, "HEAD")   # コミット自体はいま作ったもの
 
         self.modify()
         self.assert_auto_approved(self.run_hook("git checkout -- f.txt"))
 
         refs = self.backups()
-        self.assertNotIn(stale, refs, "期限切れの退避が残っている")
+        for ref in stale:
+            self.assertNotIn(ref, refs, "期限切れの退避が残っている")
         self.assertEqual(len(refs), 1, "いま作った退避まで消えている")
+
+    def test_backup_of_an_old_branch_tip_survives(self):
+        """放置していたブランチを消したとき、退避が作った直後に消えない (issue #201)。
+
+        prune の基準が固定したコミットの committerdate だったため、先端が 30 日より古い
+        ブランチは「退避済み」と allow を返した直後に退避が消えていた。放置していた
+        ブランチこそ、消した後で惜しくなる対象である。
+        """
+        sha = self.old_commit("abandoned work")
+        self.git("update-ref", "refs/heads/abandoned", sha)
+
+        reason = self.assert_auto_approved(self.run_hook("git branch -D abandoned"))
+        self.assertIn("退避済み", reason)
+
+        refs = self.backups()
+        self.assertEqual(len(refs), 1, f"退避が残っていない: {refs}")
+        pinned = self.git("rev-parse", refs[0]).stdout.strip()
+        self.assertEqual(pinned, sha, "退避が別のコミットを指している")
+
+    def test_backup_of_an_old_head_survives_reset_hard(self):
+        """同じことが reset --hard の前の HEAD にも起きていた。"""
+        sha = self.old_commit("old head")
+        self.git("reset", "-q", "--hard", sha)
+        self.modify()
+
+        self.assert_auto_approved(self.run_hook("git reset --hard"))
+
+        pinned = {self.git("rev-parse", ref).stdout.strip() for ref in self.backups()}
+        self.assertIn(sha, pinned, "古い HEAD の退避が消えている")
+
+    def test_backups_with_an_unreadable_name_are_kept(self):
+        """時刻を読めない名前は落とさない (判定できないものを消す側へ倒さない)。"""
+        odd = f"{self.BACKUP_NS}/renamed-by-hand"
+        sha = self.old_commit()
+        self.git("update-ref", odd, sha)
+
+        self.modify()
+        self.assert_auto_approved(self.run_hook("git checkout -- f.txt"))
+        self.assertIn(odd, self.backups())
+
+    def test_a_timestamp_inside_a_branch_name_is_not_mistaken_for_the_backup_time(self):
+        """ブランチ名に時刻らしき並びがあっても、読むのは末尾 (退避の時刻) だけ。"""
+        name = "wip-20200101-000000-1"
+        self.git("update-ref", f"refs/heads/{name}", self.old_commit())
+
+        self.assert_auto_approved(self.run_hook(f"git branch -D {name}"))
+        self.assertEqual(len(self.backups()), 1, "ブランチ名の中の日付で期限切れと誤認した")
+
+    def test_git_discarded_lists_by_backup_time_not_commit_date(self):
+        """`git discarded` は退避した時刻の新しい順に並べる (issue #201)。
+
+        committerdate で並べると、きのう消した 2 年前のブランチが一覧の底へ沈む。
+        エイリアスは tasks/git.yml が配る実物を読んで、そのまま流す。
+        """
+        tasks = (SCRIPT.parent.parent / "tasks/git.yml").read_text()
+        match = re.search(r"name: alias\.discarded\n\s+value: '(.*)'  # noqa", tasks)
+        self.assertIsNotNone(match, "tasks/git.yml から alias.discarded を読み取れなかった")
+        self.git("config", "alias.discarded", match.group(1))
+
+        self.assertIn("退避なし", self.git("discarded").stdout)
+
+        old_tip = self.old_commit("abandoned")
+        # 名前の時刻は recent のほうが新しいが、指しているコミットは 2020 年のもの
+        recent = f"{self.BACKUP_NS}/branch-abandoned-20260920-100000-11-1"
+        older = f"{self.BACKUP_NS}/worktree-20260901-100000-22-1"
+        legacy = f"{self.BACKUP_NS}/20260801-100000-33"
+        self.git("update-ref", recent, old_tip)
+        self.git("update-ref", older, "HEAD")
+        self.git("update-ref", legacy, "HEAD")
+
+        lines = self.git("discarded").stdout.splitlines()
+        self.assertEqual([line.split()[-1] for line in lines], [recent, older, legacy])
+        self.assertTrue(lines[0].startswith("20260920-100000"), lines[0])
+
+class MultiLineCommandTest(HookTestCase):
+    """改行で繋いだ後続ごと allow にしない (issue #202)。
+
+    allow はコマンド文字列**全体**に効く。1 行目が無害な git 操作でも、2 行目以降は
+    分類器も確認プロンプトも通らずに実行される。区切りの検査は `grep '[;&|…]'` で
+    行っていたが、grep は行単位なので**改行は区切りとして見えず**、`^git …` の照合も
+    語への分割 (`read -a`) も 1 行目だけを読んでいた。
+    """
+
+    TAIL = "\nrm -rf ./somewhere"
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / "tracked.txt").write_text("v1\n")
+        self.git("add", "tracked.txt")
+        self.git("commit", "-q", "-m", "init")
+        self.git("branch", "-M", "main")
+        self.git("branch", "merged")             # main と同じ先端 = -d で消せる
+        self.git("checkout", "-q", "-b", "unmerged")
+        self.commit("only here")
+        self.git("checkout", "-q", "main")
+
+    def assert_not_auto_approved(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        if not result.stdout.strip():
+            return   # 素通し。判定は permissions と分類器へ戻る
+        decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+        self.assertNotEqual(decision, "allow", "後続の行ごと allow になった")
+
+    def dirty(self):
+        (self.repo / "tracked.txt").write_text("uncommitted\n")
+
+    def forms(self):
+        """(allow を返す形, その前に作る状態)。1 行なら allow になることも併せて見る。"""
+        return [
+            ("git branch -d merged", None),
+            ("git branch -D unmerged", None),          # 先端を退避して allow
+            ("git checkout merged", None),
+            ("git checkout -b fresh", None),
+            ("git reset --hard", self.dirty),          # 変更と HEAD を退避して allow
+        ]
+
+    def test_single_line_forms_are_auto_approved(self):
+        """対照。ここが allow でなければ、下のテストは何も確かめていない。"""
+        for command, prepare in self.forms():
+            with self.subTest(command=command):
+                if prepare:
+                    prepare()
+                self.assert_auto_approved(self.run_hook(command))
+
+    def test_a_following_line_is_never_auto_approved(self):
+        for command, prepare in self.forms():
+            with self.subTest(command=command):
+                if prepare:
+                    prepare()
+                self.assert_not_auto_approved(self.run_hook(command + self.TAIL))
+
+    def test_trailing_newline_alone_does_not_change_the_decision(self):
+        """末尾の改行だけなら 1 つのコマンドのまま (trim で落ちる)。過検出にしない。"""
+        self.assert_auto_approved(self.run_hook("git branch -d merged\n"))
+
+    def test_discard_with_a_read_only_following_line_is_still_approved(self):
+        """作業ツリーの取り消しは後続を行ごとに読めているので、改行でも従来どおり。"""
+        self.dirty()
+        self.assert_auto_approved(self.run_hook("git checkout -- tracked.txt\ngit status"))
+
+    def test_discard_with_a_writing_following_line_is_not_approved(self):
+        self.dirty()
+        self.assert_not_auto_approved(self.run_hook("git checkout -- tracked.txt" + self.TAIL))
 
 
 class SafeCommandTest(HookTestCase):
@@ -848,6 +1205,25 @@ class SecretFileTest(HookTestCase):
         """ステージ前でも、コマンドに書かれていれば止める。"""
         reason = self.assert_decision(self.run_hook("git add .env"), "deny")
         self.assertIn(".env", reason)
+
+    def test_add_then_commit_in_one_command_is_denied(self):
+        """`git add X && git commit` はモデルが最も普通に書く形 (issue #162)。
+
+        commit と add を排他に見ていると、この形では commit 側が選ばれ、フックの
+        時点ではまだ add が走っていないので git diff --cached が空になり素通しする。
+        """
+        reason = self.assert_decision(
+            self.run_hook('git add .env && git commit -m "x"'), "deny"
+        )
+        self.assertIn(".env", reason)
+
+    def test_add_then_commit_with_semicolon_is_denied(self):
+        """区切りが ; でも同じ。"""
+        self.assert_decision(self.run_hook('git add .env ; git commit -m "x"'), "deny")
+
+    def test_add_ordinary_file_then_commit_is_allowed(self):
+        """連結形を見るようにしても、秘密でないものは通す (過検出への回帰)。"""
+        self.assert_allowed(self.run_hook('git add src/main.py && git commit -m "x"'))
 
     def test_reason_offers_an_alternative(self):
         self.stage(".env")

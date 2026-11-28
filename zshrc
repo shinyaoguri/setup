@@ -77,8 +77,8 @@ alias ...='cd ../..'
 alias bd="cd .."
 alias rmt='trash'
 
-# Homebrew
-export PATH="/opt/homebrew/bin:$PATH"
+# Homebrew の PATH は zshenv が通す (非対話シェルからも op を引くため。#170)。
+# ログインシェルでは /etc/zprofile の path_helper が後ろへ並べ替えるので、zprofile が先頭へ戻す (#197)
 
 # Add local bin to PATH
 export PATH="$HOME/.local/bin:$PATH"
@@ -87,6 +87,13 @@ export PATH="$HOME/.local/bin:$PATH"
 if command -v fnm >/dev/null 2>&1; then
   eval "$(fnm env --use-on-cd --shell zsh)"
 fi
+
+# setup の bin を、fnm が先頭へ入れた node の bin より前へ入れ直す。bin/cosense は
+# 1Password の PAT を持たせて本物の cosense (npm の global) を起動するラッパーで、名前で
+# 呼ばれるので PATH で前に居ないと本物に負ける (issue #289)。Claude デスクトップアプリも
+# 起動時にこの並びを抜き出して持ち続けるので、ここで決まる順番がアプリのセッションにも効く
+# (変えたらアプリの再起動が要る。#154)。zshenv の typeset -U で重複は前の方だけが残る
+path=("${${(%):-%N}:A:h}/bin" $path)
 
 # Firebase環境をプロンプトに表示
 firebase_prompt_info() {
@@ -121,11 +128,17 @@ if command -v direnv >/dev/null 2>&1; then
   eval "$(direnv hook zsh)"
 fi
 
-# >>> grok installer >>>
-export PATH="$HOME/.grok/bin:$PATH"
-fpath=(~/.grok/completions/zsh $fpath)
-autoload -Uz compinit && compinit -C
-# <<< grok installer <<<
-
-# Unity CLI
-. "$HOME/.unity/env"
+# マシン固有の設定は ~/.zshrc.local へ置く (リポジトリには入れない)。
+#
+# ~/.zshrc はこのリポジトリへの symlink なので、**インストーラが ~/.zshrc へ追記した行は
+# そのままリポジトリの変更になる**。そのマシンにしか無い道具の設定が紛れ込むと、他の
+# マシンではシェルを開くたびにエラーが出る (Unity CLI の env を存在チェック無しで読んで
+# いた。issue #198)。追記されたら ~/.zshrc.local へ移す — claude/tests/zshrc_test.py が
+# 追記ブロックの残りを落とす。
+#
+# 最後に読むので、上の設定をマシン単位で上書きすることもできる。
+# `[[ -f … ]] && source …` とは書かない。ファイルが無いと zshrc 全体が 1 で終わり、
+# 最初のプロンプトの $? が失敗になる
+if [[ -f "$HOME/.zshrc.local" ]]; then
+  source "$HOME/.zshrc.local"
+fi

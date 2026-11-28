@@ -1,25 +1,44 @@
 ---
 # fnm + Node.js のインストール
-# fnm 自体は homebrew_packages 経由で導入済みである前提。
+#
+# fnm は homebrew_packages_optional なので、**入っていないマシンがある** (issue #191)。
+# 無い状態で下のタスクを走らせると command not found で落ちるので、まず存在を見て
+# 以降を丸ごと skip する。「Node を使わないマシン」は正常な状態であって失敗ではない。
+- name: Check whether fnm is installed
+  ansible.builtin.command: command -v fnm
+  register: fnm_present
+  changed_when: false
+  failed_when: false
+  # 読み取りだけなので --check でも走らせる。走らせないと登録変数が skip の形になり、
+  # 下の when が rc を引けずに「入っているのに skip」へ倒れる
+  check_mode: false
 
 - name: Check if any Node.js version is installed via fnm
   ansible.builtin.shell:
     cmd: |
+      # パイプの失敗を握り潰さない (ansible-lint risky-shell-pipe)
+      set -o pipefail
       eval "$(fnm env --shell zsh)"
       fnm list | grep -qE 'v[0-9]+'
     executable: /bin/zsh
   register: fnm_node_check
   changed_when: false
   failed_when: false
+  when: fnm_present.rc | default(1) == 0
 
-- name: Install latest Node.js via fnm
+# **既定は LTS。** 以前は `fnm ls-remote | tail -n 1` で選んでいたが、それは「その時点の
+# 最新版」で、奇数メジャー (Current) のことがある。立てた時期によって既定の Node が LTS
+# だったり、半年で EOL になる系列だったりした (issue #223)。
+# `--lts` で入れると fnm が `lts-latest` の別名を張るので、版番号を自前で引かなくてよい。
+- name: Install the latest LTS Node.js via fnm
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
       eval "$(fnm env --shell zsh)"
-      latest=$(fnm ls-remote | tail -n 1 | awk '{print $1}')
-      fnm install "$latest"
-      fnm default "$latest"
+      fnm install --lts
+      fnm default lts-latest
     executable: /bin/zsh
-  when: fnm_node_check.rc != 0
+  when:
+    - fnm_present.rc | default(1) == 0
+    - fnm_node_check.rc | default(1) != 0
   changed_when: true

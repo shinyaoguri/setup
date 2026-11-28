@@ -1,15 +1,44 @@
 ---
 # Oh My Zsh のインストールと dotfile のリンク
 
+# **worktree から流した playbook に symlink を張らせない** (issue #209)。
+#
+# 下の symlink は先を playbook_dir から組む。worktree (.claude/worktrees/*) から流すと
+# ~/ 配下のリンクが worktree を指し、worktree が掃除された時点で全部切れる。フックと
+# autoMode は fail-open なので、切れた状態では安全装置が無音で全部外れる。このリポジトリの
+# 開発は worktree で行うのが常で、「確かめるために流す」で踏みうる。
+#
+# 本体の場所を引いてそちらを指す手もあるが、採らない — 「worktree で直したのに反映
+# されない」という別の驚きになる。worktree の内容を配備したい場面は無いので、止めて
+# 本体から流す手順を出す。HOME を一時ディレクトリへ向けた結合テストのように、分かった
+# うえで流すときは -e allow_worktree_source=true。
+- name: Refuse to link from a git worktree (zshrc / zshenv / zprofile)
+  ansible.builtin.assert:
+    that: >-
+      '/.claude/worktrees/' not in playbook_dir
+      or (allow_worktree_source | default(false) | bool)
+    fail_msg: >-
+      この playbook は git worktree ({{ playbook_dir }}) から流されています。ここで張る
+      symlink は worktree を指し、worktree が消えると全部切れます (setup#209)。
+      変更を main へ入れてから、本体の checkout (~/.setup) で流してください。
+    quiet: true
+
 - name: Check if Oh My Zsh is already installed
   ansible.builtin.stat:
     path: "{{ ansible_facts['env']['HOME'] }}/.oh-my-zsh"
   register: ohmyzsh_installed
 
+# `sh -c "$(curl ...)"` はコマンド置換が終了ステータスを捨てるので、取得に失敗しても
+# 空を実行して「成功」になり、途中で切断されると部分的なスクリプトを実行する。
+# 一度ファイルへ落として取得の成否を確かめてから実行する (issue #166)
 - name: Install Oh My Zsh
   ansible.builtin.shell:
     cmd: |
-      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+      set -e
+      installer=$(mktemp)
+      trap 'rm -f "$installer"' EXIT
+      curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$installer"
+      sh "$installer" "" --unattended
     executable: /bin/zsh
   environment:
     RUNZSH: "no"
@@ -39,6 +68,33 @@
     state: link
     force: true
 
+# zprofile はログインシェルでだけ読まれる。/etc/zprofile の path_helper が Homebrew を
+# /usr/bin の後ろへ並べ替えるのを、その直後に戻す (issue #197)。
+#
+# **~/.zprofile は既に在ることが多い。** Homebrew のインストーラ自身が
+# `eval "$(brew shellenv)"` をここへ追記するよう案内するので、setup より先に brew を
+# 入れたマシンには実ファイルがある。symlink の force は中身ごと置き換えるので、
+# 先に退避する (tasks/claude.yml と同じ形。issue #175 の考え方)。
+- name: Check existing zprofile
+  ansible.builtin.stat:
+    path: "{{ ansible_facts['env']['HOME'] }}/.zprofile"
+  register: zprofile_stat
+
+- name: Back up existing zprofile if it is a regular file
+  ansible.builtin.copy:
+    src: "{{ ansible_facts['env']['HOME'] }}/.zprofile"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.zprofile.bak-{{ ansible_facts['date_time']['date'] }}"
+    remote_src: true
+    mode: preserve
+  when: zprofile_stat.stat.exists and not zprofile_stat.stat.islnk
+
+- name: Create symlink for zprofile
+  ansible.builtin.file:
+    src: "{{ playbook_dir }}/zprofile"
+    dest: "{{ ansible_facts['env']['HOME'] }}/.zprofile"
+    state: link
+    force: true
+
 # Claude デスクトップアプリは起動した時点のシェル環境 (PATH) を持ち続け、Bash ツールの
 # シェルスナップショットが zshenv の後でそれを書き戻す。zshenv を張る・変える前から動いて
 # いたアプリのセッションでは、変数は届くのに PATH だけが古く、secret-read が見つからずに
@@ -47,6 +103,8 @@
 - name: Check whether the Claude desktop app predates the current zshenv
   ansible.builtin.shell:
     cmd: |
+      # パイプの失敗を握り潰さない (ansible-lint risky-shell-pipe)
+      set -o pipefail
       # pgrep からはアプリ本体が見えないことがある (実測) ので ps の実行ファイル名で探す
       pid=$(ps -axo pid=,comm= | awk '/\/Claude\.app\/Contents\/MacOS\/Claude$/ { print $1; exit }')
       [ -n "$pid" ] || exit 0

@@ -1,8 +1,12 @@
 ---
 # Apple Silicon 上で Intel バイナリを動かすため Rosetta 2 をインストール
 
+# `pkgutil --pkgs <id>` は**スペース区切りだと引数を無視して全パッケージを列挙し、
+# 必ず rc=0 を返す**。この形で書いていたため when が永久に偽になり、インストールが
+# 一度も走らないままタスクは緑で通っていた (issue #172)。
+# `--pkg-info` は指定した ID が無ければ rc=1 を返すので、存在確認として正しく働く。
 - name: Check whether Rosetta 2 is installed
-  ansible.builtin.command: pkgutil --pkgs com.apple.pkg.RosettaUpdateAuto
+  ansible.builtin.command: pkgutil --pkg-info com.apple.pkg.RosettaUpdateAuto
   register: rosetta_check
   failed_when: false
   changed_when: false

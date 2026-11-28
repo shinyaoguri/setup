@@ -43,6 +43,8 @@
 #   作業ツリーの未コミット変更  git stash create のコミットを固定 (setup#142)
 #   ブランチの先端            git branch -D の前に refs/heads/<名前> を固定
 #   HEAD                     git reset --hard の前に固定
+#   stash の全エントリ         git stash drop / clear の前に固定 (setup#301。同じコマンドで
+#                            積んでから消す形は固定できないので、分けるよう deny で返す)
 #
 # 退避は refs/claude/discarded/* に 30 日残り、`git discarded` で一覧・復元できる
 # (tasks/git.yml)。**退避できないものは残っている** — 追跡外ファイルを消す
@@ -68,8 +70,12 @@ command=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null
 # git のサブコマンドの手前にはグローバルオプション (-C <path> など) が入りうるので、
 # 「git … <サブコマンド>」の間は緩く見る。ask 止まりなので多少の過検出は許容する。
 readonly GIT='(^|[;&|[:space:]])git([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+'
-# サブコマンドと注目する引数の間。引数がサブコマンドの直後に来る場合もあるので丸ごと省ける
-readonly ARG='([[:space:]]|$)(.*[[:space:]])?'
+# サブコマンドと注目する引数の間。引数がサブコマンドの直後に来る場合もあるので丸ごと省ける。
+# 区切り (; & |) は越えない — `.*` だった頃は同じ行の別コマンドの引数まで読み、
+# `git push origin HEAD; gh api graphql -f query=…` の gh の -f を force push と
+# 読んでいた (setup#300)。引用の中の区切りで照合が切れる見逃しは、引用を解釈する
+# 解析 (setup#193) の範囲に置く。
+readonly ARG='([[:space:]]|$)([^;&|]*[[:space:]])?'
 
 # エイリアスに包まれた危険操作を見えるようにする。`git gone-clean` のようなエイリアスは
 # 展開しない限り `git branch -D` が文字列に現れず、検査を素通りしてしまう。
@@ -94,6 +100,18 @@ has() { printf '%s' "$scan" | grep -qE "$1"; }
 # 前後の空白を落とす。判定はコマンド文字列を語に分けて読むので、どの入口でも最初に通す。
 trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
 
+# コマンドが「単純コマンド 1 つ」として読めない形か。allow はコマンド文字列**全体**に
+# 効くので、allow を返す判定はどれも先にここを通す。
+#
+# **改行は grep の文字クラスでは見えない。** grep は行単位なので `[;&|…]` に改行を
+# 足しても当たらず、`^git …` の照合も `read -a` の語分割も 1 行目だけを読む。以前は
+# 区切りの検査が grep だけだったため、"git branch -d x<改行>rm -rf …" が 1 行目の形で
+# allow になり、2 行目が分類器も確認も通らずに実行できた (issue #202)。
+is_compound() { # $1=trim 済みのコマンド
+  case "$1" in *$'\n'*) return 0 ;; esac
+  printf '%s' "$1" | grep -q '[;&|<>()$`]'
+}
+
 # --- 可逆性の判定 -----------------------------------------------------------
 # いずれも「可逆と確認できたときだけ真」。リポジトリの外・判定材料が足りないときは
 # 偽を返し、呼び出し側で ask に落とす。
@@ -114,20 +132,67 @@ branch_delete_targets_are_gone() {
   return 0
 }
 
-# `-D` に続くブランチ名を取り出す。シェルの区切り・リダイレクトが現れたら打ち切る。
-# `git branch -D x 2>&1 | tail -1` の "2>&1" までブランチ名として読むと、実在しない
-# 名前として判定不能に落ち、掃除のたびにユーザーを呼ぶことになる。
-branch_delete_targets() {
-  printf '%s' "$command" | awk '{
-    for (i = 1; i <= NF; i++)
-      if ($i == "-D") {
-        for (j = i + 1; j <= NF; j++) {
-          if ($j ~ /[;&|<>]/) exit
-          print $j
+# 「マージ済みかを問わず消す」形かどうか。git は 3 通りの綴りを同じ意味に扱う:
+#   -D / -d --force / --delete --force (-f は --force の短形)
+# -D リテラルだけを見ていると、残り 2 つが「-d だから安全」の側へ落ちて退避も作られない
+# まま allow が返る (issue #162)。判定の入口をここ 1 つに寄せる。
+# 区切りで割ってからセグメントごとに見る。エイリアス定義は
+# `!git gone | while read -r b; do git branch -D "$b"; done` のように削除が区切りの
+# 後ろに来るので、最初の区切りで打ち切ると検出できない。フラグはセグメントごとに
+# 数え直す (別々のコマンドの -d と --force を足し合わせないため)。
+deletes_branch_by_force() {
+  printf '%s' "${1:-$command}" |
+    awk '{ gsub(/&&|\|\||[;&|]/, "\n"); print }' |
+    awk '
+      BEGIN { found = 0 }
+      {
+        del = 0; force = 0
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /[<>]/) break
+          if ($i == "-D") { del = 1; force = 1 }
+          else if ($i == "-d" || $i == "--delete") del = 1
+          else if ($i == "-f" || $i == "--force") force = 1
         }
-        exit
+        if (del && force) found = 1
       }
-  }'
+      END { exit !found }'
+}
+
+# 削除対象のブランチ名を取り出す。削除フラグの後ろの語のうち、オプションでないものを集める。
+# リダイレクトが現れたら打ち切る — `git branch -D x 2>&1 | tail -1` の "2>&1" まで
+# ブランチ名として読むと、実在しない名前として判定不能に落ち、掃除のたびにユーザーを呼ぶ。
+#
+# **区切りで割ってからセグメントごとに読む** (deletes_branch_by_force と同じ切り方)。
+# 先頭から読んで最初の区切りで打ち切っていた頃は、`echo a; git branch -D x` の x を
+# 取れず、実在する枝でも「名前を確定できない」に落ちていた (setup#299)。読むのは
+# `git … branch` のセグメントだけで、別コマンドの -d の後ろの語は数えない。
+#
+# 別のリポジトリを操作する形 (`cd` / `pushd` の後・`git -C` / `--git-dir` / `--work-tree`)
+# は何も返さない。先端の固定は cwd のリポジトリで行うので、名前を返すと cwd 側の同名の
+# 枝を固定して「退避済み」と扱ってしまう (cwd の扱い全般は setup#205)。
+branch_delete_targets() {
+  printf '%s' "$command" |
+    awk '{ gsub(/&&|\|\||[;&|]/, "\n"); print }' |
+    awk '
+      $1 == "cd" || $1 == "pushd" { elsewhere = 1 }
+      {
+        git = 0; branch = 0; seen = 0
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /[<>]/) break
+          if (!git) { if ($i == "git") git = 1; continue }
+          if (!branch) {
+            if ($i == "branch") branch = 1
+            else if ($i == "-C" || $i ~ /^--(git-dir|work-tree)/) elsewhere = 1
+            continue
+          }
+          if ($i == "-D" || $i == "-d" || $i == "--delete") { seen = 1; continue }
+          if (!seen) continue
+          # 削除フラグの後ろに来る --force / -f などのオプションは対象名ではない
+          if ($i ~ /^-/) continue
+          found[++n] = $i
+        }
+      }
+      END { if (!elsewhere) for (k = 1; k <= n; k++) print found[k] }'
 }
 
 # そのブランチを消しても失うものが無いと確認できるか。指標は upstream の有無で分かれる。
@@ -193,7 +258,7 @@ alias_deletes_only_gone_branches() {
     awk '{print $NF}' | sort -u); do
     definition=$(git config --get "alias.$name" 2>/dev/null) || continue
     printf '%s' "$definition" | grep -qE '^!git gone([[:space:]]|\|)' || continue
-    printf '%s' "$definition" | grep -qE 'git branch[[:space:]]+-D' || continue
+    deletes_branch_by_force "$definition" || continue
     return 0
   done
   return 1
@@ -274,7 +339,7 @@ pin_object() { # $1=ラベル $2=リビジョン → ref 名
   PIN_SEQ=$((PIN_SEQ + 1))
   ref="${BACKUP_NS}/$1-$(date +%Y%m%d-%H%M%S)-$$-$PIN_SEQ"
   git update-ref "$ref" "$sha" 2>/dev/null || return 1
-  prune_backups
+  prune_backups "$ref"
   printf '%s' "$ref"
 }
 
@@ -302,6 +367,44 @@ backup_reset_hard() { # → "<作業ツリーの ref または空>\n<HEAD の re
   printf '%s\n%s' "$worktree_ref" "$head_ref"
 }
 
+# stash drop / clear の前に、スタックの**全エントリ**を固定する (setup#301)。
+#
+# 対象を 1 つに絞らないのは、消す対象が変数で渡されることが多く (`git stash drop -q $ref`)、
+# フックの時点では決まらないため。全件を固定しておけば、どれが消えても取り戻せる。
+# スタックは worktree 間で共有されるので、すでに固定済みのコミットは固定し直さない
+# (drop のたびに全件を固定すると ref が増え続ける)。スタックが空なら固定するものが無く
+# 成功を返す — drop は git 自身が断る。
+backup_stash_entries() { # → "<sha> <ref>" を 1 行 1 件 (新しく固定したものだけ)
+  local shas sha ref out=''
+  shas=$(git stash list --format=%H 2>/dev/null) || return 1
+  for sha in $shas; do
+    [ -n "$(git for-each-ref --points-at "$sha" --format=x "$BACKUP_NS" 2>/dev/null)" ] &&
+      continue
+    # ラベルに SHA を含める。pin_object の連番はコマンド置換の中で増えて呼び手へ
+    # 戻らないので、同じラベルを同じ秒に 2 回固定すると名前が衝突して上書きになる
+    ref=$(pin_object "stash-${sha:0:12}" "$sha") || return 1
+    out="$out$sha $ref
+"
+  done
+  printf '%s' "$out"
+}
+
+# 同じコマンドの中で stash にエントリを積むか (`git stash` 単独 / push / save)。
+# 積まれたエントリはフックの時点に無く、後続の drop の前に固定できない。
+creates_stash_entry() {
+  command_segments | awk '
+    {
+      git = 0
+      for (i = 1; i <= NF; i++) {
+        if (!git) { if ($i == "git") git = 1; continue }
+        if ($i != "stash") continue
+        if (i == NF || $(i + 1) == "push" || $(i + 1) == "save" || $(i + 1) ~ /^-/) found = 1
+        break
+      }
+    }
+    END { exit !found }'
+}
+
 # 捨てられるものを消えない場所へ置き、その参照を stdout に返す。
 #
 # `git stash create` はコミットオブジェクトを作るだけで**スタックには積まない**。
@@ -327,13 +430,38 @@ backup_worktree() {
 
 # 役目を終えた退避を落とす。放っておくと ref が際限なく増えるので、退避を作った直後に
 # だけ掃除する (取り消しは頻度が低く、毎回の Bash で回すほどのものではない)。
-prune_backups() {
-  local now ref stamp
-  now=$(date +%s)
-  git for-each-ref --format='%(refname) %(committerdate:unix)' "$BACKUP_NS" 2>/dev/null |
-    while read -r ref stamp; do
-      [ -n "$stamp" ] || continue
-      [ "$((now - stamp))" -gt "$BACKUP_TTL" ] && git update-ref -d "$ref" 2>/dev/null
+#
+# **古さは ref 名に埋めた退避の時刻で決める。固定したコミットの日付では決めない。**
+# 作業ツリーの退避は `git stash create` がいま作ったコミットなので両者は一致するが、
+# ブランチの先端と HEAD は**既存のコミットをそのまま固定する**。committerdate で測ると、
+# 先端が 30 日より古いブランチは「退避済み」と allow を返した直後に退避が消える
+# (issue #201) — 放置していたブランチこそ、消した後で惜しくなる対象である。
+#
+# 時刻を読めない名前は落とさない。判定できないものを消す側へ倒さない。
+# いま作った ref も名指しで外す (時刻で外れるはずだが、時計が狂っていても消さない)。
+backup_stamp() { # $1=ref 名 → YYYYmmddHHMMSS。読めなければ失敗
+  # 末尾は pin_object が付ける `-<日付>-<時刻>-<PID>-<連番>`。連番が付く前の命名
+  # (`<日付>-<時刻>-<PID>`) も読む。末尾に固定するので、ブランチ名の中に時刻らしき
+  # 並びがあってもそちらは読まない。
+  [[ "${1##*/}" =~ (^|-)([0-9]{8})-([0-9]{6})-[0-9]+(-[0-9]+)?$ ]] || return 1
+  printf '%s%s' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+}
+
+prune_backups() { # $1=いま作った ref (落とさない)
+  local keep="${1:-}" cutoff_epoch cutoff ref stamp
+  cutoff_epoch=$(($(date +%s) - BACKUP_TTL))
+  # BSD date (macOS) は -r <epoch>、GNU date は -d @<epoch>。ref 名の時刻は pin_object が
+  # ローカル時刻で付けているので、こちらもローカル時刻のまま比べる
+  cutoff=$(date -r "$cutoff_epoch" +%Y%m%d%H%M%S 2>/dev/null ||
+    date -d "@$cutoff_epoch" +%Y%m%d%H%M%S 2>/dev/null) || return 0
+  [[ "$cutoff" =~ ^[0-9]{14}$ ]] || return 0
+
+  git for-each-ref --format='%(refname)' "$BACKUP_NS" 2>/dev/null |
+    while read -r ref; do
+      [ "$ref" != "$keep" ] || continue
+      stamp=$(backup_stamp "$ref") || continue
+      # 同じ桁数の数字列なので、文字列の比較がそのまま時刻の比較になる
+      [[ "$stamp" < "$cutoff" ]] && git update-ref -d "$ref" 2>/dev/null
     done
   return 0
 }
@@ -477,7 +605,7 @@ revision_revert_touches_agent_settings() { # REVISION_REV / REVISION_PATHS を�
 command_is_only() { # $1=先頭に一致すべき正規表現
   local trimmed
   trimmed=$(trim "$command")
-  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+  is_compound "$trimmed" && return 1
   printf '%s' "$trimmed" | grep -qE "$1"
 }
 
@@ -554,7 +682,9 @@ fi
 
 # git branch -D — 「役目を終えた」と確認できなくても、先端を固定できれば失うものは無い
 branch_refs=""
-if has "${GIT}branch${ARG}-D([[:space:]]|$)" &&
+# 判定はエイリアス展開後の文字列に対して行う。`git gone-clean` のように、削除が
+# 定義の中にしか現れない形を取りこぼさないため ($command には現れない)
+if has "${GIT}branch([[:space:]]|$)" && deletes_branch_by_force "$scan" &&
   ! branch_delete_targets_are_gone && ! alias_deletes_only_gone_branches; then
   if branch_delete_targets_are_plain; then
     # shellcheck disable=SC2046  # 名前は branch_delete_targets_are_plain を通っている
@@ -566,8 +696,21 @@ fi
 
 has "${GIT}push${ARG}(--force|-f([[:space:]]|$))" &&
   danger="force push は remote の履歴を書き換える (他の作業や PR に影響する)"
-has "${GIT}stash${ARG}(drop|clear)" &&
-  danger="git stash drop / clear は退避した変更を消す"
+# git stash drop / clear — その時点の全エントリを固定してから通す (setup#301)
+stash_refs=""
+stash_pinned=false
+if has "${GIT}stash${ARG}(drop|clear)"; then
+  if creates_stash_entry; then
+    decide deny "同じコマンドの中で stash に積んでから drop / clear している。積んだエントリはこのフックが走る時点にまだ無いので、消す前に固定できない。
+
+drop / clear を**別のコマンドに分けて**打ち直す。分ければ、このフックがその時点のスタックを全件 refs/claude/discarded/* に固定してから通す (確認は出ない)。"
+  fi
+  if stash_refs=$(backup_stash_entries); then
+    stash_pinned=true
+  else
+    danger="git stash drop / clear は退避した変更を消す (消す前にスタックを固定できなかった — git リポジトリの外か、ref を作れなかった)"
+  fi
+fi
 
 if [ -n "$danger" ]; then
   decide ask "${danger}。実行前にユーザーへ確認する。
@@ -589,14 +732,19 @@ fi
 is_reversible_branch_cleanup() {
   local trimmed
   trimmed=$(trim "$command")
-  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+  is_compound "$trimmed" && return 1
 
-  # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)
-  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-d([[:space:]]|$)' &&
+  # -d は git 自身がマージ済みかを確かめ、未マージなら断る (失うものが無い)。
+  # ただし --force が付けば -D と等価になり git は確かめなくなるので、ここへは入れない
+  # (issue #162 — 「-d だから安全」は force の有無を見て初めて成り立つ)
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch([[:space:]]|$)' &&
+    ! deletes_branch_by_force "$trimmed" &&
+    printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+(-d|--delete)([[:space:]]|$)' &&
     return 0
-  # -D は対象すべてが「消しても失うものが無い」と確認できたときだけ
+  # force を伴う削除は、対象すべてが「消しても失うものが無い」と確認できたときだけ
   # (追跡先が畳まれている / push 前で内容が既定ブランチに入っている)
-  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch[[:space:]]+-D([[:space:]]|$)' &&
+  printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+branch([[:space:]]|$)' &&
+    deletes_branch_by_force "$trimmed" &&
     branch_delete_targets_are_gone && return 0
   # `git gone-clean` のような、掃除エイリアス 1 本きりの呼び出し
   printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+[a-zA-Z][-a-zA-Z0-9_]*$' &&
@@ -623,7 +771,7 @@ checkout_form_is_switch_only() {
   local trimmed count first
   trimmed=$(trim "$command")
   printf '%s' "$trimmed" | grep -qE '^git[[:space:]]+checkout([[:space:]]|$)' || return 1
-  printf '%s' "$trimmed" | grep -q '[;&|<>()$`]' && return 1
+  is_compound "$trimmed" && return 1
 
   # ヒアストリングの語分割はグロブを展開しない (`set -- $trimmed` と違い、
   # コマンドに残った `*` が手元のファイル名へ化けない)
@@ -664,11 +812,20 @@ fi
 # 先端を固定したブランチ削除。上の is_reversible_branch_cleanup を先に置いてあるので、
 # 「役目を終えた」と確認できた対象はここへ来ない (固定も作らない)。
 if [ -n "$branch_refs" ] &&
-  command_is_only '^git[[:space:]]+branch[[:space:]]+-D([[:space:]]|$)'; then
+  command_is_only '^git[[:space:]]+branch([[:space:]]|$)' && deletes_branch_by_force; then
   decide allow "消えるブランチの先端を退避済み:
 $(printf '%s' "$branch_refs" | sed 's/^/  - /')
 
 復元は git branch <名前> <ref>、中身を見るだけなら git log <ref>。一覧は git discarded。取り戻せるので確認は不要。"
+fi
+
+# スタックを固定した git stash drop / clear
+if [ "$stash_pinned" = true ] &&
+  command_is_only '^git[[:space:]]+stash[[:space:]]+(drop|clear)([[:space:]]|$)'; then
+  decide allow "スタックの全エントリを refs/claude/discarded/* に固定済み${stash_refs:+ (今回新しく固定したもの:
+$(printf '%s' "$stash_refs" | sed 's/^/  - /'))}。
+
+復元は git stash apply <ref>、一覧は git discarded。取り戻せるので確認は不要。"
 fi
 
 # 退避を作った git reset --hard
@@ -700,14 +857,22 @@ fi
 readonly SECRET_PATTERN='(^|/)\.env($|\.[^/]*$)|(^|/)id_(rsa|dsa|ecdsa|ed25519)$|\.(pem|p12|pfx|jks|keystore)$|(^|/)[^/]*_rsa$'
 readonly SECRET_ALLOW='\.(example|sample|template|dist|pub)$|(^|/)\.env\.(example|sample|template)$'
 
+# commit と add は**両方**見る。排他にすると `git add .env && git commit -m x` で
+# commit 側だけが選ばれ、PreToolUse の時点ではまだ add が走っていないので
+# git diff --cached が空になって素通しする (issue #162)。モデルが最も普通に書く形なので、
+# 排他のままでは実質この deny が無いのと変わらない。
 secrets=""
 if has "${GIT}commit([[:space:]]|$)"; then
   secrets=$(git diff --cached --name-only 2>/dev/null |
     grep -E "$SECRET_PATTERN" | grep -vE "$SECRET_ALLOW")
-elif has "${GIT}add([[:space:]]|$)"; then
-  # add はステージ前なので、コマンドに書かれたパスをそのまま見る
-  secrets=$(printf '%s' "$command" | tr ' ' '\n' |
-    grep -E "$SECRET_PATTERN" | grep -vE "$SECRET_ALLOW")
+fi
+if has "${GIT}add([[:space:]]|$)"; then
+  # add はステージ前なので、コマンドに書かれたパスをそのまま見る。連結形でも拾えるよう、
+  # add のセグメントだけを取り出してから語に割る (他のコマンドの引数を巻き込まない)
+  staged_by_name=$(command_segments |
+    grep -E "^[[:space:]]*git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)" |
+    tr ' ' '\n' | grep -E "$SECRET_PATTERN" | grep -vE "$SECRET_ALLOW")
+  secrets=$(printf '%s\n%s\n' "$secrets" "$staged_by_name" | grep -v '^$' | sort -u)
 fi
 
 if [ -n "$secrets" ]; then

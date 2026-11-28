@@ -5,6 +5,11 @@
 # tasks/ssh.yml の冒頭コメントが正本 (Secretive の GUI 操作と GitHub への鍵登録)。
 # 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
 #
+# **署名の設定が入るのは bin/ssh-key-check --local が通ったときだけ。** 鍵があるかどうか
+# ではなく、その鍵で**承認を求められずに署名できたか**まで見る (issue #273)。要件を満たさない
+# 鍵で commit.gpgsign=true にすると以後のコミットが全部失敗し、症状 (「コミットできない」)
+# が原因 (「鍵タイプが ML-DSA」「Require Authentication が付いたまま」) から最も遠い形で出る。
+#
 # 1Password は SSH agent としては使わない (承認がプロセスツリー単位で 60 秒失効し、
 # 無人セッションが承認待ちで止まるため: shinyaoguri/setup#91)。秘密の保管庫としては
 # 引き続き使う (bin/secret-read)。
@@ -70,26 +75,33 @@
     value: "!git gone | while read -r branch; do git branch -D \"$branch\"; done"
     scope: global
 
+# エイリアス定義は 1 行で持つ。YAML の折り返しは値に空白を混ぜうるので、
+# 行長の指摘は noqa で個別に許す (設定でルール全体を緩めない。issue #179)
 - name: Add git alias `discarded` (list or inspect what the safety guard backed up)
   # claude/git-safety-guard.sh は、捨てられるものを refs/claude/discarded/* へ固定して
   # から通す (setup#142 / #148)。**固定するだけでは足りない** — 一覧する手段も戻す手段も
   # 無ければ、allow で通った時点で復元先はどこにも残らず、本人が辿れない。
   # 「多少のリスクを許容する」の対価がこれ。
   #
-  #   git discarded          退避の一覧 (新しい順。ref 名をそのまま復元に使える)
+  #   git discarded          退避の一覧 (退避した時刻の新しい順。ref 名をそのまま復元に使える)
   #   git discarded <ref>    その退避の中身
   #
   # 復元は退避の種類で違う: 作業ツリーは git checkout <ref> -- <path>、
   # ブランチは git branch <名前> <ref>、HEAD は git reset --hard <ref>。
+  #
+  # 並べる基準は **ref 名の末尾に埋めてある退避の時刻**で、コミットの日付ではない。
+  # ブランチの先端と HEAD の退避は既存のコミットをそのまま固定するので、committerdate で
+  # 並べると「きのう消した 2 年前のブランチ」が一覧の底へ沈む (issue #201。prune の基準も
+  # 同じ理由で ref 名に寄せてある — claude/git-safety-guard.sh の prune_backups)。
   community.general.git_config:
     name: alias.discarded
-    value: '!f() { if [ -n "$1" ]; then git show --stat "$1"; else git for-each-ref --sort=-committerdate --format="%(committerdate:relative)  %(refname)" refs/claude/discarded | grep . || echo "(退避なし)"; fi; }; f'
+    value: '!f() { if [ -n "$1" ]; then git show --stat "$1"; else git for-each-ref --format="%(refname)" refs/claude/discarded | sed -E "s|^(.*[-/])([0-9]{8}-[0-9]{6})(-[0-9]+){1,2}$|\2  &|" | sort -r | grep . || echo "(退避なし)"; fi; }; f'  # noqa: yaml[line-length]
     scope: global
 
 - name: Add git alias `stale` (list local branches already contained in the default branch)
   community.general.git_config:
     name: alias.stale
-    value: '!base=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main); git for-each-ref --format="%(refname:short) %(worktreepath)" refs/heads | awk "NF==1 {print \$1}" | grep -vxF "${base#origin/}" | while read -r branch; do git merge-base --is-ancestor "$branch" "$base" 2>/dev/null && echo "$branch"; done; true'
+    value: '!base=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main); git for-each-ref --format="%(refname:short) %(worktreepath)" refs/heads | awk "NF==1 {print \$1}" | grep -vxF "${base#origin/}" | while read -r branch; do git merge-base --is-ancestor "$branch" "$base" 2>/dev/null && echo "$branch"; done; true'  # noqa: yaml[line-length]
     scope: global
 
 - name: Add git alias `stale-clean` (delete the branches listed by `git stale`)
@@ -98,97 +110,217 @@
     value: '!git stale | while read -r branch; do git branch -d "$branch"; done'
     scope: global
 
-- name: Read the Secure Enclave public key that Secretive wrote out
-  # Secretive は作った鍵の公開鍵を PublicKeys/ に書き出す。agent (SecretAgent) が
-  # 止まっていても読めるので、ssh-add -L ではなくこのファイルを正とする。
-  # 鍵は 1 本だけ作る運用なので head -1 で足りる
-  ansible.builtin.shell:
-    cmd: >-
-      set -o pipefail &&
-      cat "$HOME"/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/PublicKeys/*.pub
-      | head -1
-    executable: /bin/zsh
-  register: ssh_pubkey
+# worktree も同じ 2 段構えで片付ける (issue #319)。ブランチだけ掃除しても、worktree が
+# 掴んでいるブランチは gone / stale の候補から外れるので、worktree が残る限り両方溜まる。
+# 判定 (clean・HEAD が参照済み・locked でない・7 日無活動) は 1 行に収まらないので
+# bin/git-wt-clean に置き、エイリアスはその絶対パスを指す — Stop hook の PATH に
+# bin/ が通っている保証が無いため (ssh-key-check を絶対パスで呼ぶのと同じ理由)。
+#
+#   git wt-stale      # 消してよい worktree を一覧
+#   git wt-clean      # それを削除し、実体が消えた登録を prune
+- name: Add git alias `wt-stale` (list worktrees that can be removed without losing anything)
+  community.general.git_config:
+    name: alias.wt-stale
+    value: "!{{ playbook_dir }}/bin/git-wt-clean --list"
+    scope: global
+
+- name: Add git alias `wt-clean` (remove the worktrees listed by `git wt-stale`)
+  community.general.git_config:
+    name: alias.wt-clean
+    value: "!{{ playbook_dir }}/bin/git-wt-clean"
+    scope: global
+
+- name: Check the Secure Enclave key is usable for signing
+  # 4 つの完了条件のうち、ネットワーク無しで分かるもの (鍵が 1 本に決まるか・SecretAgent が
+  # 常駐しているか・鍵タイプ・承認を求められずに署名できるか) を見る。GitHub への登録は
+  # 下で別に見る — ローカルで署名に使えるかと、登録済みかは別の話だから。
+  #
+  # **PATH には頼らない。** bin/ を PATH へ通すのは zshenv で、それを symlink する
+  # tasks/zshrc.yml はこのファイルより後ろ。新しいマシンの初回実行ではまだ PATH に居ない。
+  ansible.builtin.command:
+    cmd: "{{ playbook_dir }}/bin/ssh-key-check --local"
+  register: ssh_key_local
   failed_when: false
   changed_when: false
   check_mode: false # 読み取るだけなので --check でも実行する (でないと後続が空で落ちる)
 
-# 鍵が無いまま黙って先へ進むと、署名設定が未適用のまま「成功」してしまう
-# (1Password 版はそうなっていた)。ここで止めて何をすれば直るかを出す
-- name: Fail if Secretive has no key yet
+- name: Decide whether the signing key is usable
+  # rc 0 だけを通す。1 (壊れている) はもちろん **2 (確かめられなかった) も通さない** —
+  # 署名できると証明できていない鍵を有効化する理由が無く、外したときの壊れ方は
+  # 鍵が無いのに有効化したときと同じ (以後のコミットが全部落ちる)
+  ansible.builtin.set_fact:
+    git_signing_key_usable: "{{ ssh_key_local.rc == 0 }}"
+
+- name: Read the public key that ssh-key-check selected
+  # **検査した鍵と、ここで書き出す鍵を同じにする。** 選び方の定義が 2 箇所にあると、
+  # 検査器が別の鍵を見て緑になる。以前はここが `cat PublicKeys/*.pub | head -1` で、
+  # 鍵が 2 本あるとファイル名順で任意の 1 本を拾っていた (今は 2 本ある時点で ng)
+  ansible.builtin.command:
+    cmd: "{{ playbook_dir }}/bin/ssh-key-check --print-key"
+  register: ssh_pubkey
+  when: git_signing_key_usable
+  changed_when: false
+  check_mode: false
+
+- name: Check the key is registered on GitHub
+  # ネットワークと gh の認証に依存するので、**失敗しても playbook を壊さない**
+  # (検査器の側で上限を掛けてあり、繋がらなければ「判定不能」に倒れる)
+  ansible.builtin.command:
+    cmd: "{{ playbook_dir }}/bin/ssh-key-check --github"
+  register: ssh_key_github
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+# **鍵が使えないことは、全体実行では失敗ではない。** 新しいマシンでは Secretive が同じ実行の
+# 中で入ったばかりで、鍵を作るのは GUI 操作 — 初回は必ず鍵が無い。ここで止めると
+# playbook は順序で後ろにある fonts / terminal / zshrc / claude / fnm を一切適用せず、
+# bootstrap も set -e で Step 7 と最後の案内へ届かない (issue #196)。
+# tasks/fnm.yml が fnm の不在を skip にしたのと同じ考え方で、署名の設定だけを飛ばす。
+#
+# **名指しで流されたとき (`--tags git`) は今までどおり止める。** README の手順 3 が
+# 「鍵を作ったら --tags ssh,git」と案内している、その実行で鍵が使えないなら本当に失敗で
+# ある。ここまで skip にすると署名が未適用のまま緑で終わる (1Password 版がそうなっていた)。
+#
+# どちらの側にも**検査器の出力をそのまま載せる**。「鍵が無い」しか言えなかった頃の固定文は、
+# 鍵が在って壊れている場合 (鍵タイプ・承認要求・2 本ある) に何の役にも立たなかった。
+# **一覧は debug で、判断は fail で。** ansible は msg の改行を \n のまま 1 行に詰めて出す
+# ので、検査器の出力を fail の本文に埋めると読めなくなる。stdout_lines を渡せば行ごとに並ぶ
+- name: Show which requirement the Secure Enclave key is missing
+  ansible.builtin.debug:
+    msg: "{{ ssh_key_local.stdout_lines }}"
+  when: not git_signing_key_usable
+
+- name: Fail if the Secure Enclave key is not usable
   ansible.builtin.fail:
-    msg: |
-      Secretive から公開鍵を取得できませんでした。
-      Secretive の手動セットアップを完了してから再実行してください (手順は tasks/ssh.yml の冒頭):
-        1. Secretive.app を起動し、SecretAgent の常駐を許可する
-        2. 「+」で鍵を 1 本作る (鍵タイプは ECDSA P-256 / "Require Authentication" は外す)
-        3. 公開鍵を GitHub に authentication key と signing key の両方で登録する
-      完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
-  when: ssh_pubkey.rc != 0 or ssh_pubkey.stdout == ""
+    msg: >-
+      Secure Enclave の鍵がコミット署名に使える状態ではありません (上の一覧を参照)。
+      手順は tasks/ssh.yml の冒頭コメント。直したら:
+      ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+  when:
+    - not git_signing_key_usable
+    - "'git' in ansible_run_tags"
 
-- name: Ensure ~/.ssh exists
-  ansible.builtin.file:
-    path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
-    state: directory
-    mode: '0700'
+- name: Tell what is left when commit signing was skipped
+  ansible.builtin.debug:
+    msg: >-
+      Secure Enclave の鍵がまだ使えないので、コミット署名の設定だけを飛ばしました
+      (他の設定は適用済み)。直したら:
+      ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+  when: not git_signing_key_usable
 
-# 秘密鍵は Secure Enclave の中にありファイルとして存在しない。git には公開鍵の
-# パスだけ渡し、署名そのものは agent が行う (1Password 運用でも同じ形だった)
-- name: Write SSH signing public key
-  ansible.builtin.copy:
-    content: "{{ ssh_pubkey.stdout }}\n"
-    dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
-    mode: '0644'
+- name: Configure SSH commit signing
+  when: git_signing_key_usable
+  block:
+    - name: Ensure ~/.ssh exists
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.ssh"
+        state: directory
+        mode: '0700'
 
-- name: Ensure ~/.config/git exists
-  ansible.builtin.file:
-    path: "{{ ansible_facts['env']['HOME'] }}/.config/git"
-    state: directory
-    mode: '0755'
+    # 秘密鍵は Secure Enclave の中にありファイルとして存在しない。git には公開鍵の
+    # パスだけ渡し、署名そのものは agent が行う (1Password 運用でも同じ形だった)
+    - name: Write SSH signing public key
+      ansible.builtin.copy:
+        content: "{{ ssh_pubkey.stdout }}\n"
+        dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
+        mode: '0644'
 
-# 追記であって上書きではない。過去のコミットは古い鍵で署名されており、その行を
-# 消すとローカルでの検証 (git log --show-signature) が壊れる
-- name: Add the signing key to allowed_signers
-  ansible.builtin.lineinfile:
-    path: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
-    line: "ogrsny@gmail.com {{ ssh_pubkey.stdout }}"
-    create: true
-    mode: '0644'
+    - name: Ensure ~/.config/git exists
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.config/git"
+        state: directory
+        mode: '0755'
 
-- name: Set gpg.format to ssh
+    # 追記であって上書きではない。過去のコミットは古い鍵で署名されており、その行を
+    # 消すとローカルでの検証 (git log --show-signature) が壊れる
+    - name: Add the signing key to allowed_signers
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
+        line: "ogrsny@gmail.com {{ ssh_pubkey.stdout }}"
+        create: true
+        mode: '0644'
+
+    - name: Set gpg.format to ssh
+      community.general.git_config:
+        name: gpg.format
+        value: ssh
+        scope: global
+
+    - name: Set user.signingkey to SSH public key file
+      community.general.git_config:
+        name: user.signingkey
+        value: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
+        scope: global
+
+    # 1Password 時代は op-ssh-sign を挟んでいた。Secure Enclave の鍵は
+    # システムの ssh-keygen が agent 越しに署名できるので、経路から外す
+    - name: Remove gpg.ssh.program so the system ssh-keygen signs
+      community.general.git_config:
+        name: gpg.ssh.program
+        scope: global
+        state: absent
+
+    - name: Set gpg.ssh.allowedSignersFile
+      community.general.git_config:
+        name: gpg.ssh.allowedSignersFile
+        value: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
+        scope: global
+
+    - name: Enable commit signing
+      community.general.git_config:
+        name: commit.gpgsign
+        value: "true"
+        scope: global
+
+    - name: Enable tag signing
+      community.general.git_config:
+        name: tag.gpgsign
+        value: "true"
+        scope: global
+
+# **ここは署名設定より後ろに置く。** GitHub への登録はローカルで署名できることの前提では
+# ないので、未登録で止めると「ローカルの要件は満たしているのに署名が入らない」になる。
+# 「登録されていない」と言い切れたときだけ失敗にする。gh のスコープ不足や
+# ネットワーク断は検査器が「判定不能」(rc 2) に倒すので、ここには来ない
+- name: Show what the GitHub side says
+  # 判定不能 (gh が無い・未認証・スコープ不足・オフライン) もここに出す。黙らせると
+  # 「毎回聞きに行っているのに毎回何も見ていない」になる
+  ansible.builtin.debug:
+    msg: "{{ ssh_key_github.stdout_lines }}"
+  when: ssh_key_github.rc | default(0) != 0
+
+- name: Fail if the key is not registered on GitHub
+  ansible.builtin.fail:
+    msg: >-
+      Secure Enclave の鍵が GitHub に登録されていません (上の一覧を参照)。
+      手順は tasks/ssh.yml の冒頭コメント
+  when:
+    - ssh_key_github.rc | default(0) == 1
+    - "'git' in ansible_run_tags"
+
+# **配備先は開発用の checkout を兼ねている** (issue #222)。ここで push するのは例外では
+# なく日常なのに、クローンは HTTPS (sillicon_mac_setup.zsh の GITHUB_REPO_URL) なので
+# push が OAuth トークン経由になる。gh のトークンは `workflow` スコープを持たないため、
+# `.github/workflows` に触れていないブランチまで弾かれた (issue #272)。gh 自身の
+# git_protocol は ssh なので、push だけ SSH へ寄せて想定を揃える。fetch は HTTPS の
+# まま — 新しいマシンの初回クローンがその経路で成立している。
+#
+# **鍵が使えるまでは寄せない。** 認証鍵と署名鍵は Secure Enclave の 1 本を兼用するので、
+# 使えない鍵のまま push 先だけ SSH にすると、まだ通らない経路へ倒すことになる。見るのは
+# 署名と同じ fact — 鍵が在るだけでは足りず、agent が応えて承認なしで使えることまで要る
+# (#273。鍵が在っても Require Authentication が残っていれば push も承認待ちで止まる)。
+- name: Check whether the setup checkout is in place
+  ansible.builtin.stat:
+    path: "{{ ansible_facts['env']['HOME'] }}/.setup/.git"
+  register: setup_checkout
+
+- name: Push the setup checkout over SSH
   community.general.git_config:
-    name: gpg.format
-    value: ssh
-    scope: global
-
-- name: Set user.signingkey to SSH public key file
-  community.general.git_config:
-    name: user.signingkey
-    value: "{{ ansible_facts['env']['HOME'] }}/.ssh/git_signing_key.pub"
-    scope: global
-
-# 1Password 時代は op-ssh-sign を挟んでいた。Secure Enclave の鍵は
-# システムの ssh-keygen が agent 越しに署名できるので、経路から外す
-- name: Remove gpg.ssh.program so the system ssh-keygen signs
-  community.general.git_config:
-    name: gpg.ssh.program
-    scope: global
-    state: absent
-
-- name: Set gpg.ssh.allowedSignersFile
-  community.general.git_config:
-    name: gpg.ssh.allowedSignersFile
-    value: "{{ ansible_facts['env']['HOME'] }}/.config/git/allowed_signers"
-    scope: global
-
-- name: Enable commit signing
-  community.general.git_config:
-    name: commit.gpgsign
-    value: "true"
-    scope: global
-
-- name: Enable tag signing
-  community.general.git_config:
-    name: tag.gpgsign
-    value: "true"
-    scope: global
+    name: remote.origin.pushurl
+    value: "git@github.com:shinyaoguri/setup.git"
+    scope: local
+    repo: "{{ ansible_facts['env']['HOME'] }}/.setup"
+  when:
+    - git_signing_key_usable
+    - setup_checkout.stat.exists

@@ -1,7 +1,14 @@
 ---
 # ~/.ssh/config — GitHub への SSH を Secretive (Secure Enclave) の agent に向ける
 #
-# 事前に Secretive 側で以下を手動セットアップしておくこと (GUI 操作なので自動化できない):
+# 事前に Secretive 側で以下を手動セットアップしておくこと (GUI 操作なので自動化できない)。
+#
+# **この範囲がセットアップ手順の正本。** bin/ssh-key-check は、鍵がまだ 1 本も無いとき
+# (= 何も始まっていないとき) にここを読んでそのまま出す — 手順を 2 箇所に書くと、片方が
+# 古びたことに誰も気付けない (issue #278)。印を消す・名前を変えるときは
+# claude/tests/ssh_key_check_test.py も一緒に直すこと (消えたら CI が落ちる)。
+#
+# setup-steps:begin
 #   1. Secretive.app を起動し、SecretAgent の常駐を許可する
 #   2. 「+」で鍵を 1 本作る
 #      - 鍵タイプは **ECDSA P-256** を選ぶ。macOS 26 では ML-DSA-65 も選べるが
@@ -11,7 +18,40 @@
 #   3. 公開鍵を GitHub に **authentication key と signing key の両方**で登録する
 #      gh api には admin:ssh_signing_key スコープが要る:
 #        gh auth refresh -h github.com -s admin:ssh_signing_key
-# 完了後:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+#      鍵は **agent から渡す** (公開鍵ファイルのパスを渡す形は落ちる。理由は下):
+#        ssh-key-check --print-key | gh ssh-key add --type authentication --title "$(scutil --get ComputerName)"
+#        ssh-key-check --print-key | gh ssh-key add --type signing --title "$(scutil --get ComputerName)"
+#   4. 済んだか確かめる:  ssh-key-check
+#      済んでいない項目だけが残るので、全部 ok になるまで 1〜3 を直す
+#   5. 設定を反映する:  ansible-playbook playbook_sillicon_mac.yml --tags ssh,git
+# setup-steps:end
+#
+# **済んだかどうかは bin/ssh-key-check が見る。** 上の手順はどれも、欠けたときの症状が
+# 原因から遠いところに出る (承認要求が残っていれば無人セッションが無言に止まり、鍵タイプが
+# ML-DSA なら署名が理由不明に落ち、GitHub 未登録なら push だけが通らない)。4 つのどれが
+# 欠けているかを名指しで言い、そのまま打てる次の手を出す:
+#
+#   ssh-key-check            全部見る
+#   ssh-key-check --local    ネットワーク無しで分かるところだけ
+#
+# tasks/git.yml はこの --local が通ったときだけコミット署名を設定する。名指しで
+# `--tags git` を流したときは、通らなければ失敗として止まる (issue #273)。
+#
+# **公開鍵ファイルは読めない。鍵は agent (ssh-add -L) から取る** (issue #284)。Secretive は
+# ~/Library/Containers/.../Data/PublicKeys/<md5>.pub に写しを置くが、macOS 26 のサンドボックス
+# コンテナ保護で **readdir も open も Operation not permitted** になる。stat(2) だけは通るので
+# 「在るのに読めない」という形で出る:
+#
+#   stat .../PublicKeys/<md5>.pub   → -rw-r--r-- 177 bytes   (在る)
+#   cat  .../PublicKeys/<md5>.pub   → Operation not permitted
+#   ls   .../PublicKeys/            → Operation not permitted
+#
+# フルディスクアクセスを持たないプロセス全部が該当する (ansible からも人の端末からも読めない)。
+# ここを列挙していた頃の ssh-key-check は、正しい鍵が在るのに「.pub が無い」と ng を出し、
+# tasks/git.yml がその rc を見てコミット署名を永久に入れなかった。**読めなかったことを
+# 「無い」と言っていた**のが誤りで、鍵を見る口は agent へ移した。socket は保護の外にある。
+# フルディスクアクセスを与えて解く道は採らない — TCC は GUI 操作で、マシンごとに人手が
+# 増え、このリポジトリが持つ「新しい Mac で再現できる」性質を損なうため。
 #
 # 秘密鍵は Secure Enclave の中にあり、設計上エクスポートできない。ファイルとしては
 # どこにも存在しないので、盗まれても持ち出せない代わりに **バックアップも移動もできない**。
@@ -26,10 +66,17 @@
     state: directory
     mode: '0700'
 
+# このファイルは ansible が所有する (中身にも「直接編集しない」と書いてある)。
+# ただし **既に ~/.ssh/config があるマシンでは、その中身を黙って捨てる** —
+# バックアップから復元した環境や、setup を流す前に手で SSH を設定した環境が該当する。
+# 上のコメントの「SSH で繋ぐ先は GitHub だけ」は今のこのマシンの状態であって、
+# 他のマシンや将来の保証ではない (issue #175)。
+# backup: true は内容が変わるときだけ退避を残す (冪等な再実行では作られない)。
 - name: Point GitHub SSH at the Secretive agent
   ansible.builtin.copy:
     dest: "{{ ansible_facts['env']['HOME'] }}/.ssh/config"
     mode: '0600'
+    backup: true
     content: |
       # 実体は setup リポジトリの tasks/ssh.yml (ansible が書き出す)。直接編集しない
       Host github.com

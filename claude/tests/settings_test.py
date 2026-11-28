@@ -233,6 +233,21 @@ class AutoModeTestCase(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertRegex(rule, RULE_RE, "ask は Bash(...) 形式で書く")
 
+    def test_named_guard_scripts_exist(self):
+        """settings.json の文面が名指すフックのスクリプトは claude/ に実在する (#226)。
+
+        autoMode の文は分類器が判断材料として読む。移設・改名で消えたスクリプトを
+        名指したままだと、守っているつもりの対象が実体とずれる (worktree-path-guard.sh
+        が残っていた)。プラグイン同梱のガードは「ships」で名指し、ここの対象から外す。
+        """
+        claude_dir = SETTINGS.parent
+        text = re.sub(r"ships [^)]*\)", "", SETTINGS.read_text())
+        names = set(re.findall(r"[\w.-]+-guard\.(?:sh|py)|[\w.-]+-preflight\.sh", text))
+        self.assertTrue(names, "名指しを 1 つも拾えない — 正規表現が文面とずれた")
+        for name in sorted(names):
+            with self.subTest(name=name):
+                self.assertTrue((claude_dir / name).is_file(), f"claude/{name} が無い")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

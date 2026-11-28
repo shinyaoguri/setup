@@ -1,0 +1,20 @@
+# CI 設定そのものの陳腐化防止: GitHub Actions のバージョンを週次で監視する。
+# actions/checkout が v4 のまま v7 まで離れていたのに誰も気付けなかったので入れた
+# (issue #179)。対象は Actions だけ — このリポジトリは言語の依存関係を持たない
+# (パッケージは vars/packages.yml から brew / mas が入れるもので、管理対象外)。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    # リリース公開から PR 起票までの待機。公開直後のバージョンを踏まないための猶予で、
+    # 週次スケジュールなので実質の遅延はほぼない。security update には適用されない
+    # (脆弱性公表時は cooldown を無視して即座に PR が出る)
+    cooldown:
+      default-days: 7
+    # このリポジトリは Conventional Commits を規約にしている (PR タイトルの lint は
+    # まだ無いが、履歴の形は揃える)。未指定だと Dependabot がコミット履歴からの推測で
+    # prefix を決めるので明示して固定する
+    commit-message:
+      prefix: ci

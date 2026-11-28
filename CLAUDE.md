@@ -8,13 +8,20 @@ macOS の環境構築 (Ansible) と、Claude Code のグローバル設定の実
 
 - `setup.zsh` — ワンライナーの入口。`-l` でローカルモード (クローン済みの場合)
 - `sillicon_mac_setup.zsh` — 前段。Xcode CLT / Homebrew / Ansible / Cask / mas を入れる。
-  Cask と App Store は interactive TTY が要るため Ansible の外で先に済ませている
+  Cask と App Store は interactive TTY が要るため Ansible の外で先に済ませている。
+  optional の選択 (fzf) もここ。`--with-optional` / `--no-optional` で選択を省ける
 - `playbook_sillicon_mac.yml` — `tasks/*.yml` を tag 付きで import するだけ
 - `tasks/*.yml` — 1 ファイル 1 関心。tag 名はファイル名と同じ (`tasks/claude.yml` → `--tags claude`)
-- `vars/packages.yml` — インストール対象のパッケージ一覧
+- `vars/packages.yml` — インストール対象のパッケージ一覧。`*_required` は無条件に入れる土台
+  (無いと playbook か鍵まわりが成立しないもの)、`*_optional` は `sillicon_mac_setup.zsh` が
+  fzf で選ばせるもの。required へ足すのは「無いと壊れる」ことを言えるときだけ
 - `claude/` — Claude Code のグローバル設定の実体。`tasks/claude.yml` が `~/.claude/` へ symlink する
-- `zshrc` — `~/.zshrc` の実体
-- `.github/workflows/test.yml` — `claude/tests/` を macOS runner で流す唯一の CI
+- `zshrc` / `zshenv` / `zprofile` — `~/.zshrc` などの実体 (`tasks/zshrc.yml` が symlink する)。
+  対話シェル向けは zshrc、非対話シェル (hook・cron) にも要るものは zshenv、zprofile は
+  ログインシェルで path_helper が並べ替えた PATH を戻すだけ
+- `.github/workflows/test.yml` — PR ごとの CI。`claude/tests/` を macOS runner で流す
+- `.github/workflows/claude-upstream.yml` — 週次。Claude Code の新しい版を `claude/intents.json` と
+  突き合わせ、見直しが要るときだけ Issue に置く (判定は `.claude/skills/claude-upstream-review`)
 
 ## コマンド
 
@@ -34,17 +41,32 @@ python3 claude/tests/runcat_metrics_test.py
 - 編集するのは常に `claude/` 側。`~/.claude/` は symlink なので、そちらを直接直すと実体を見失う。
   既存ファイルの変更は symlink 越しに即反映されるが、**ファイルを新規追加したときだけ**
   playbook の再実行が要る
+- **playbook は本体の checkout (`~/.setup`) から流す。** symlink の先は `playbook_dir` から組むので、
+  worktree から流すと `~/.claude/*` や `~/.zshrc` が worktree を指し、掃除された時点で全部切れる
+  (フックは fail-open なので安全装置が無音で外れる)。`tasks/claude.yml` と `tasks/zshrc.yml` は
+  worktree からの実行を先頭で止める (#209)。分かったうえで流すときは `-e allow_worktree_source=true`
 - `claude/` にスクリプトを足したら `tasks/claude.yml` の `claude_config_files` にも足す。
   忘れると配布されず、`settings.json` から参照しても動かない
+- **`claude/intents.json` は「Claude まわりで何をしたいか」の台帳で、手段はその下に交換可能なものとして
+  ぶら下がる** (setup#232)。フック・配布物・settings.json のキー・プラグインを足したら、どの意図の
+  手段なのかを台帳にも書く — 意図を言えない手段は `claude/tests/intents_test.py` が CI で落とす。
+  自作の手段 (`self` / `plugin-self` / `doc`) には `sunset` (本体に何が入ったらやめるか) が必須で、
+  本体が更新されるたびに存在理由を問われるのは自作の側。状態 (met / partial / unmet) は手で書かず
+  `means` と `gap` から読む。理由の本文は台帳に写さず `rationale` から ADR・Issue・冒頭コメントを指す。
+  **台帳に載せるのは、本体の機能と代替関係にあるものだけ** (setup#246)。コミットの書式や
+  「1 PR = 1 関心事」のような仕事の流儀は、本体に何が入っても置き換わらず `sunset` を書けないので
+  載せない — 古びていないかは見直しスキルの通読 (手順 4) が見る
 - SSH の鍵まわりは Secretive (Secure Enclave) 側の手動セットアップが前提。手順の正本は
   `tasks/ssh.yml` 冒頭のコメント。鍵の生成は GUI 操作なので ansible では自動化できない。
   **鍵タイプは ECDSA P-256、"Require Authentication" は外す** — どちらを外しても
-  無人セッションが承認待ちで止まる側に倒れる。1Password は秘密の保管庫としてのみ使う
-  (`bin/secret-read`)
+  無人セッションが承認待ちで止まる側に倒れる。**この 4 つ (agent の常駐・鍵タイプ・
+  承認要求の有無・GitHub への登録) は `bin/ssh-key-check` が検査し、`tasks/git.yml` は
+  コミット署名を入れるかどうかをその結果で決める** (#273)。1Password は秘密の保管庫と
+  してのみ使う (`bin/secret-read`)
 - **Claude デスクトップアプリは起動した時点の PATH を持ち続ける。** Bash ツールのシェルスナップショットが
   zshenv の後でそれを書き戻すので、zshenv が export した変数は届くのに PATH の追加だけが消える
   (セットアップ前から開いていたアプリで踏んだ。#154)。**変数で渡すコマンドは絶対パスで書く**
-  (`MOKUME_APP_PRIVATE_KEY_CMD` がその形)。playbook はアプリが zshenv より古いと再起動を促す。
+  (`MOKUME_GYAZO_TOKEN_CMD` がその形)。playbook はアプリが zshenv より古いと再起動を促す。
   新しいマシンで手作業が残る手順は README の「新しいマシンで」に集めてある
 - スキルはこのリポでは配らない。自作の汎用スキルは shinyaoguri/claude-plugins (marketplace) の
   プラグインとして配布し、第三者配布スキルも含めて `claude/settings.json` の marketplace 宣言
@@ -87,8 +109,14 @@ python3 claude/tests/runcat_metrics_test.py
 - **リポジトリ標準チェックリスト (`repo-standards.json`) はここには無い。** 正本は
   shinyaoguri/claude-plugins の `plugins/repo-standards/` に同梱されており、項目を増減する
   PR はあちらへ出す (claude-plugins の ADR-0022)。ここに置いていた頃は正本と消費側スクリプトが
-  リポジトリを跨いでいて、契約を検証するテストが無かった。既存マシンには dangling な
-  `~/.claude/repo-standards.json` が残るので `rm` で外す (playbook は消さない)
+  リポジトリを跨いでいて、契約を検証するテストが無かった。プラグインの解決順からこのリポジトリを
+  引く経路も外れている (ADR-0030) ので、既存マシンに残る `~/.claude/repo-standards.json` は
+  どこからも読まれない dangling な symlink。playbook は消さないので `rm` で外す
+- **Bash ツールのシェルは zsh で、MULTIOS が効いている** (setup#291)。`cmd >/dev/null | head` は
+  stdout を /dev/null とパイプの**両方**へ流すので、bash の感覚で「捨てた」出力が素通りする。これで
+  secret-read の値がトランスクリプトに出た。**秘密の値の行き先は `claude/secret-output-guard.py` が
+  コマンド文字列から判定し**、`$(secret-read <役割>)` を値を受け取る道具 (curl・gh など) の引数か
+  環境変数の前置に渡す形だけを通す。道具が足りなければ同ファイルの `CONSUMERS` に足す
 - **シグナルの送り先は名前ではなく親子関係で持ち主を決める** (`claude/signal-guard.py`・setup#150)。
   Bash ツールのシェルもフックもそのセッションの `claude` プロセスの子なので、対象の一番近い
   `claude` の祖先が自分と違えば別セッションのもので deny になる。`pkill` / `killall` /

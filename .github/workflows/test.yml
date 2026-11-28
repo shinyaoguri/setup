@@ -8,17 +8,117 @@ on:
     branches: [main]
   pull_request:
 
+# 既定のトークン権限は読み取りだけにする。リポジトリの既定が write なので、
+# 宣言が無いとテストを流すだけの job が書き込みトークンを持つ (issue #179)。
+# 書き込みが要る job ができたら、その job にだけ permissions を足す。
+permissions:
+  contents: read
+
 jobs:
   claude-scripts:
     # 対象は macOS 前提のシェルスクリプト (bash 3.2 / BSD 系コマンド) なので、
     # 実際に動く環境と同じ OS で流す
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      # action は commit の SHA で固定する。`@v7` は可動タグで、上流が付け替えれば同じ指定の
+      # まま別のコードが走る。版はコメントで添える — dependabot はこれを読んで追従する (#219)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: テストが存在することを確かめる
         # discover はテストが 0 件でも成功するので、拾い漏れをここで落とす
         run: ls claude/tests/*_test.py
 
+      # 選択 UI の実挙動テスト (bootstrap_selection_test) は本物の fzf を pty で動かす。
+      # runner には同梱されていないので入れる — 無いとその検査だけ落ちる (fzf が無いのに
+      # CI なら skip ではなく fail にしてあるので、この step を消すと気付ける)
+      - name: fzf を入れる (選択 UI の実挙動テストに要る)
+        run: brew install fzf
+
       - name: claude/tests を流す
         run: python3 -m unittest discover -s claude/tests -p '*_test.py' -v
+
+  # .ansible-lint は profile: production を宣言していたが、流す口がどこにも無く
+  # 設定だけが残っていた (実際に流すと 8 件で落ちた)。宣言を実際の検査にする (issue #179)
+  ansible-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # Python も固定する。"3.x" のままだと 3.15.1 に上がった日に ansible が import 時の
+      # AttributeError (dataclasses._is_type) で落ち、無関係な PR が全部赤くなった (issue #324)。
+      # 上げるときは ansible-lint の版と一緒に手で上げる
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.14"
+
+      # osx_defaults / homebrew_cask は community.general にある。入れないと
+      # syntax-check[unknown-module] で落ち、本当の指摘が埋もれる
+      - name: ansible と collection を入れる
+        run: |
+          python3 -m pip install --upgrade pip
+          # 版を固定する。shellcheck と同じ理由で、上がった日に無関係な PR が赤くなるのを防ぐ。
+          # 更新は手で上げる (手元で確かめるときは `pipx run ansible-lint==<版>`)
+          python3 -m pip install ansible-lint==26.8.0
+          ansible-galaxy collection install community.general
+
+      - name: ansible-lint
+        run: ansible-lint
+
+  # bash スクリプトは手元で流すしかなく、指摘が溜まっても気付けなかった (issue #179)。
+  # 対象を find で拾うのは、claude/ に .sh を足したときに取りこぼさないため
+  # (一覧を手で並べると、足した人が忘れた瞬間に検査から外れる)
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # apt の版は Ubuntu のリリースに紐づく (noble は 0.9.0) ので、手元 (Homebrew の
+      # 最新) と食い違う。実際この job を足したとき、手元では -S style でも 0 件なのに
+      # CI だけ SC2015 で落ちた。**手元で通れば CI でも通る**を保つために版を固定する。
+      # 更新は手で上げる (dependabot は action のバージョンしか見ない)。sha256 も一緒に
+      - name: shellcheck を入れる
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          # 上の版の linux.x86_64.tar.xz の sha256 (GitHub の release asset の digest)。
+          # 版を上げるときは一緒に差し替える:
+          #   gh api repos/koalaman/shellcheck/releases/tags/<版> --jq '.assets[] | .name + " " + .digest'
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          archive="$tmp/shellcheck.tar.xz"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            -o "$archive"
+          # 展開する前に中身を確かめる。curl の出力をそのまま tar へ流すと、配布物が
+          # 差し替わっても気付けない (#219)
+          echo "${SHELLCHECK_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xJ -f "$archive" -C "$tmp"
+          sudo install "$tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+
+      # 対象は**名前ではなく shebang で拾う**。一覧を手で並べると、足した人が忘れた瞬間に
+      # 検査から外れる — `-name 'secret-read'` がまさにその形で、bin/ に拡張子の無い
+      # スクリプトを足すと黙って漏れていた (issue #273)。
+      # 見るのは 1 行目だけ。ファイル全体を grep すると、テストが持つ偽スクリプトの
+      # ヒアドキュメント (#!/usr/bin/env bash を含む .py) まで拾ってしまう。
+      # bash に絞るのは、zsh が shellcheck の対象外で "unsupported shell" になるため。
+      - name: 対象を拾う
+        run: |
+          set -euo pipefail
+          find claude bin -type f -perm -u+x | sort | while read -r f; do
+            case "$(head -n 1 "$f")" in
+              '#!'*bash*) printf '%s\n' "$f" ;;
+            esac
+          done > "$RUNNER_TEMP/shellcheck-targets"
+
+      - name: 対象が拾えていることを確かめる
+        # 対象ゼロでも shellcheck は成功する。既知の 1 本を名指しの番人にして、
+        # 拾い方が壊れたときに「何も検査していない緑」にならないようにする
+        run: |
+          set -euo pipefail
+          grep -qx 'bin/secret-read' "$RUNNER_TEMP/shellcheck-targets"
+          test "$(wc -l < "$RUNNER_TEMP/shellcheck-targets")" -gt 1
+          cat "$RUNNER_TEMP/shellcheck-targets"
+
+      - name: shellcheck
+        run: xargs shellcheck < "$RUNNER_TEMP/shellcheck-targets"
