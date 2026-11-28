@@ -1,8 +1,8 @@
 {
   "version": 1,
   "reviewed_against": {
-    "claude_code": "2.1.278",
-    "date": "2026-09-21"
+    "claude_code": "2.1.332",
+    "date": "2026-11-28"
   },
   "intents": [
     {
@@ -19,10 +19,14 @@
         {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
         {"surface": "tool-name", "name": "Bash", "stability": "documented"},
         {"surface": "hook-input", "name": "tool_input.command", "stability": "documented"},
-        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
+        {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"},
+        {"surface": "hook-output", "name": "onFailure", "stability": "documented"},
+        {"surface": "hook-event", "name": "PreSkillShellCommand", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "Code Mode", "stability": "documented"}
       ],
       "verify": ["claude/tests/git_safety_guard_test.py"],
-      "sunset": "本体の権限判定がリポジトリの状態を見て可逆な git 操作を自動で通すか、破棄の前に自動で退避を作るようになったら"
+      "sunset": "本体の権限判定がリポジトリの状態を見て可逆な git 操作を自動で通すか、破棄の前に自動で退避を作るようになったら",
+      "gap": "フックが fail-open で、スクリプトが落ちると無音で素通りする (onFailure: block で止められる。shinyaoguri/setup#335)。スキルの埋め込みシェルコマンドでは PreToolUse が発火せず検査が届かない (shinyaoguri/setup#336)"
     },
     {
       "id": "no-secret-commits",
@@ -40,7 +44,8 @@
         {"surface": "settings-key", "name": "denyRead", "stability": "documented"}
       ],
       "verify": ["claude/tests/git_safety_guard_test.py", "claude/tests/gitignore_test.py"],
-      "sunset": "本体がコミット対象の秘密検知を標準で持ち、検知時に確実に止めるようになったら"
+      "sunset": "本体がコミット対象の秘密検知を標準で持ち、検知時に確実に止めるようになったら",
+      "gap": "フックが fail-open で、スクリプトが落ちると無音で素通りする (shinyaoguri/setup#335)"
     },
     {
       "id": "provisioning-preview",
@@ -55,7 +60,8 @@
         {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
       ],
       "verify": ["claude/tests/provisioning_preflight_test.py"],
-      "sunset": "本体に「実行前に dry-run を挟み、差分があるときだけ確認する」宣言的な口が入ったら"
+      "sunset": "本体に「実行前に dry-run を挟み、差分があるときだけ確認する」宣言的な口が入ったら",
+      "gap": "フックが fail-open で、スクリプトが落ちると無音で素通りする (shinyaoguri/setup#335)"
     },
     {
       "id": "automode-no-self-authorization",
@@ -74,10 +80,13 @@
         {"surface": "tool-name", "name": "NotebookEdit", "stability": "documented"},
         {"surface": "settings-key", "name": "autoMode", "stability": "documented"},
         {"surface": "model-behavior", "name": "分類器の hard_deny がファイル編集ツール経由の settings.json 変更に当たらない", "stability": "undocumented"},
-        {"surface": "harness-behavior", "name": "protected paths", "stability": "documented"}
+        {"surface": "harness-behavior", "name": "protected paths", "stability": "documented"},
+        {"surface": "settings-key", "name": "blockWritesOutsideWorkingDirectories", "stability": "documented"},
+        {"surface": "hook-output", "name": "onFailure", "stability": "documented"}
       ],
       "verify": ["claude/tests/automode_guard_test.py", "env-doctor:7"],
-      "sunset": "autoMode 節を持つ設定ファイルへの書き込みを、本体が分類器を介さず決定論的に人へ返すようになったら (protected paths 相当の扱いが、~/.claude の外に置いた実体にも及んだら)"
+      "sunset": "autoMode 節を持つ設定ファイルへの書き込みを、本体が分類器を介さず決定論的に人へ返すようになったら (protected paths 相当の扱いが、~/.claude の外に置いた実体にも及んだら)",
+      "gap": "docs は protected paths が「設定ファイル自体が symlink ならその先も対象」と書くが、auto mode では protected paths も分類器へ回る (default / acceptEdits は確認、dontAsk は拒否、bypassPermissions は許可) ので、分類器を介さない層としては残る。フックが fail-open な点は shinyaoguri/setup#335"
     },
     {
       "id": "autonomy-boundary",
@@ -97,7 +106,9 @@
         {"surface": "settings-key", "name": "defaultMode", "stability": "documented"},
         {"surface": "settings-key", "name": "autoMode はユーザーの settings.json にしか書けない (プロジェクト設定・プラグインは対象外)", "stability": "documented"},
         {"surface": "cli", "name": "auto-mode defaults", "stability": "documented"},
-        {"surface": "settings-key", "name": "blockReadsOutsideWorkingDirectories", "stability": "documented"}
+        {"surface": "settings-key", "name": "blockReadsOutsideWorkingDirectories", "stability": "documented"},
+        {"surface": "settings-key", "name": "denyInsteadOfPrompting", "stability": "documented"},
+        {"surface": "settings-key", "name": "disableAutoMode", "stability": "documented"}
       ],
       "verify": ["claude/tests/settings_test.py", "env-doctor:7"],
       "sunset": "`claude auto-mode defaults` が出す既定ルールだけで、独自の allow / soft_deny の各エントリが冗長だと言えるようになったら"
@@ -127,7 +138,7 @@
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-plan-gate.sh と scripts/test-rs-plan-pass.sh"],
       "sunset": "プラン未承認のまま編集が広がるのを拒む permission mode か設定が本体に入ったら",
-      "gap": "plan-pass.sh がプラン本文を、文書化されていない transcript の形式から逆引きしている。tool_input.plan で足りる (shinyaoguri/claude-plugins#176)"
+      "gap": "plan-pass.sh がプラン本文を、文書化されていない transcript の形式から逆引きしている。docs が「本体がプランファイルから plan と planFilePath を注入する」と明記し、2.1.285 で同一応答内のプランが古く見える不具合も直ったので、tool_input.plan へ移せる (shinyaoguri/claude-plugins#176)"
     },
     {
       "id": "model-sized-tasks",
@@ -137,7 +148,8 @@
       "means": [
         {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/model-tier.sh"},
         {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#hooks/scripts/plan-pass.sh"},
-        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/next-task"}
+        {"kind": "plugin-self", "ref": "repo-standards@shinyaoguri#skills/next-task"},
+        {"kind": "doc", "ref": "claude/CLAUDE.md", "anchor": "読むだけの調査 (検索・一覧・集計) は Explore と安価なモデルが既定"}
       ],
       "depends_on": [
         {"surface": "hook-event", "name": "SessionStart", "stability": "documented"},
@@ -145,11 +157,13 @@
         {"surface": "hook-event", "name": "PostModelSwitch", "stability": "documented"},
         {"surface": "hook-input", "name": "to_model", "stability": "documented"},
         {"surface": "hook-output", "name": "additionalContext", "stability": "documented"},
-        {"surface": "hook-event", "name": "PermissionRequest", "stability": "documented"}
+        {"surface": "hook-event", "name": "PermissionRequest", "stability": "documented"},
+        {"surface": "env-var", "name": "CLAUDE_CODE_SUBAGENT_EFFORT", "stability": "documented"},
+        {"surface": "tool-name", "name": "Agent", "stability": "documented"}
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-model-tier.sh と scripts/test-rs-plan-pass.sh"],
       "sunset": "本体がモデルの格に応じてタスクの引き受けや上位モデルへの委譲を自前で行うようになったら",
-      "gap": "サブエージェントの格は見ない。PostModelSwitch では文脈を注入しない (出力の契約が未確認)"
+      "gap": "サブエージェントの格は見ない。PostModelSwitch では文脈を注入しない (出力の契約が未確認)。サブエージェントへの振り分け (読むだけの調査は安価なモデル) は CLAUDE.md の規約だけが手段で、本体は effort (Agent ツールの effort・CLAUDE_CODE_SUBAGENT_EFFORT) しか扱わずモデルの格は選ばない"
     },
     {
       "id": "durable-work-record",
@@ -171,7 +185,7 @@
     {
       "id": "plan-on-github",
       "intent": "着手時のプランを、他の人とセッションが読める GitHub 側に残す",
-      "why": "~/.claude/plans/ はローカルのマシンにしか無く 30 日で消え、ランダムな 3 語のファイル名でリポジトリとも紐づかない",
+      "why": "~/.claude/plans/ はローカルのマシンにしか無く 30 日で消え、ファイル名 (3 語、新しいものは末尾にセッション uuid) はリポジトリと紐づかない",
       "rationale": ["tasks/claude.yml 冒頭コメントの plan-record.sh の節", "claude/plan-record.sh の冒頭コメント"],
       "means": [
         {"kind": "self", "ref": "claude/plan-record.sh"},
@@ -182,6 +196,7 @@
         {"surface": "hook-event", "name": "PostToolUse", "stability": "documented"},
         {"surface": "hook-event", "name": "Stop", "stability": "documented"},
         {"surface": "hook-input", "name": "tool_input.plan", "stability": "documented"},
+        {"surface": "hook-input", "name": "planFilePath", "stability": "documented"},
         {"surface": "hook-output", "name": "exit 2", "stability": "documented"},
         {"surface": "file-format", "name": "~/.claude/plans/", "stability": "documented"},
         {"surface": "settings-key", "name": "plansDirectory", "stability": "documented"},
@@ -208,7 +223,7 @@
       ],
       "verify": ["claude/tests/gh_comment_guard_test.py"],
       "sunset": "attribution が gh 経由のコメントにも効くようになったら",
-      "gap": "署名を付けるのは規約 (文書) の仕事で、フックは付け忘れを差し戻すだけなので 1 往復の無駄が出る。updatedInput で自動で付けられると docs で確かめた (shinyaoguri/setup#248)"
+      "gap": "署名を付けるのは規約 (文書) の仕事で、フックは付け忘れを差し戻すだけなので 1 往復の無駄が出る。updatedInput で自動で付けられると docs で確かめた (shinyaoguri/setup#248)。2.1.300 で updatedInput が Claude 自身の入力と同じ検証を通るようになり、2.1.326 で複数のフックが答えたときも書き換えが保たれるようになったので、移す土台は揃った。差し戻しの文面が CLAUDE.md を正本として指すため、CLAUDE.md 側を削るときは指し合いを解く (shinyaoguri/setup#263)"
     },
     {
       "id": "public-surface-terms",
@@ -223,7 +238,8 @@
         {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"}
       ],
       "verify": ["claude/tests/term_guard_test.py"],
-      "sunset": "リポジトリの外で管理する禁止語ルールを push / 投稿の前に当てる口が、本体か GitHub 側に入ったら"
+      "sunset": "リポジトリの外で管理する禁止語ルールを push / 投稿の前に当てる口が、本体か GitHub 側に入ったら",
+      "gap": "フックが fail-open で、スクリプトが落ちると無音で素通りする (shinyaoguri/setup#335)。スキルの埋め込みシェルコマンドでは PreToolUse が発火せず検査が届かない (shinyaoguri/setup#336)"
     },
     {
       "id": "bounded-waits",
@@ -239,11 +255,13 @@
         {"surface": "tool-name", "name": "Monitor", "stability": "documented"},
         {"surface": "harness-behavior", "name": "timeout に達した Bash は殺されずバックグラウンドへ移り、バックグラウンドの実行には時間上限が無い", "stability": "documented"},
         {"surface": "harness-behavior", "name": "background command", "stability": "documented"},
-        {"surface": "env-var", "name": "BASH_MAX_TIMEOUT_MS", "stability": "documented"}
+        {"surface": "env-var", "name": "BASH_MAX_TIMEOUT_MS", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "バックグラウンド実行の時間上限は無人セッション (-p・Agent SDK・CI・cloud) だけに掛かり、ターミナル・デスクトップアプリ・VS Code には無い", "stability": "documented"},
+        {"surface": "harness-behavior", "name": "Monitor のシェルコマンドにも Bash のフックが当たるが、allow と書き換えはできない", "stability": "documented"}
       ],
       "verify": ["claude/tests/wait_deadline_guard_test.py"],
-      "sunset": "Bash のバックグラウンド実行 (timeout 後の自動の移行を含む) に時間上限を設定できるようになったら",
-      "gap": "ガードは機能しているが、冒頭コメントの前提 2 点 (Monitor は無期限にできる・フォアグラウンドは timeout で殺される) が本体の仕様と食い違い、差し戻しが Monitor を勧めていない (shinyaoguri/setup#244)"
+      "sunset": "ターミナルとデスクトップアプリのセッションでも、Bash のバックグラウンド実行 (timeout 後の自動の移行を含む) に時間上限を設定できるようになったら",
+      "gap": "ガードは機能しているが、冒頭コメントの前提 2 点 (Monitor は対象外・フォアグラウンドは timeout で殺される) が本体の仕様と食い違い、差し戻しが Monitor を勧めていない (shinyaoguri/setup#244)。フックが fail-open な点は shinyaoguri/setup#335"
     },
     {
       "id": "signal-ownership",
@@ -260,7 +278,8 @@
         {"surface": "harness-behavior", "name": "scratchpad のパスに session_id が入る", "stability": "undocumented"}
       ],
       "verify": ["claude/tests/signal_guard_test.py"],
-      "sunset": "本体がセッションごとにプロセスを隔離し、他セッションのプロセスへシグナルが届かなくなったら"
+      "sunset": "本体がセッションごとにプロセスを隔離し、他セッションのプロセスへシグナルが届かなくなったら",
+      "gap": "フックが fail-open で、スクリプトが落ちると無音で素通りする (shinyaoguri/setup#335)。スキルの埋め込みシェルコマンドでは PreToolUse が発火せず検査が届かない (shinyaoguri/setup#336)。デスクトップアプリでは claude の上に Helpers/disclaimer のラッパーが挟まる (親子の鎖の判定には影響しないと実測で確認)"
     },
     {
       "id": "usage-visibility",
@@ -285,7 +304,7 @@
       ],
       "verify": ["claude/tests/runcat_metrics_test.py"],
       "sunset": "デスクトップアプリが statusLine を実行するようになったらフック経由の入口を消す。statusLine か公式の API がモデル別の週間制限を出すようになったら内部 API への依存を消す",
-      "gap": "使用量の取得が 2026-09-16 から失敗し続け、レート制限カードが古い値を無音で出している (shinyaoguri/setup#247)"
+      "gap": "使用量の取得が失敗し続け (成功の控えの最終更新は 2026-09-22)、レート制限カードが古い値を `≥` 付きで出している。statusLine だけが書く控えも 2026-09-21 で止まっており、フック経路のセッション一覧だけが生きている (shinyaoguri/setup#247)。transcript のキーは実機で照合して成り立つが、`aiTitle` は直近 40 本の transcript に 1 件も無くデッドコードの疑い"
     },
     {
       "id": "branch-worktree-hygiene",
@@ -309,7 +328,7 @@
         {"surface": "hook-event", "name": "Stop", "stability": "documented"},
         {"surface": "hook-event", "name": "SessionStart", "stability": "documented"},
         {"surface": "harness-behavior", "name": "worktree", "stability": "documented"},
-        {"surface": "harness-behavior", "name": "worktree 分離が worktree-agent-* のブランチを作る", "stability": "undocumented"},
+        {"surface": "harness-behavior", "name": "worktree 分離は .claude/worktrees/<形容詞-名詞-hex6> に worktree を作り、ブランチは claude/<話題スラッグ>-<hex6> と名付ける (worktree-agent-* ではない。2026-11-28 に実機で確認)", "stability": "undocumented"},
         {"surface": "settings-key", "name": "cleanupPeriodDays", "stability": "documented"},
         {"surface": "desktop-app", "name": "Auto-archive", "stability": "documented"},
         {"surface": "harness-behavior", "name": "Codex が $CODEX_HOME/hooks.json をユーザー層のフックとして読む", "stability": "undocumented"}
@@ -329,10 +348,12 @@
         {"surface": "hook-event", "name": "PreToolUse", "stability": "documented"},
         {"surface": "hook-output", "name": "permissionDecision", "stability": "documented"},
         {"surface": "hook-input", "name": "tool_input.file_path", "stability": "documented"},
-        {"surface": "harness-behavior", "name": "worktree", "stability": "documented"}
+        {"surface": "harness-behavior", "name": "worktree", "stability": "documented"},
+        {"surface": "settings-key", "name": "blockWritesOutsideWorkingDirectories", "stability": "documented"}
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-worktree-guard.sh"],
-      "sunset": "本体が、セッションの worktree の外にある同じリポジトリの作業ツリーへの書き込みを止めるか警告するようになったら"
+      "sunset": "本体が、セッションの worktree の外にある同じリポジトリの作業ツリーへの書き込みを止めるか警告するようになったら",
+      "gap": "本体の blockWritesOutsideWorkingDirectories (2.1.314) は意図を満たさない。additionalDirectories で足したディレクトリも「作業ディレクトリ」に数えるため、~/Repos・~/.setup を常設しているこの設定ではリポ本体への書き込みが対象外になる。対象も Write / Edit / NotebookEdit だけで、シェル経由の書き込みは見ない"
     },
     {
       "id": "ci-seen-through",
@@ -371,7 +392,7 @@
       ],
       "verify": ["claude/tests/settings_test.py"],
       "sunset": "allow に残した各コマンドについて「組み込みの read-only 判定に入っておらず、外すと確認が出る」と言えなくなったら畳む",
-      "gap": "git の読み取りが組み込みの read-only 判定と重複している見込みで、git fetch は allow に当たるため分類器を素通りする (shinyaoguri/setup#245)"
+      "gap": "git の読み取りが組み込みの read-only 判定と重複している見込みで、git fetch は allow に当たるため分類器を素通りする (shinyaoguri/setup#245)。さらに 2.1.325 で「additionalDirectories で足したディレクトリでは読み取り専用の git も確認を求める (--add-dir なら求めない)」に変わったため、allow を畳むと別の理由で確認が戻る見込み"
     },
     {
       "id": "skill-supply",
@@ -471,11 +492,12 @@
         {"surface": "skill-spec", "name": "allowed-tools", "stability": "documented"},
         {"surface": "file-format", "name": "~/.claude/ の配置 (settings.json・CLAUDE.md)", "stability": "documented"},
         {"surface": "cli", "name": "/doctor", "stability": "documented"},
+        {"surface": "cli", "name": "/status", "stability": "documented"},
         {"surface": "file-format", "name": "~/.claude/skills/synced/", "stability": "documented"}
       ],
       "verify": ["none: 検証は claude-plugins 側の scripts/test-rs-doctor-env.sh"],
       "sunset": "本体の診断 (/doctor) が、登録済みフックの実体欠落と auto mode の既定ルールの欠落を検査するようになったら",
-      "gap": "~/.claude/skills の検査が、本体が同期する synced/ を管理外のスキルとして誤検出する見込み (shinyaoguri/claude-plugins#177)"
+      "gap": "~/.claude/skills の検査が、本体が同期する synced/ を管理外のスキルとして誤検出する見込み (shinyaoguri/claude-plugins#177)。2.1.327 の /status は壊れた agent・skill・command ファイル・無効な keybinding・効かない permission 設定・一度も当たらない hook matcher を並べるが、登録済みフックの**実体欠落**は並べないので、その検査は残る (onFailure: block を入れれば気付ける失敗に変わる。shinyaoguri/setup#335)"
     },
     {
       "id": "parallel-session-task-pick",
@@ -563,7 +585,8 @@
         {"surface": "harness-behavior", "name": "Bash ツールのシェルは zsh で、MULTIOS が有効 (`cmd >/dev/null | x` は stdout を両方へ流す)", "stability": "undocumented"}
       ],
       "verify": ["claude/tests/secret_output_guard_test.py"],
-      "sunset": "本体が Bash ツールの出力から秘密を伏せる (登録した値を出力の前に隠す) ようになったら"
+      "sunset": "本体が Bash ツールの出力から秘密を伏せる (登録した値を出力の前に隠す) ようになったら",
+      "gap": "フックが fail-open で、スクリプトが落ちると無音で素通りする (shinyaoguri/setup#335)。スキルの埋め込みシェルコマンドでは PreToolUse が発火せず検査が届かない (shinyaoguri/setup#336)。Code Mode のスクリプトが呼ぶツールにも PostToolUse の updatedToolOutput しか口が無い"
     },
     {
       "id": "no-unintended-substitution",
@@ -581,7 +604,8 @@
         {"surface": "harness-behavior", "name": "Bash ツールのコマンドは zsh が解釈し、引用符なしの heredoc と二重引用符の中のコマンド置換を展開する", "stability": "undocumented"}
       ],
       "verify": ["claude/tests/substitution_guard_test.py"],
-      "sunset": "本体が Bash ツールのコマンドを実行前に解析し、文字列の中のバッククォートの置換を止めるか確認に回すようになったら"
+      "sunset": "本体が Bash ツールのコマンドを実行前に解析し、文字列の中のバッククォートの置換を止めるか確認に回すようになったら",
+      "gap": "フックが fail-open で、スクリプトが落ちると無音で素通りする (shinyaoguri/setup#335)。スキルの埋め込みシェルコマンドでは PreToolUse が発火せず検査が届かない (shinyaoguri/setup#336)"
     },
     {
       "id": "config-distribution",
@@ -612,7 +636,7 @@
       "depends_on": [
         {"surface": "cli", "name": "anthropics/claude-code の CHANGELOG.md の見出し形式", "stability": "undocumented"},
         {"surface": "skill-spec", "name": "SKILL.md の frontmatter", "stability": "documented"},
-        {"surface": "desktop-app", "name": "デスクトップアプリは独自の claude バイナリを同梱し、PATH 上の CLI と版がずれる", "stability": "undocumented"}
+        {"surface": "desktop-app", "name": "デスクトップアプリは独自の claude バイナリを同梱し、PATH 上の CLI と版がずれる (2026-11-28 時点で CLI 2.1.323・同梱 2.1.331 の 8 版差)", "stability": "undocumented"}
       ],
       "verify": ["claude/tests/intents_test.py", "claude/tests/changelog_diff_test.py", "claude/tests/workflow_test.py", "none: 自作プラグイン側の手段の実在は、claude-plugins の週次 freshness (scripts/check-intent-coverage.sh) が見る"],
       "sunset": "本体が、設定とフックの非推奨・置換可能性を自己診断するようになったら"
