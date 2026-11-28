@@ -23,6 +23,19 @@ REPO = Path(__file__).resolve().parent.parent.parent
 HOOKS = REPO / "codex" / "hooks.json"
 SETTINGS = REPO / "claude" / "settings.json"
 TASKS = REPO / "tasks" / "codex.yml"
+# このリポジトリが配る git のサブコマンド (bin/git-wt-clean など) の置き場
+REPO_BIN = REPO / "bin"
+
+
+def hook_path(fake_bin):
+    """フックを流すときの PATH。
+
+    偽の `git-<name>` を置いたディレクトリを先頭に、**本物の `bin/` も続けて置く**。
+    本物が PATH に居る状況 (開発機) と居ない状況 (CI の runner) で判定が変わらない
+    ようにするため — 居ない側しか試していなかったせいで issue #332 は CI で緑のまま
+    開発機でだけ赤かった。git / nohup / sh を引くために /usr/bin と /bin も足す。
+    """
+    return ":".join([str(fake_bin), str(REPO_BIN), "/usr/bin", "/bin"])
 
 
 def commands(hooks, event):
@@ -64,25 +77,41 @@ class HooksFileTest(unittest.TestCase):
         self.assertEqual(list(self.hooks), ["hooks"])
 
 
-class HookCommandTest(unittest.TestCase):
-    """コマンドを実際に流す。gone-clean の中身は tasks/git.yml の持ち物なので、
-    ここでは差し替えた alias で「cwd のリポジトリで呼ばれたか」だけを見る。"""
+class HookRunner:
+    """フックのコマンドを実際に流し、`git <subcommand>` が呼ばれたかを見る。
+
+    掃除そのものの中身は tasks/git.yml と bin/ の持ち物なので、ここでは差し替えた
+    サブコマンドで「cwd のリポジトリで呼ばれたか」だけを見る。
+
+    **差し替えは PATH 上の外部コマンド `git-<name>` で行う。** git は設定の alias より
+    PATH の `git-<name>` を優先するので、alias を仕込む形はこのリポジトリが配る
+    bin/git-wt-clean が PATH に居る開発機で本物に負け、マーカーが作られないまま
+    黙って赤くなる (issue #332)。本番と同じ解決順を通るこの形なら、後から
+    bin/git-gone-clean が増えても判定は変わらない。
+    """
+
+    subcommand = None  # サブクラスが名乗る (gone-clean / wt-clean)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.command = gone_clean(json.loads(HOOKS.read_text()))[0]
+        self.fake_bin = self.root / "bin"
+        self.fake_bin.mkdir()
         self.marker = self.root / "called"
 
-    def run_hook(self, cwd, alias):
+    def run_hook(self, cwd, body):
+        """`git <subcommand>` が body を実行するようにして、フックを 1 回流す。"""
+        script = self.fake_bin / f"git-{self.subcommand}"
+        script.write_text(f"#!/bin/sh\n{body}\n")
+        script.chmod(0o755)
+        # 利用者の alias / 設定が混ざらないように空の global 設定を向ける
         gitconfig = self.root / "gitconfig"
-        # 引用符で囲む。囲まないと `;` 以降が gitconfig のコメントとして落ちる
-        gitconfig.write_text(f'[alias]\n\tgone-clean = "{alias}"\n')
+        gitconfig.write_text("")
         return subprocess.run(
             ["/bin/sh", "-c", self.command], cwd=cwd, capture_output=True, text=True, timeout=30,
-            env=clean_env(GIT_CONFIG_GLOBAL=str(gitconfig), GIT_CONFIG_NOSYSTEM="1",
-                          GIT_CEILING_DIRECTORIES=str(self.root)),
+            env=clean_env(PATH=hook_path(self.fake_bin), GIT_CONFIG_GLOBAL=str(gitconfig),
+                          GIT_CONFIG_NOSYSTEM="1", GIT_CEILING_DIRECTORIES=str(self.root)),
         )
 
     def make_repo(self):
@@ -90,43 +119,53 @@ class HookCommandTest(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         return repo
 
+
+class PathSetupTest(unittest.TestCase):
+    def test_the_real_bin_is_on_the_hook_path(self):
+        """本物の `git-<name>` が PATH に居る状況を、CI の runner でも作る (issue #332)。"""
+        self.assertIn(str(REPO_BIN), hook_path("/fake").split(":"))
+
+    def test_the_repository_ships_a_git_subcommand(self):
+        """上の状況が「本物が実在する」前提の上に立っていることを固定する。"""
+        self.assertTrue(
+            sorted(REPO_BIN.glob("git-*")), "bin/ に git-* が無く、PATH への差し込みが空振りする"
+        )
+
+
+class HookCommandTest(HookRunner, unittest.TestCase):
+    subcommand = "gone-clean"
+
+    def setUp(self):
+        super().setUp()
+        self.command = gone_clean(json.loads(HOOKS.read_text()))[0]
+
     def test_calls_gone_clean_inside_a_repository(self):
-        result = self.run_hook(self.make_repo(), f"!touch {self.marker}")
+        result = self.run_hook(self.make_repo(), f"touch {self.marker}")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.marker.exists(), "リポジトリの中で gone-clean が呼ばれていない")
 
     def test_does_nothing_outside_a_repository(self):
         outside = self.root / "plain"
         outside.mkdir()
-        result = self.run_hook(outside, f"!touch {self.marker}")
+        result = self.run_hook(outside, f"touch {self.marker}")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.marker.exists(), "git の外で gone-clean を呼んだ")
 
     def test_failure_does_not_block_the_turn(self):
-        result = self.run_hook(self.make_repo(), "!echo boom >&2; exit 3")
+        result = self.run_hook(self.make_repo(), "echo boom >&2; exit 3")
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout + result.stderr, "", "失敗の出力がターンへ漏れている")
 
 
-class WtCleanHookTest(unittest.TestCase):
+class WtCleanHookTest(HookRunner, unittest.TestCase):
     """worktree の削除は巨大になりうるので背景へ逃がす。hook 自体はすぐ返り、
     git の外でも失敗してもターンを止めない。"""
 
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-        self.command = wt_clean(json.loads(HOOKS.read_text()))[0]
-        self.marker = self.root / "called"
+    subcommand = "wt-clean"
 
-    def run_hook(self, cwd, alias):
-        gitconfig = self.root / "gitconfig"
-        gitconfig.write_text(f'[alias]\n\twt-clean = "{alias}"\n')
-        return subprocess.run(
-            ["/bin/sh", "-c", self.command], cwd=cwd, capture_output=True, text=True, timeout=30,
-            env=clean_env(GIT_CONFIG_GLOBAL=str(gitconfig), GIT_CONFIG_NOSYSTEM="1",
-                          GIT_CEILING_DIRECTORIES=str(self.root)),
-        )
+    def setUp(self):
+        super().setUp()
+        self.command = wt_clean(json.loads(HOOKS.read_text()))[0]
 
     def wait_for_marker(self):
         for _ in range(50):
@@ -136,10 +175,8 @@ class WtCleanHookTest(unittest.TestCase):
         return False
 
     def test_calls_wt_clean_in_the_background(self):
-        repo = self.root / "repo"
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
         started = time.monotonic()
-        result = self.run_hook(repo, f"!sleep 2; touch {self.marker}")
+        result = self.run_hook(self.make_repo(), f"sleep 2; touch {self.marker}")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(time.monotonic() - started, 1.5, "削除を待ってからターンへ戻っている")
         self.assertTrue(self.wait_for_marker(), "リポジトリの中で wt-clean が呼ばれていない")
@@ -147,15 +184,13 @@ class WtCleanHookTest(unittest.TestCase):
     def test_does_nothing_outside_a_repository(self):
         outside = self.root / "plain"
         outside.mkdir()
-        result = self.run_hook(outside, f"!touch {self.marker}")
+        result = self.run_hook(outside, f"touch {self.marker}")
         self.assertEqual(result.returncode, 0, result.stderr)
         time.sleep(0.5)
         self.assertFalse(self.marker.exists(), "git の外で wt-clean を呼んだ")
 
     def test_failure_does_not_block_the_turn(self):
-        repo = self.root / "repo"
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        result = self.run_hook(repo, "!echo boom >&2; exit 3")
+        result = self.run_hook(self.make_repo(), "echo boom >&2; exit 3")
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout + result.stderr, "", "失敗の出力がターンへ漏れている")
 
