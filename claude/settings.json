@@ -101,48 +101,56 @@
             "type": "command",
             "command": "~/.claude/git-safety-guard.sh",
             "timeout": 10,
+            "onFailure": "block",
             "statusMessage": "git 操作の安全確認中"
           },
           {
             "type": "command",
             "command": "~/.claude/provisioning-preflight.sh",
             "timeout": 30,
+            "onFailure": "block",
             "statusMessage": "プロビジョニングの変更内容を事前確認中"
           },
           {
             "type": "command",
             "command": "~/.claude/gh-comment-guard.sh",
             "timeout": 10,
+            "onFailure": "block",
             "statusMessage": "コメントの署名を確認中"
           },
           {
             "type": "command",
             "command": "~/.claude/term-guard.sh",
             "timeout": 15,
+            "onFailure": "block",
             "statusMessage": "公開面の禁止語を確認中"
           },
           {
             "type": "command",
             "command": "~/.claude/wait-deadline-guard.sh",
             "timeout": 10,
+            "onFailure": "block",
             "statusMessage": "待ちに期限があるか確認中"
           },
           {
             "type": "command",
             "command": "~/.claude/signal-guard.py",
             "timeout": 10,
+            "onFailure": "block",
             "statusMessage": "シグナルの送り先の持ち主を確認中"
           },
           {
             "type": "command",
             "command": "~/.claude/secret-output-guard.py",
             "timeout": 10,
+            "onFailure": "block",
             "statusMessage": "秘密の値が出力に出ないか確認中"
           },
           {
             "type": "command",
             "command": "~/.claude/substitution-guard.py",
             "timeout": 10,
+            "onFailure": "block",
             "statusMessage": "意図しないコマンド置換が無いか確認中"
           }
         ]
@@ -154,6 +162,7 @@
             "type": "command",
             "command": "~/.claude/automode-guard.py",
             "timeout": 10,
+            "onFailure": "block",
             "statusMessage": "権限設定の変更を確認中"
           }
         ]

@@ -249,5 +249,52 @@ class AutoModeTestCase(unittest.TestCase):
                 self.assertTrue((claude_dir / name).is_file(), f"claude/{name} が無い")
 
 
+class HookFailureTestCase(unittest.TestCase):
+    """守りのフックが落ちたときに素通りしないこと (#335)。
+
+    本体の既定は fail-open で、スクリプトが起動できない・タイムアウトする・
+    想定外の終了コードで終わる、のどれでもツール呼び出しはそのまま通る。
+    PreToolUse に載せているのは全部「通してよいか」を判定するガードなので、
+    判定できなかったときは止まる側が正しい。`onFailure: "block"` は本体
+    v2.1.295 以降。
+
+    Stop / SubagentStop では `onFailure` が効かないと docs が明記しているので、
+    そこに書いてあると「守られているつもり」の嘘になる。書いていないことも
+    あわせて検査する。
+    """
+
+    NO_EFFECT_EVENTS = ("Stop", "SubagentStop", "TaskCompleted", "TeammateIdle")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.hooks = json.loads(SETTINGS.read_text()).get("hooks", {})
+
+    def _entries(self, event):
+        for group in self.hooks.get(event, []):
+            for hook in group.get("hooks", []):
+                yield hook
+
+    def test_pretooluse_hooks_block_on_failure(self):
+        entries = list(self._entries("PreToolUse"))
+        self.assertTrue(entries, "PreToolUse のフックを 1 つも拾えない")
+        for hook in entries:
+            with self.subTest(command=hook.get("command")):
+                self.assertEqual(
+                    hook.get("onFailure"),
+                    "block",
+                    "ガードが落ちたら素通りする — onFailure: \"block\" を付ける",
+                )
+
+    def test_no_onfailure_where_it_has_no_effect(self):
+        for event in self.NO_EFFECT_EVENTS:
+            for hook in self._entries(event):
+                with self.subTest(event=event, command=hook.get("command")):
+                    self.assertNotIn(
+                        "onFailure",
+                        hook,
+                        f"{event} では onFailure が効かない — 書くと守れているつもりになる",
+                    )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

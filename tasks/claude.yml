@@ -69,9 +69,10 @@
 # **worktree から流した playbook に symlink を張らせない** (issue #209)。
 #
 # 下の symlink は先を playbook_dir から組む。worktree (.claude/worktrees/*) から流すと
-# ~/ 配下のリンクが worktree を指し、worktree が掃除された時点で全部切れる。フックと
-# autoMode は fail-open なので、切れた状態では安全装置が無音で全部外れる。このリポジトリの
-# 開発は worktree で行うのが常で、「確かめるために流す」で踏みうる。
+# ~/ 配下のリンクが worktree を指し、worktree が掃除された時点で全部切れる。PreToolUse の
+# ガードは onFailure: "block" を付けてあるので、切れると Bash が丸ごと拒否されて作業が止まる
+# (setup#335)。Stop・PostToolUse・statusLine と autoMode は fail-open のままなので、そちらは
+# 無音で外れる。このリポジトリの開発は worktree で行うのが常で、「確かめるために流す」で踏みうる。
 #
 # 本体の場所を引いてそちらを指す手もあるが、採らない — 「worktree で直したのに反映
 # されない」という別の驚きになる。worktree の内容を配備したい場面は無いので、止めて
